@@ -34,3 +34,62 @@ A Visual Studio Code extension that allows you to preview WMF (Windows Metafile 
 3. Run `npm run compile` to build the extension
 4. Press `F5` to run the extension in debug mode
 
+## Usage
+
+### Preview Mode
+
+1. Right-click on a `.wmf` file in the Explorer
+2. Select "Preview WMF Image"
+3. The image will open in a new tab
+
+### Editor Mode
+
+1. Simply open a `.wmf` file by clicking on it
+2. The file will open in the WMF Viewer editor
+
+## Project Structure
+
+```
+WmfEmfViewer/
+├── out/              # Compiled output
+├── src/              # Source code
+│   ├── extension.ts  # Extension main file
+│   ├── webview.html  # Webview template
+│   └── wmfParser.js  # WMF parser
+├── .gitignore        # Git ignore file
+├── LICENSE           # License file
+├── README.md         # This README
+├── package.json      # Package configuration
+├── tsconfig.json     # TypeScript configuration
+└── sample.wmf        # Sample WMF file for testing
+```
+
+## Development
+
+### Prerequisites
+
+- Node.js (v16+)
+- npm
+- Visual Studio Code
+
+### Commands
+
+- `npm run compile`: Compile TypeScript to JavaScript
+- `npm run watch`: Watch for changes and compile automatically
+- `npm run lint`: Lint TypeScript files
+- `npm run test`: Run tests
+- `npm run package`: Package the extension into a VSIX file
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Acknowledgments
+
+- Based on the Windows Metafile Format specification
+- Uses TypeScript for type safety
+- Built with VSCode extension API
