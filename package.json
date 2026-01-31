@@ -1,0 +1,79 @@
+{
+  "name": "wmf-viewer",
+  "displayName": "WMF Viewer",
+  "description": "Preview WMF images in VSCode",
+  "version": "0.0.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vscode-extensions/wmf-viewer.git"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:wmfViewer",
+    "onCommand:wmfViewer.preview",
+    "onFileSystem:file"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "wmfViewer",
+          "name": "WMF Viewer"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "wmfViewer.preview",
+        "title": "Preview WMF Image"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "wmfViewer.preview",
+          "when": "resourceExtname == .wmf"
+        }
+      ]
+    },
+    "customEditors": [
+      {
+        "viewType": "wmfViewer.editor",
+        "displayName": "WMF Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.wmf"
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./test/runTest.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/glob": "^8.0.0",
+    "@types/mocha": "^9.1.1",
+    "@types/node": "16.x",
+    "eslint": "^8.20.0",
+    "@typescript-eslint/eslint-plugin": "^5.30.0",
+    "@typescript-eslint/parser": "^5.30.0",
+    "glob": "^8.0.3",
+    "mocha": "^10.0.0",
+    "typescript": "^4.7.4",
+    "@vscode/test-electron": "^2.1.5"
+  }
+}

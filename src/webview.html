@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WMF Preview</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        canvas {
+            background-color: white;
+            border: 1px solid #ddd;
+            max-width: 100%;
+            height: auto;
+        }
+        .error {
+            color: red;
+            margin-top: 10px;
+        }
+        .debug {
+            background-color: #f0f0f0;
+            padding: 10px;
+            margin-top: 10px;
+            border: 1px solid #ddd;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="wmfCanvas"></canvas>
+    <div id="error" class="error"></div>
+    <div id="debug" class="debug" style="display: none;"></div>
+    <script src="wmfParser.js"></script>
+    <script>
+        // 显示调试信息
+        function showDebug(message) {
+            const debugDiv = document.getElementById('debug');
+            debugDiv.textContent += message + '\n';
+            debugDiv.style.display = 'block';
+        }
+
+        // 执行预览
+        try {
+            const base64Data = '${wmfBase64}';
+            showDebug('Base64 data length: ' + base64Data.length);
+            showDebug('Starting WMF preview...');
+            previewWMF(base64Data);
+        } catch (error) {
+            console.error('Error in preview:', error);
+            document.getElementById('error').textContent = 'Error: ' + error.message;
+            showDebug('Error: ' + error.message + '\nStack: ' + error.stack);
+        }
+    </script>
+</body>
+</html>
