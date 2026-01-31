@@ -20,16 +20,44 @@ class FileTypeDetector {
             return 'wmf';
         }
         
-        // 检查EMF标识 (需要更长头)
+        // 检查EMF/EMF+标识 (需要更长头)
         if (this.data.length >= 88) {
             // EMF文件头在offset 40处有dSignature字段，值为0x464D4520 (" EMF")
             const dSignature = this.readDwordAt(40);
             if (dSignature === 0x464D4520) { // " EMF"
-                return 'emf';
+                // 检查是否是EMF+文件
+                if (this.isEmfPlusFile()) {
+                    return 'emf+';
+                } else {
+                    return 'emf';
+                }
             }
         }
         
         return 'unknown';
+    }
+
+    // 检查是否是EMF+文件
+    isEmfPlusFile() {
+        try {
+            // 首先解析EMF头，获取头大小
+            if (this.data.length < 88) return false;
+            
+            // 读取EMF头大小（在offset 4处）
+            const headerSize = this.readDwordAt(4);
+            
+            // 跳过EMF头，检查第一个记录是否是EMF+记录
+            const firstRecordOffset = headerSize;
+            if (firstRecordOffset + 12 > this.data.length) return false;
+            
+            // 读取第一个记录的类型
+            const recordType = this.readDwordAt(firstRecordOffset);
+            
+            // EMF+记录类型范围通常从0x4001开始
+            return recordType >= 0x4001 && recordType <= 0x4044;
+        } catch (error) {
+            return false;
+        }
     }
 
     readDwordAt(offset) {
