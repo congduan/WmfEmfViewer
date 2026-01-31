@@ -45,6 +45,53 @@
             debugDiv.style.display = 'block';
         }
 
+        // 预览WMF文件
+        function previewWMF(base64Data) {
+            try {
+                // 解码base64数据
+                const binaryString = atob(base64Data);
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                showDebug('Binary data length: ' + bytes.length);
+                showDebug('Creating parser...');
+
+                // 创建解析器实例
+                const parser = new MetafileParser(bytes);
+                showDebug('Parser created, starting parsing...');
+
+                // 解析WMF文件
+                const result = parser.parse();
+                showDebug('Parsing completed. Header: ' + JSON.stringify(result.header));
+                showDebug('Records count: ' + result.records.length);
+
+                // 检查是否有错误
+                if (result.error) {
+                    throw new Error(result.error);
+                }
+
+                // 获取Canvas上下文
+                const canvas = document.getElementById('wmfCanvas');
+                const ctx = canvas.getContext('2d');
+
+                // 创建绘制器实例
+                const drawer = new WmfDrawer(ctx);
+                showDebug('Drawer created, starting drawing...');
+
+                // 绘制WMF文件
+                drawer.draw(result);
+                showDebug('Drawing completed.');
+
+            } catch (error) {
+                console.error('Error in preview:', error);
+                document.getElementById('error').textContent = 'Error: ' + error.message;
+                showDebug('Error: ' + error.message + '\nStack: ' + error.stack);
+            }
+        }
+
         // 执行预览
         try {
             const base64Data = '${wmfBase64}';

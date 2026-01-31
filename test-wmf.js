@@ -65,8 +65,13 @@ class MockContext {
     }
     
     strokeRect(x, y, width, height) {
-        console.log('Canvas: strokeRect', x, y, width, height);
-        this.canvas.drawnElements.push({ type: 'rect', x, y, width, height });
+        // 确保宽度和高度为正数
+        const absWidth = Math.abs(width);
+        const absHeight = Math.abs(height);
+        const adjustedX = width < 0 ? x + width : x;
+        const adjustedY = height < 0 ? y + height : y;
+        console.log('Canvas: strokeRect', adjustedX, adjustedY, absWidth, absHeight);
+        this.canvas.drawnElements.push({ type: 'rect', x: adjustedX, y: adjustedY, width: absWidth, height: absHeight });
     }
     
     fillRect(x, y, width, height) {
