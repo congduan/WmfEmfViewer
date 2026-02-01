@@ -23,6 +23,8 @@ class BaseDrawer {
             const canvasHeight = Math.max(Math.min(height, 1500), 600);
             this.ctx.canvas.width = canvasWidth;
             this.ctx.canvas.height = canvasHeight;
+            // 更新 viewport extent 以匹配画布大小
+            this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
         } else if (metafileData.header.placeableHeader) {
             const ph = metafileData.header.placeableHeader;
             const width = Math.abs(ph.right - ph.left);
@@ -32,9 +34,12 @@ class BaseDrawer {
             this.ctx.canvas.width = canvasWidth;
             this.ctx.canvas.height = canvasHeight;
             this.coordinateTransformer.setWindowOrg(ph.left, ph.top);
+            // 更新 viewport extent 以匹配画布大小
+            this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
         } else {
             this.ctx.canvas.width = 800;
             this.ctx.canvas.height = 600;
+            this.coordinateTransformer.setViewportExt(800, 600);
         }
         console.log('Canvas size set to:', this.ctx.canvas.width, 'x', this.ctx.canvas.height);
 

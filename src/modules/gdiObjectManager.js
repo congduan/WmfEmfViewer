@@ -22,6 +22,19 @@ class GdiObjectManager {
         });
     }
 
+    createFont(height, width, weight, italic, underline, strikeOut, faceName) {
+        return this.createObject({
+            type: 'font',
+            height,
+            width,
+            weight,
+            italic,
+            underline,
+            strikeOut,
+            faceName
+        });
+    }
+
     createObject(obj) {
         const index = this.objectTable.findIndex(item => item == null);
         if (index === -1) {
