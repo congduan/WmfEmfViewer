@@ -894,18 +894,30 @@ class EmfDrawer {
         console.log('EMF BitBlt: dest=', destX, destY, 'size=', actualWidth, 'x', actualHeight);
         
         // 尝试渲染嵌入的位图数据
+        // 搜索 BITMAPINFOHEADER (biSize=40)
         try {
-            const offBmiSrc = this.readDwordFromData(data, 76);
-            const cbBmiSrc = this.readDwordFromData(data, 80);
-            const offBitsSrc = this.readDwordFromData(data, 84);
-            const cbBitsSrc = this.readDwordFromData(data, 88);
+            let bmiOffset = -1;
+            // 在记录数据中搜索 BITMAPINFOHEADER
+            for (let i = 40; i < Math.min(data.length - 40, 200); i += 4) {
+                const biSize = this.readDwordFromData(data, i);
+                if (biSize === 40 || biSize === 108 || biSize === 124) {
+                    const biWidth = this.readLongFromData(data, i + 4);
+                    const biHeight = this.readLongFromData(data, i + 8);
+                    const biPlanes = data[i + 12] | (data[i + 13] << 8);
+                    const biBitCount = data[i + 14] | (data[i + 15] << 8);
+                    
+                    // 验证header合理性
+                    if (biPlanes === 1 && biWidth > 0 && biWidth < 20000 && Math.abs(biHeight) < 20000 &&
+                        (biBitCount === 1 || biBitCount === 4 || biBitCount === 8 || biBitCount === 16 || 
+                         biBitCount === 24 || biBitCount === 32)) {
+                        bmiOffset = i;
+                        break;
+                    }
+                }
+            }
             
-            // 偏移量是相对于整个记录的，需要减去8字节（type+size）
-            const bmiOffset = offBmiSrc - 8;
-            const bitsOffset = offBitsSrc - 8;
-            
-            if (cbBitsSrc > 0 && bitsOffset >= 0 && bitsOffset + cbBitsSrc <= data.length && cbBmiSrc >= 40) {
-                // 解析 BITMAPINFOHEADER
+            if (bmiOffset >= 0) {
+                const biSize = this.readDwordFromData(data, bmiOffset);
                 const biWidth = this.readLongFromData(data, bmiOffset + 4);
                 const biHeight = this.readLongFromData(data, bmiOffset + 8);
                 const biBitCount = data[bmiOffset + 14] | (data[bmiOffset + 15] << 8);
@@ -913,10 +925,21 @@ class EmfDrawer {
                 
                 console.log('  Bitmap:', biWidth, 'x', biHeight, 'bits:', biBitCount, 'compression:', biCompression);
                 
-                // 如果是24位或32位未压缩位图，尝试渲染
-                if (biCompression === 0 && (biBitCount === 24 || biBitCount === 32)) {
+                // 计算位图数据偏移
+                let colorTableSize = 0;
+                if (biBitCount <= 8) {
+                    const biClrUsed = this.readDwordFromData(data, bmiOffset + 32);
+                    colorTableSize = (biClrUsed || (1 << biBitCount)) * 4;
+                }
+                const bitsOffset = bmiOffset + biSize + colorTableSize;
+                const bitsSize = data.length - bitsOffset;
+                
+                console.log('  Color table:', colorTableSize, 'bytes, Bitmap data offset:', bitsOffset, 'size:', bitsSize);
+                
+                // 如果是未压缩位图，尝试渲染
+                if (biCompression === 0 && bitsOffset < data.length) {
                     this.renderBitmap(destX, destY, actualWidth, actualHeight, 
-                                     biWidth, biHeight, biBitCount, data, bitsOffset, cbBitsSrc);
+                                     biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize);
                     return;
                 }
             }
@@ -948,11 +971,8 @@ class EmfDrawer {
     processEmfStretchBlt(data) {
         if (data.length < 100) return;
         // EMR_STRETCHBLT 结构 (MS-EMF 2.3.1.6)
-        // Bounds (16 bytes, offset 0-15): 目标矩形边界
-        // xDest (4 bytes, offset 16): 目标X坐标
-        // yDest (4 bytes, offset 20): 目标Y坐标
-        // cxDest (4 bytes, offset 24): 目标宽度
-        // cyDest (4 bytes, offset 28): 目标高度
+        // STRETCHBLT 记录通常比较小，不包含位图数据，只是引用
+        // 对于小的STRETCHBLT记录，绘制占位符
         
         const boundsLeft = this.readLongFromData(data, 0);
         const boundsTop = this.readLongFromData(data, 4);
@@ -968,37 +988,61 @@ class EmfDrawer {
         const actualWidth = destWidth > 0 ? destWidth : (boundsRight - boundsLeft);
         const actualHeight = destHeight > 0 ? destHeight : (boundsBottom - boundsTop);
         
-        console.log('EMF StretchBlt: dest=', destX, destY, 'size=', actualWidth, 'x', actualHeight);
+        console.log('EMF StretchBlt: dest=', destX, destY, 'size=', actualWidth, 'x', actualHeight, 'data.length=', data.length);
         
-        // 尝试渲染嵌入的位图数据
-        try {
-            const offBmiSrc = this.readDwordFromData(data, 80);
-            const cbBmiSrc = this.readDwordFromData(data, 84);
-            const offBitsSrc = this.readDwordFromData(data, 88);
-            const cbBitsSrc = this.readDwordFromData(data, 92);
-            
-            // 偏移量是相对于整个记录的，需要减去8字节（type+size）
-            const bmiOffset = offBmiSrc - 8;
-            const bitsOffset = offBitsSrc - 8;
-            
-            if (cbBitsSrc > 0 && bitsOffset >= 0 && bitsOffset + cbBitsSrc <= data.length && cbBmiSrc >= 40) {
-                // 解析 BITMAPINFOHEADER
-                const biWidth = this.readLongFromData(data, bmiOffset + 4);
-                const biHeight = this.readLongFromData(data, bmiOffset + 8);
-                const biBitCount = data[bmiOffset + 14] | (data[bmiOffset + 15] << 8);
-                const biCompression = this.readDwordFromData(data, bmiOffset + 16);
-                
-                console.log('  Bitmap:', biWidth, 'x', biHeight, 'bits:', biBitCount, 'compression:', biCompression);
-                
-                // 如果是24位或32位未压缩位图，尝试渲染
-                if (biCompression === 0 && (biBitCount === 24 || biBitCount === 32)) {
-                    this.renderBitmap(destX, destY, actualWidth, actualHeight, 
-                                     biWidth, biHeight, biBitCount, data, bitsOffset, cbBitsSrc);
-                    return;
+        // 如果记录足够大(>1000字节)，可能包含位图数据，尝试搜索
+        if (data.length > 1000) {
+            try {
+                let bmiOffset = -1;
+                // 在记录数据中搜索 BITMAPINFOHEADER
+                for (let i = 40; i < Math.min(data.length - 40, 200); i += 4) {
+                    const biSize = this.readDwordFromData(data, i);
+                    if (biSize === 40 || biSize === 108 || biSize === 124) {
+                        const biWidth = this.readLongFromData(data, i + 4);
+                        const biHeight = this.readLongFromData(data, i + 8);
+                        const biPlanes = data[i + 12] | (data[i + 13] << 8);
+                        const biBitCount = data[i + 14] | (data[i + 15] << 8);
+                        
+                        // 验证header合理性
+                        if (biPlanes === 1 && biWidth > 0 && biWidth < 20000 && Math.abs(biHeight) < 20000 &&
+                            (biBitCount === 1 || biBitCount === 4 || biBitCount === 8 || biBitCount === 16 || 
+                             biBitCount === 24 || biBitCount === 32)) {
+                            bmiOffset = i;
+                            break;
+                        }
+                    }
                 }
+                
+                if (bmiOffset >= 0) {
+                    const biSize = this.readDwordFromData(data, bmiOffset);
+                    const biWidth = this.readLongFromData(data, bmiOffset + 4);
+                    const biHeight = this.readLongFromData(data, bmiOffset + 8);
+                    const biBitCount = data[bmiOffset + 14] | (data[bmiOffset + 15] << 8);
+                    const biCompression = this.readDwordFromData(data, bmiOffset + 16);
+                    
+                    console.log('  Bitmap:', biWidth, 'x', biHeight, 'bits:', biBitCount, 'compression:', biCompression);
+                    
+                    // 计算位图数据偏移
+                    let colorTableSize = 0;
+                    if (biBitCount <= 8) {
+                        const biClrUsed = this.readDwordFromData(data, bmiOffset + 32);
+                        colorTableSize = (biClrUsed || (1 << biBitCount)) * 4;
+                    }
+                    const bitsOffset = bmiOffset + biSize + colorTableSize;
+                    const bitsSize = data.length - bitsOffset;
+                    
+                    console.log('  Bitmap data offset:', bitsOffset, 'size:', bitsSize);
+                    
+                    // 如果是未压缩位图，尝试渲染
+                    if (biCompression === 0 && bitsOffset < data.length) {
+                        this.renderBitmap(destX, destY, actualWidth, actualHeight, 
+                                         biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize);
+                        return;
+                    }
+                }
+            } catch (error) {
+                console.log('  Failed to render bitmap:', error.message);
             }
-        } catch (error) {
-            console.log('  Failed to render bitmap:', error.message);
         }
         
         // 降级：绘制一个占位符矩形表示图像位置
