@@ -26,6 +26,9 @@ dist-ssr
 # Build output
 out/
 
+# Generated browser bundle (now in out/)
+src/metafileParser.browser.js
+
 # VSCode extension package
 *.vsix
 

@@ -29,11 +29,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# 编译TypeScript代码
-echo "编译TypeScript代码..."
-npm run compile
+# 构建项目（包括浏览器打包和TypeScript编译）
+echo "构建项目..."
+npm run build
 if [ $? -ne 0 ]; then
-    echo "错误: 代码编译失败"
+    echo "错误: 项目构建失败"
     exit 1
 fi
 

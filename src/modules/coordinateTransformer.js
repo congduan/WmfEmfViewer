@@ -18,9 +18,13 @@ class CoordinateTransformer {
 
         // 根据映射模式调整缩放
         switch (this.mapMode) {
-            case 0x01: // MM_TEXT
-                cx = cx * 1.0;
-                cy = cy * 1.0;
+            case 0x01: // MM_TEXT - 使用viewport/window转换
+                if (this.windowExtX !== 0 && this.windowExtY !== 0) {
+                    const scaleX = this.viewportExtX / this.windowExtX;
+                    const scaleY = this.viewportExtY / this.windowExtY;
+                    cx = cx * scaleX + this.viewportOrgX;
+                    cy = cy * scaleY + this.viewportOrgY;
+                }
                 break;
             case 0x02: // MM_LOMETRIC
                 cx = cx * 0.1;
@@ -52,16 +56,18 @@ class CoordinateTransformer {
                 }
                 break;
             default:
+                // 默认使用viewport/window转换
                 if (this.windowExtX !== 0 && this.windowExtY !== 0) {
+                    const scaleX = this.viewportExtX / this.windowExtX;
+                    const scaleY = this.viewportExtY / this.windowExtY;
+                    cx = cx * scaleX + this.viewportOrgX;
+                    cy = cy * scaleY + this.viewportOrgY;
+                } else {
+                    // 回退到Canvas缩放
                     const scaleX = canvasWidth / this.windowExtX;
                     const scaleY = canvasHeight / this.windowExtY;
                     cx = cx * scaleX;
                     cy = cy * scaleY;
-                } else {
-                    // 默认缩放比例
-                    const scale = Math.min(canvasWidth / 1000, canvasHeight / 1000);
-                    cx = cx * scale;
-                    cy = cy * scale;
                 }
         }
 

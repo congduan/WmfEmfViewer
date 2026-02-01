@@ -206,8 +206,15 @@ if (typeof window !== 'undefined') {
 }
 `;
 
-    // 写入打包文件
-    const outputPath = path.join(__dirname, 'metafileParser.browser.js');
+    // 写入打包文件到 out 目录
+    const outDir = path.join(__dirname, '..', 'out');
+    
+    // 确保 out 目录存在
+    if (!fs.existsSync(outDir)) {
+        fs.mkdirSync(outDir, { recursive: true });
+    }
+    
+    const outputPath = path.join(outDir, 'metafileParser.browser.js');
     fs.writeFileSync(outputPath, browserBundle);
 
     console.log('构建完成！打包文件已生成：', outputPath);

@@ -40,7 +40,10 @@ class WmfEditorProvider implements vscode.CustomEditorProvider {
         // 配置WebView选项
         webviewPanel.webview.options = {
             enableScripts: true,
-            localResourceRoots: [vscode.Uri.file(path.join(this.context.extensionPath, 'src'))]
+            localResourceRoots: [
+                vscode.Uri.file(path.join(this.context.extensionPath, 'src')),
+                vscode.Uri.file(path.join(this.context.extensionPath, 'out'))
+            ]
         };
 
         // 读取WMF文件内容
@@ -51,8 +54,8 @@ class WmfEditorProvider implements vscode.CustomEditorProvider {
         const webviewPath = path.join(this.context.extensionPath, 'src', 'webview.html');
         let webviewHtml = fs.readFileSync(webviewPath, 'utf8');
         
-        // 创建metafileParser.browser.js的本地URI
-        const parserScriptPath = vscode.Uri.file(path.join(this.context.extensionPath, 'src', 'metafileParser.browser.js'));
+        // 创建metafileParser.browser.js的本地URI（从out目录）
+        const parserScriptPath = vscode.Uri.file(path.join(this.context.extensionPath, 'out', 'metafileParser.browser.js'));
         const parserScriptUri = webviewPanel.webview.asWebviewUri(parserScriptPath);
         
         // 替换WMF数据占位符和脚本路径
@@ -107,7 +110,10 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.ViewColumn.One,
                 {
                     enableScripts: true,
-                    localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'src'))]
+                    localResourceRoots: [
+                        vscode.Uri.file(path.join(context.extensionPath, 'src')),
+                        vscode.Uri.file(path.join(context.extensionPath, 'out'))
+                    ]
                 }
             );
 
@@ -119,8 +125,8 @@ export function activate(context: vscode.ExtensionContext) {
             const webviewPath = path.join(context.extensionPath, 'src', 'webview.html');
             let webviewHtml = fs.readFileSync(webviewPath, 'utf8');
             
-            // 创建metafileParser.browser.js的本地URI
-            const parserScriptPath = vscode.Uri.file(path.join(context.extensionPath, 'src', 'metafileParser.browser.js'));
+            // 创建metafileParser.browser.js的本地URI（从out目录）
+            const parserScriptPath = vscode.Uri.file(path.join(context.extensionPath, 'out', 'metafileParser.browser.js'));
             const parserScriptUri = panel.webview.asWebviewUri(parserScriptPath);
             
             // 替换WMF数据占位符和脚本路径
