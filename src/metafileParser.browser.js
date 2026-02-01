@@ -123,17 +123,19 @@ class CoordinateTransformer {
                 break;
             case 0x07: // MM_ISOTROPIC
             case 0x08: // MM_ANISOTROPIC
-                if (this.windowExtX > 0 && this.windowExtY > 0) {
+                if (this.windowExtX !== 0 && this.windowExtY !== 0) {
                     const scaleX = this.viewportExtX / this.windowExtX;
                     const scaleY = this.viewportExtY / this.windowExtY;
-                    cx = cx * scaleX;
-                    cy = cy * scaleY;
+                    cx = cx * scaleX + this.viewportOrgX;
+                    cy = cy * scaleY + this.viewportOrgY;
                 }
                 break;
             default:
-                if (this.windowExtX > 0 && this.windowExtY > 0) {
-                    cx = cx * (canvasWidth * 0.8 / this.windowExtX);
-                    cy = cy * (canvasHeight * 0.8 / this.windowExtY);
+                if (this.windowExtX !== 0 && this.windowExtY !== 0) {
+                    const scaleX = canvasWidth / this.windowExtX;
+                    const scaleY = canvasHeight / this.windowExtY;
+                    cx = cx * scaleX;
+                    cy = cy * scaleY;
                 } else {
                     // 默认缩放比例
                     const scale = Math.min(canvasWidth / 1000, canvasHeight / 1000);
@@ -144,10 +146,6 @@ class CoordinateTransformer {
 
         // 调整坐标系（WMF的Y轴向下，Canvas的Y轴向上）
         cy = canvasHeight - cy;
-
-        // 确保坐标在合理范围内
-        cx = Math.max(0, Math.min(cx, canvasWidth));
-        cy = Math.max(0, Math.min(cy, canvasHeight));
 
         return { x: cx, y: cy };
     }
@@ -1256,28 +1254,28 @@ class WmfDrawer extends BaseDrawer {
             case 0x0103: // META_SETMAPMODE
                 this.processSetMapMode(record.data);
                 break;
-            case 0x0104: // META_SETWINDOWORG
+            case 0x020B: // META_SETWINDOWORG
                 this.processSetWindowOrg(record.data);
                 break;
-            case 0x0105: // META_SETWINDOWEXT
+            case 0x020C: // META_SETWINDOWEXT
                 this.processSetWindowExt(record.data);
                 break;
-            case 0x0106: // META_SETVIEWPORTORG
+            case 0x020D: // META_SETVIEWPORTORG
                 this.processSetViewportOrg(record.data);
                 break;
-            case 0x0107: // META_SETVIEWPORTEXT
+            case 0x020E: // META_SETVIEWPORTEXT
                 this.processSetViewportExt(record.data);
                 break;
-            case 0x012D: // META_SETBKCOLOR
+            case 0x0201: // META_SETBKCOLOR
                 this.processSetBkColor(record.data);
                 break;
-            case 0x012E: // META_SETBKMODE
+            case 0x0102: // META_SETBKMODE
                 this.processSetBkMode(record.data);
                 break;
-            case 0x01F0: // META_SETTEXTCOLOR
+            case 0x0209: // META_SETTEXTCOLOR
                 this.processSetTextColor(record.data);
                 break;
-            case 0x0102: // META_SETROP2
+            case 0x0104: // META_SETROP2
                 this.processSetROP2(record.data);
                 break;
             case 0x0106: // META_SETPOLYFILLMODE
@@ -1286,7 +1284,7 @@ class WmfDrawer extends BaseDrawer {
             case 0x0107: // META_SETSTRETCHBLTMODE
                 this.processSetStretchBltMode(record.data);
                 break;
-            case 0x012C: // META_SETTEXTALIGN
+            case 0x0302: // META_SETTEXTALIGN
                 this.processSetTextAlign(record.data);
                 break;
                 

@@ -77,7 +77,8 @@
 
                 // 解析WMF文件
                 const result = parser.parse();
-                showDebug('Parsing completed. Header: ' + JSON.stringify(result.header));
+                showDebug('Parsing completed.');
+                showDebug('File type: ' + parser.fileType);
                 showDebug('Records count: ' + result.records.length);
 
                 // 检查是否有错误
@@ -89,13 +90,36 @@
                 const canvas = document.getElementById('wmfCanvas');
                 const ctx = canvas.getContext('2d');
 
-                // 创建绘制器实例
-                const drawer = new WmfDrawer(ctx);
-                showDebug('Drawer created, starting drawing...');
+                // 根据文件类型选择绘制器
+                let drawer;
+                if (parser.fileType === 'wmf' || parser.fileType === 'placeable-wmf') {
+                    drawer = new WmfDrawer(ctx);
+                } else if (parser.fileType === 'emf') {
+                    drawer = new EmfDrawer(ctx);
+                } else if (parser.fileType === 'emf+') {
+                    drawer = new EmfPlusDrawer(ctx);
+                } else {
+                    throw new Error('Unknown file type: ' + parser.fileType);
+                }
+                
+                showDebug('Drawer created (' + parser.fileType + '), starting drawing...');
 
                 // 绘制WMF文件
                 drawer.draw(result);
+                
                 showDebug('Drawing completed.');
+                showDebug('Canvas size: ' + canvas.width + ' x ' + canvas.height);
+                
+                // 检查是否有实际内容
+                const imageData = ctx.getImageData(0, 0, Math.min(canvas.width, 100), Math.min(canvas.height, 100));
+                const data = imageData.data;
+                let nonWhitePixels = 0;
+                for (let i = 0; i < data.length; i += 4) {
+                    if (data[i] !== 255 || data[i+1] !== 255 || data[i+2] !== 255) {
+                        nonWhitePixels++;
+                    }
+                }
+                showDebug('Non-white pixels in sample area: ' + nonWhitePixels);
 
             } catch (error) {
                 console.error('Error in preview:', error);

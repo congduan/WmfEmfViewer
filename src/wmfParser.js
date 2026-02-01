@@ -333,17 +333,19 @@ class CoordinateTransformer {
                 break;
             case 0x07: // MM_ISOTROPIC
             case 0x08: // MM_ANISOTROPIC
-                if (this.windowExtX > 0 && this.windowExtY > 0) {
+                if (this.windowExtX !== 0 && this.windowExtY !== 0) {
                     const scaleX = this.viewportExtX / this.windowExtX;
                     const scaleY = this.viewportExtY / this.windowExtY;
-                    cx = cx * scaleX;
-                    cy = cy * scaleY;
+                    cx = cx * scaleX + this.viewportOrgX;
+                    cy = cy * scaleY + this.viewportOrgY;
                 }
                 break;
             default:
-                if (this.windowExtX > 0 && this.windowExtY > 0) {
-                    cx = cx * (canvasWidth * 0.8 / this.windowExtX);
-                    cy = cy * (canvasHeight * 0.8 / this.windowExtY);
+                if (this.windowExtX !== 0 && this.windowExtY !== 0) {
+                    const scaleX = canvasWidth / this.windowExtX;
+                    const scaleY = canvasHeight / this.windowExtY;
+                    cx = cx * scaleX;
+                    cy = cy * scaleY;
                 } else {
                     // 默认缩放比例
                     const scale = Math.min(canvasWidth / 1000, canvasHeight / 1000);
@@ -354,10 +356,6 @@ class CoordinateTransformer {
 
         // 调整坐标系（WMF的Y轴向下，Canvas的Y轴向上）
         cy = canvasHeight - cy;
-
-        // 确保坐标在合理范围内
-        cx = Math.max(0, Math.min(cx, canvasWidth));
-        cy = Math.max(0, Math.min(cy, canvasHeight));
 
         return { x: cx, y: cy };
     }
