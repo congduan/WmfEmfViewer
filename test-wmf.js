@@ -2,8 +2,11 @@
 const fs = require('fs');
 const path = require('path');
 
-// 导入WMF解析器
-const { WmfParser, WmfDrawer, decodeBase64 } = require('./src/wmfParser.js');
+// 导入模块化解析器
+const MetafileParser = require('./src/modules/metafileParser.js');
+const WmfDrawer = require('./src/modules/drawers/wmfDrawer.js');
+const EmfDrawer = require('./src/modules/drawers/emfDrawer.js');
+const EmfPlusDrawer = require('./src/modules/drawers/emfPlusDrawer.js');
 
 // 模拟Canvas上下文
 class MockCanvas {
@@ -96,7 +99,7 @@ async function testSampleWmf() {
     
     try {
         // 读取文件
-        const filePath = path.join(__dirname, 'sample.wmf');
+        const filePath = path.join(__dirname, 'test_files/sample.wmf');
         const fileBuffer = fs.readFileSync(filePath);
         console.log('文件大小:', fileBuffer.length, '字节');
         
@@ -106,9 +109,10 @@ async function testSampleWmf() {
         
         // 解析WMF文件
         console.log('\n=== 开始解析 WMF 文件 ===');
-        const parser = new WmfParser(wmfData);
+        const parser = new MetafileParser(wmfData);
         const parsedData = parser.parse();
         console.log('解析完成，记录数量:', parsedData.records.length);
+        console.log('文件类型:', parser.fileType);
         
         // 创建模拟Canvas
         const canvas = new MockCanvas();
@@ -116,7 +120,21 @@ async function testSampleWmf() {
         
         // 绘制WMF内容
         console.log('\n=== 开始绘制 WMF 内容 ===');
-        const drawer = new WmfDrawer(ctx);
+        let drawer;
+        switch (parser.fileType) {
+            case 'wmf':
+            case 'placeable-wmf':
+                drawer = new WmfDrawer(ctx);
+                break;
+            case 'emf':
+                drawer = new EmfDrawer(ctx);
+                break;
+            case 'emf+':
+                drawer = new EmfPlusDrawer(ctx);
+                break;
+            default:
+                throw new Error('Unknown file type');
+        }
         drawer.draw(parsedData);
         
         // 输出绘制结果

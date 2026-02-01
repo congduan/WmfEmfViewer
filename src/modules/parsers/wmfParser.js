@@ -1,108 +1,84 @@
 // WMF解析器模块
-class WmfParser {
+const BaseParser = require('./baseParser');
+
+class WmfParser extends BaseParser {
     constructor(data) {
-        this.data = new Uint8Array(data);
-        this.offset = 0;
-    }
-
-    // 重置解析器状态
-    reset() {
-        this.offset = 0;
-    }
-
-    // 设置当前偏移量
-    setOffset(offset) {
-        this.offset = offset;
-    }
-
-    // 获取当前偏移量
-    getOffset() {
-        return this.offset;
-    }
-
-    // 读取WORD值
-    readWord() {
-        if (this.offset + 2 > this.data.length) {
-            return 0;
-        }
-        const value = (this.data[this.offset] & 0xFF) | ((this.data[this.offset + 1] & 0xFF) << 8);
-        this.offset += 2;
-        return value >>> 0;
-    }
-
-    // 读取DWORD值
-    readDword() {
-        if (this.offset + 4 > this.data.length) {
-            return 0;
-        }
-        const value = (this.data[this.offset] & 0xFF) | 
-                     ((this.data[this.offset + 1] & 0xFF) << 8) | 
-                     ((this.data[this.offset + 2] & 0xFF) << 16) | 
-                     ((this.data[this.offset + 3] & 0xFF) << 24);
-        this.offset += 4;
-        return value >>> 0;
-    }
-
-    // 读取指定长度的字节
-    readBytes(length) {
-        if (this.offset + length > this.data.length) {
-            length = this.data.length - this.offset;
-        }
-        const bytes = this.data.slice(this.offset, this.offset + length);
-        this.offset += length;
-        return bytes;
+        super(data);
     }
 
     // 解析Placeable WMF文件头
+    // 根据MS-WMF规范 2.3.2.1 META_PLACEABLE Record
     parsePlaceableHeader() {
         this.offset = 0;
         const placeableHeader = {
-            key: this.readDword(),
-            handle: this.readWord(),
-            left: this.readWord(),
-            top: this.readWord(),
-            right: this.readWord(),
-            bottom: this.readWord(),
-            inch: this.readWord(),
-            reserved: this.readDword(),
-            checksum: this.readWord()
+            key: this.readDword(),           // 0x9AC6CDD7
+            handle: this.readWord(),         // 必须为0
+            left: this.readShort(),          // 有符号16位整数
+            top: this.readShort(),           // 有符号16位整数
+            right: this.readShort(),         // 有符号16位整数
+            bottom: this.readShort(),        // 有符号16位整数
+            inch: this.readWord(),           // 逻辑单位数/英寸
+            reserved: this.readDword(),      // 必须为0
+            checksum: this.readWord()        // 校验和
         };
+
+        // 验证Placeable WMF签名
+        if (placeableHeader.key !== 0x9AC6CDD7) {
+            console.warn('Invalid Placeable WMF key:', placeableHeader.key.toString(16));
+        }
 
         return placeableHeader;
     }
 
     // 解析WMF文件头
+    // 根据MS-WMF规范 2.3.2.2 META_HEADER Object
     parseWmfHeader() {
         const header = {
-            type: this.readWord(),
-            headerSize: this.readWord(),
-            version: this.readWord(),
-            size: this.readDword(),
-            numObjects: this.readWord(),
-            maxRecord: this.readDword(),
-            reserved: this.readWord()
+            type: this.readWord(),          // 文件类型: 1=内存, 2=磁盘
+            headerSize: this.readWord(),    // 头部大小(WORDs): 固定为9
+            version: this.readWord(),       // WMF版本
+            size: this.readDword(),         // 文件大小(WORDs)
+            numObjects: this.readWord(),    // 对象数量
+            maxRecord: this.readDword(),    // 最大记录大小(WORDs)
+            reserved: this.readWord()       // 保留字段，必须为0
         };
 
-        // 验证headerSize字段（标准WMF应该是9 WORDs = 18字节）
+        // 验证headerSize字段（标准WMF头应该是9 WORDs = 18字节）
         const expectedHeaderSize = 9;
         if (header.headerSize !== expectedHeaderSize) {
-            const bytesToSkip = (header.headerSize * 2) - (this.offset - (this.offset - 18));
-            this.offset += bytesToSkip;
+            console.warn('Non-standard WMF header size:', header.headerSize, 'expected:', expectedHeaderSize);
         }
 
         return header;
     }
 
     // 解析WMF记录
+    // 根据MS-WMF规范 2.3.1 WMF Records
+    // 每条记录格式: Size(DWORD) + Function(WORD) + Parameters
     parseWmfRecord() {
-        const sizeInWords = this.readDword();
-        const functionId = this.readWord();
-
-        if (sizeInWords === 0) {
+        if (this.offset + 6 > this.data.length) {
             return null;
         }
 
+        const recordStart = this.offset;
+        const sizeInWords = this.readDword();  // 记录大小（WORDs）包括自身
+        const functionId = this.readWord();    // 记录函数ID
+
+        // 记录大小必须至少为3个WORD（6字节）
+        if (sizeInWords < 3) {
+            console.warn('Invalid WMF record size:', sizeInWords, 'at offset:', recordStart);
+            return null;
+        }
+
+        // 计算参数数据大小: (总大小 - Size字段2WORDs - Function字段1WORD) * 2字节
         const dataSize = (sizeInWords - 3) * 2;
+        
+        // 检查数据是否超出文件范围
+        if (this.offset + dataSize > this.data.length) {
+            console.warn('WMF record data exceeds file length at offset:', recordStart);
+            return null;
+        }
+
         const recordData = this.readBytes(dataSize);
 
         return {

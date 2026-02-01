@@ -1,97 +1,131 @@
 // EMF+解析器模块
-class EmfPlusParser {
+const BaseParser = require('./baseParser');
+
+class EmfPlusParser extends BaseParser {
     constructor(data) {
-        this.data = new Uint8Array(data);
-        this.offset = 0;
-    }
-
-    // 重置解析器状态
-    reset() {
-        this.offset = 0;
-    }
-
-    // 设置当前偏移量
-    setOffset(offset) {
-        this.offset = offset;
-    }
-
-    // 获取当前偏移量
-    getOffset() {
-        return this.offset;
-    }
-
-    // 读取DWORD值
-    readDword() {
-        if (this.offset + 4 > this.data.length) {
-            return 0;
-        }
-        const value = (this.data[this.offset] & 0xFF) | 
-                     ((this.data[this.offset + 1] & 0xFF) << 8) | 
-                     ((this.data[this.offset + 2] & 0xFF) << 16) | 
-                     ((this.data[this.offset + 3] & 0xFF) << 24);
-        this.offset += 4;
-        return value >>> 0;
-    }
-
-    // 读取WORD值
-    readWord() {
-        if (this.offset + 2 > this.data.length) {
-            return 0;
-        }
-        const value = (this.data[this.offset] & 0xFF) | ((this.data[this.offset + 1] & 0xFF) << 8);
-        this.offset += 2;
-        return value >>> 0;
-    }
-
-    // 读取BYTE值
-    readByte() {
-        if (this.offset >= this.data.length) {
-            return 0;
-        }
-        const value = this.data[this.offset];
-        this.offset += 1;
-        return value & 0xFF;
-    }
-
-    // 读取指定长度的字节
-    readBytes(length) {
-        if (this.offset + length > this.data.length) {
-            length = this.data.length - this.offset;
-        }
-        const bytes = this.data.slice(this.offset, this.offset + length);
-        this.offset += length;
-        return bytes;
+        super(data);
     }
 
     // 解析EMF+记录
-    parseEmfPlusRecord() {
-        if (this.offset + 8 > this.data.length) {
+    // 根据MS-EMFPLUS规范 2.3.1 EMF+ Records
+    // EMF+记录嵌入在EMF记录中，通过EMR_COMMENT_EMFPLUS记录(类型0x00000046)传递
+    parseEmfPlusRecord(emfRecordData) {
+        let offset = 0;
+        
+        // EMF+ Comment记录数据结构:
+        // DataSize (DWORD) - 实际EMF+数据大小
+        // CommentIdentifier (DWORD) - 必须为0x2B464D45 ("EMF+")
+        // EMF+记录数据
+        
+        if (emfRecordData.length < 8) {
             return null;
         }
-
-        // EMF+记录头结构: Type (4 bytes), Flags (4 bytes), Size (4 bytes), Data
-        const type = this.readDword();
-        const flags = this.readDword();
-        const size = this.readDword();
-
-        if (size < 12 || this.offset + size - 12 > this.data.length) {
+        
+        // 读取DataSize
+        const dataSize = (emfRecordData[offset] & 0xFF) |
+                        ((emfRecordData[offset + 1] & 0xFF) << 8) |
+                        ((emfRecordData[offset + 2] & 0xFF) << 16) |
+                        ((emfRecordData[offset + 3] & 0xFF) << 24);
+        offset += 4;
+        
+        // 读取CommentIdentifier并验证
+        const commentId = (emfRecordData[offset] & 0xFF) |
+                         ((emfRecordData[offset + 1] & 0xFF) << 8) |
+                         ((emfRecordData[offset + 2] & 0xFF) << 16) |
+                         ((emfRecordData[offset + 3] & 0xFF) << 24);
+        offset += 4;
+        
+        // 验证EMF+ Comment标识符
+        if (commentId !== 0x2B464D45) {
+            return null; // 不是EMF+记录
+        }
+        
+        // EMF+记录头结构 (16字节):
+        // Type (WORD) - 记录类型 + 标志位
+        // Flags (WORD) - 标志
+        // Size (DWORD) - 记录大小
+        // DataSize (DWORD) - 数据大小
+        
+        if (offset + 12 > emfRecordData.length) {
             return null;
         }
-
-        const recordData = this.readBytes(size - 12);
+        
+        const type = (emfRecordData[offset] & 0xFF) | ((emfRecordData[offset + 1] & 0xFF) << 8);
+        offset += 2;
+        
+        const flags = (emfRecordData[offset] & 0xFF) | ((emfRecordData[offset + 1] & 0xFF) << 8);
+        offset += 2;
+        
+        const size = (emfRecordData[offset] & 0xFF) |
+                    ((emfRecordData[offset + 1] & 0xFF) << 8) |
+                    ((emfRecordData[offset + 2] & 0xFF) << 16) |
+                    ((emfRecordData[offset + 3] & 0xFF) << 24);
+        offset += 4;
+        
+        const recordDataSize = (emfRecordData[offset] & 0xFF) |
+                              ((emfRecordData[offset + 1] & 0xFF) << 8) |
+                              ((emfRecordData[offset + 2] & 0xFF) << 16) |
+                              ((emfRecordData[offset + 3] & 0xFF) << 24);
+        offset += 4;
+        
+        // 读取记录数据
+        const recordData = emfRecordData.slice(offset, offset + recordDataSize);
 
         return {
             type,
             flags,
             size,
+            dataSize: recordDataSize,
             data: recordData
+        };
+    }
+
+    // 从EMF文件中解析EMF+记录
+    parseEmfRecord() {
+        if (this.offset + 8 > this.data.length) {
+            return null;
+        }
+
+        const recordStart = this.offset;
+        const type = this.readDword();   // EMF记录类型
+        const size = this.readDword();   // EMF记录大小
+
+        if (size < 8) {
+            return null;
+        }
+
+        if (this.offset + size - 8 > this.data.length) {
+            return null;
+        }
+
+        const recordData = this.readBytes(size - 8);
+
+        // 如果是EMF+ Comment记录，进一步解析EMF+数据
+        if (type === 0x00000046) { // EMR_COMMENT_EMFPLUS
+            const emfPlusRecord = this.parseEmfPlusRecord(recordData);
+            if (emfPlusRecord) {
+                return {
+                    type: emfPlusRecord.type,
+                    flags: emfPlusRecord.flags,
+                    size: emfPlusRecord.size,
+                    data: emfPlusRecord.data,
+                    isEmfPlus: true
+                };
+            }
+        }
+
+        return {
+            type,
+            size,
+            data: recordData,
+            isEmfPlus: false
         };
     }
 
     // 解析完整的EMF+文件
     parse() {
         try {
-            // 首先尝试解析EMF头
+            // 首先解析EMF头（EMF+文件始终包含EMF头）
             const emfHeader = this.parseEmfHeader();
             
             // 验证头信息
@@ -102,24 +136,29 @@ class EmfPlusParser {
             // 跳过EMF文件头
             this.setOffset(emfHeader.nSize);
 
-            // 解析EMF+记录
+            // 解析记录
             const records = [];
             let recordCount = 0;
             
-            while (this.getOffset() < this.data.length) {
+            while (this.getOffset() < this.data.length && recordCount < emfHeader.nRecords) {
                 try {
-                    const record = this.parseEmfPlusRecord();
+                    const record = this.parseEmfRecord();
                     if (record) {
-                        records.push(record);
-                        console.log('Parsed EMF+ record:', record.type, '(0x' + record.type.toString(16).padStart(8, '0') + ')', 'flags:', record.flags);
+                        // 只保留EMF+记录
+                        if (record.isEmfPlus) {
+                            records.push(record);
+                            console.log('Parsed EMF+ record:', record.type, '(0x' + record.type.toString(16).padStart(4, '0') + ')', 'flags:', record.flags);
+                        } else {
+                            console.log('Skipped EMF record:', record.type, '(0x' + record.type.toString(16).padStart(8, '0') + ')');
+                        }
                         recordCount++;
                     } else {
-                        console.warn('Failed to parse EMF+ record at offset:', this.getOffset());
+                        console.warn('Failed to parse record at offset:', this.getOffset());
                         break;
                     }
                 } catch (error) {
-                    console.warn('Error parsing EMF+ record:', error.message);
-                    // 跳过错误记录，继续解析下一条
+                    console.warn('Error parsing record:', error.message);
+                    // 跳过错误记录
                     this.setOffset(this.getOffset() + 8);
                 }
             }
@@ -137,54 +176,28 @@ class EmfPlusParser {
     }
 
     // 解析EMF文件头（EMF+包含EMF头）
+    // 根据MS-EMF规范 2.3.4.2 EMR_HEADER Record
     parseEmfHeader() {
         this.offset = 0;
         
-        // 读取iType
-        const iType = this.readDword();
-        
-        // 读取nSize
-        const nSize = this.readDword();
-        
-        // 读取bounds (16字节)
-        const bounds = {
-            left: this.readDword(),
-            top: this.readDword(),
-            right: this.readDword(),
-            bottom: this.readDword()
-        };
-        
-        // 读取frame (16字节)
-        const frame = {
-            left: this.readDword(),
-            top: this.readDword(),
-            right: this.readDword(),
-            bottom: this.readDword()
-        };
-        
-        // 验证EMF签名 (在offset 40处)
-        const dSignature = this.readDword();
-        
-        // 检查EMF签名
-        if (dSignature !== 0x464D4520) {
+        if (this.data.length < 88) {
             return null;
         }
         
-        // 解析EMF头部（小端字节序）
         const header = {
             iType: this.readDword(),
             nSize: this.readDword(),
             bounds: {
-                left: this.readDword(),
-                top: this.readDword(),
-                right: this.readDword(),
-                bottom: this.readDword()
+                left: this.readLong(),
+                top: this.readLong(),
+                right: this.readLong(),
+                bottom: this.readLong()
             },
             frame: {
-                left: this.readDword(),
-                top: this.readDword(),
-                right: this.readDword(),
-                bottom: this.readDword()
+                left: this.readLong(),
+                top: this.readLong(),
+                right: this.readLong(),
+                bottom: this.readLong()
             },
             dSignature: this.readDword(),
             nVersion: this.readDword(),
@@ -196,12 +209,12 @@ class EmfPlusParser {
             offDescription: this.readDword(),
             nPalEntries: this.readDword(),
             szlDevice: {
-                cx: this.readDword(),
-                cy: this.readDword()
+                cx: this.readLong(),
+                cy: this.readLong()
             },
             szlMillimeters: {
-                cx: this.readDword(),
-                cy: this.readDword()
+                cx: this.readLong(),
+                cy: this.readLong()
             }
         };
         
@@ -212,14 +225,6 @@ class EmfPlusParser {
         
         if (header.iType !== 1) {
             return null;
-        }
-        
-        // 确保边界值合理
-        if (header.bounds.right < header.bounds.left) {
-            [header.bounds.left, header.bounds.right] = [header.bounds.right, header.bounds.left];
-        }
-        if (header.bounds.bottom < header.bounds.top) {
-            [header.bounds.top, header.bounds.bottom] = [header.bounds.bottom, header.bounds.top];
         }
         
         return header;

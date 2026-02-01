@@ -1,54 +1,17 @@
 // WMF绘制模块
-const CoordinateTransformer = require('../coordinateTransformer');
-const GdiObjectManager = require('../gdiObjectManager');
+const BaseDrawer = require('./baseDrawer');
 
-class WmfDrawer {
+class WmfDrawer extends BaseDrawer {
     constructor(ctx) {
-        this.ctx = ctx;
-        this.coordinateTransformer = new CoordinateTransformer();
-        this.gdiObjectManager = new GdiObjectManager();
-        this.currentPath = []; // 当前路径点集合
-        this.pathState = 'idle'; // 路径状态：idle, active, completed
-        this.fillColor = '#000000'; // 默认填充颜色
-        this.strokeColor = '#000000'; // 默认描边颜色
-        this.lineWidth = 1; // 默认线宽
+        super(ctx);
     }
 
     draw(metafileData) {
         console.log('Drawing WMF with header:', metafileData.header);
         console.log('Number of records:', metafileData.records.length);
 
-        if (metafileData.header.placeableHeader) {
-            const ph = metafileData.header.placeableHeader;
-            const width = Math.abs(ph.right - ph.left);
-            const height = Math.abs(ph.bottom - ph.top);
-            const canvasWidth = Math.max(Math.min(width, 2000), 800);
-            const canvasHeight = Math.max(Math.min(height, 1500), 600);
-            this.ctx.canvas.width = canvasWidth;
-            this.ctx.canvas.height = canvasHeight;
-            this.coordinateTransformer.setWindowOrg(ph.left, ph.top);
-        } else {
-            this.ctx.canvas.width = 800;
-            this.ctx.canvas.height = 600;
-        }
-        console.log('Canvas size set to:', this.ctx.canvas.width, 'x', this.ctx.canvas.height);
-
-        // 清空Canvas
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
-        console.log('Canvas cleared');
-
-        // 设置默认绘制样式
-        this.ctx.strokeStyle = '#000000'; // 黑色描边
-        this.ctx.fillStyle = '#ffffff'; // 白色填充
-        this.ctx.lineWidth = 2;
-        this.fillColor = '#ffffff';
-        this.strokeColor = '#000000';
-        console.log('Drawing styles set');
-
-        // 重置路径状态
-        this.currentPath = [];
-        this.pathState = 'idle';
+        // 初始化画布
+        this.initCanvas(metafileData);
 
         // 处理每个记录
         for (let i = 0; i < metafileData.records.length; i++) {
@@ -64,338 +27,473 @@ class WmfDrawer {
     }
 
     processRecord(record) {
-        // 根据函数ID处理不同的WMF命令
+        // 根据MS-WMF规范2.3.1的函数ID处理不同的WMF命令
+        // 函数ID格式: 高字节为类别，低字节为功能
         switch (record.functionId) {
-            case 0x0000: // End of File
+            case 0x0000: // META_EOF - End of File
                 console.log('WMF End of File record');
                 break;
-            case 0x0001: // SetWindowOrg
+                
+            // ========== 状态记录 (State Records) ==========
+            case 0x0103: // META_SETMAPMODE
+                this.processSetMapMode(record.data);
+                break;
+            case 0x020B: // META_SETWINDOWORG
                 this.processSetWindowOrg(record.data);
                 break;
-            case 0x0002: // SetWindowExt
+            case 0x020C: // META_SETWINDOWEXT
                 this.processSetWindowExt(record.data);
                 break;
-            case 0x0003: // SetViewportOrg
+            case 0x020D: // META_SETVIEWPORTORG
                 this.processSetViewportOrg(record.data);
                 break;
-            case 0x0004: // SetViewportExt
+            case 0x020E: // META_SETVIEWPORTEXT
                 this.processSetViewportExt(record.data);
                 break;
-            case 0x0201: // MoveTo
+            case 0x0201: // META_SETBKCOLOR
+                this.processSetBkColor(record.data);
+                break;
+            case 0x0102: // META_SETBKMODE
+                this.processSetBkMode(record.data);
+                break;
+            case 0x0209: // META_SETTEXTCOLOR
+                this.processSetTextColor(record.data);
+                break;
+            case 0x0104: // META_SETROP2
+                this.processSetROP2(record.data);
+                break;
+            case 0x0106: // META_SETPOLYFILLMODE
+                this.processSetPolyFillMode(record.data);
+                break;
+            case 0x0107: // META_SETSTRETCHBLTMODE
+                this.processSetStretchBltMode(record.data);
+                break;
+            case 0x0302: // META_SETTEXTALIGN
+                this.processSetTextAlign(record.data);
+                break;
+                
+            // ========== 对象创建记录 (Object Creation Records) ==========
+            case 0x02FA: // META_CREATEPENINDIRECT
+                this.processCreatePenIndirect(record.data);
+                break;
+            case 0x02FC: // META_CREATEBRUSHINDIRECT
+                this.processCreateBrushIndirect(record.data);
+                break;
+            case 0x02FB: // META_CREATEFONTINDIRECT
+                this.processCreateFontIndirect(record.data);
+                break;
+            case 0x00F8: // META_CREATEPALETTE
+                this.processCreatePalette(record.data);
+                break;
+            case 0x01F9: // META_CREATEPATTERNBRUSH
+                this.processCreatePatternBrush(record.data);
+                break;
+            case 0x00F7: // META_CREATEREGION
+                this.processCreateRegion(record.data);
+                break;
+                
+            // ========== 对象选择/删除记录 ==========
+            case 0x012D: // META_SELECTOBJECT
+                this.processSelectObject(record.data);
+                break;
+            case 0x01F0: // META_DELETEOBJECT
+                this.processDeleteObject(record.data);
+                break;
+                
+            // ========== 绘图记录 (Drawing Records) ==========
+            case 0x0213: // META_MOVETO (旧版) 或 0x0214 META_LINETO
                 this.processMoveTo(record.data);
                 break;
-            case 0x0202: // LineTo
+            case 0x0214: // META_LINETO
                 this.processLineTo(record.data);
                 break;
-            case 0x0203: // Rectangle
+            case 0x041B: // META_RECTANGLE
                 this.processRectangle(record.data);
                 break;
-            case 0x0204: // RoundRect
+            case 0x061C: // META_ROUNDRECT
                 this.processRoundRect(record.data);
                 break;
-            case 0x0205: // Ellipse
+            case 0x0418: // META_ELLIPSE
                 this.processEllipse(record.data);
                 break;
-            case 0x0206: // Arc
+            case 0x0817: // META_ARC
                 this.processArc(record.data);
                 break;
-            case 0x0207: // Pie
+            case 0x081A: // META_PIE
                 this.processPie(record.data);
                 break;
-            case 0x0208: // Chord
+            case 0x0830: // META_CHORD
                 this.processChord(record.data);
                 break;
-            case 0x0209: // Polyline
+            case 0x0325: // META_POLYLINE
                 this.processPolyline(record.data);
                 break;
-            case 0x020A: // Polygon
+            case 0x0324: // META_POLYGON
                 this.processPolygon(record.data);
                 break;
-            case 0x020B: // TextOut
+            case 0x0538: // META_POLYPOLYGON
+                this.processPolyPolygon(record.data);
+                break;
+                
+            // ========== 文本记录 ==========
+            case 0x0521: // META_TEXTOUT
                 this.processTextOut(record.data);
                 break;
-            case 0x020C: // GetTextExtent
-                this.processGetTextExtent(record.data);
+            case 0x0A32: // META_EXTTEXTOUT
+                this.processExtTextOut(record.data);
                 break;
             case 0x0626: // META_ESCAPE
                 this.processEscape(record.data);
                 break;
-            case 0x020D: // CreatePenIndirect
-                this.processCreatePenIndirect(record.data);
+                
+            // ========== 位图操作记录 ==========
+            case 0x0940: // META_DIBBITBLT
+                this.processDibBitBlt(record.data);
                 break;
-            case 0x020E: // CreateBrushIndirect
-                this.processCreateBrushIndirect(record.data);
+            case 0x0B41: // META_DIBSTRETCHBLT
+                this.processDibStretchBlt(record.data);
                 break;
-            case 0x020F: // SelectObject
-                this.processSelectObject(record.data);
+            case 0x0F43: // META_STRETCHDIB
+                this.processStretchDib(record.data);
                 break;
-            case 0x0210: // DeleteObject
-                this.processDeleteObject(record.data);
-                break;
-            case 0x02C8: // SetMapMode
-                this.processSetMapMode(record.data);
-                break;
-            case 0x02CA: // SetTextJustification
-                this.processSetTextJustification(record.data);
-                break;
-            case 0x02CB: // SetTextColor
-                this.processSetTextColor(record.data);
-                break;
-            case 0x02CC: // SetBkColor
-                this.processSetBkColor(record.data);
-                break;
-            case 0x02CD: // SetBkMode
-                this.processSetBkMode(record.data);
-                break;
-            case 0x02CE: // SetROP2
-                this.processSetROP2(record.data);
-                break;
-            case 0x02CF: // SetPolyFillMode
-                this.processSetPolyFillMode(record.data);
-                break;
-            case 0x02D0: // SetStretchBltMode
-                this.processSetStretchBltMode(record.data);
-                break;
-            case 0x02D1: // SetTextStretch
-                this.processSetTextStretch(record.data);
-                break;
-            case 0x0103: // SetWindowOrgEx
-                this.processSetWindowOrgEx(record.data);
-                break;
-            case 0x0104: // SetWindowExtEx
-                this.processSetWindowExtEx(record.data);
-                break;
-            case 0x0105: // SetViewportOrgEx
-                this.processSetViewportOrgEx(record.data);
-                break;
-            case 0x0106: // SetViewportExtEx
-                this.processSetViewportExtEx(record.data);
-                break;
-            case 0x0111: // FillRect
-                this.processFillRect(record.data);
-                break;
-            case 0x0112: // FrameRect
-                this.processFrameRect(record.data);
-                break;
-            case 0x0113: // InvertRect
-                this.processInvertRect(record.data);
-                break;
-            case 0x0114: // PaintRect
-                this.processPaintRect(record.data);
-                break;
-            case 0x0115: // FillRgn
+                
+            // ========== 填充记录 ==========
+            case 0x0419: // META_FILLREGION
                 this.processFillRgn(record.data);
                 break;
-            case 0x0116: // FrameRgn
-                this.processFrameRgn(record.data);
+            case 0x0416: // META_FLOODFILL
+                this.processFloodFill(record.data);
                 break;
-            case 0x0117: // InvertRgn
-                this.processInvertRgn(record.data);
+            case 0x0228: // META_FILLPOLYGON (非标准)
+                this.processPolygon(record.data);
                 break;
-            case 0x0118: // PaintRgn
-                this.processPaintRgn(record.data);
+                
+            // ========== 状态管理 ==========
+            case 0x001E: // META_SAVEDC
+                this.processSaveDC(record.data);
                 break;
-            case 0x012d: // SetBkColor
-                this.processSetBkColor(record.data);
+            case 0x0127: // META_RESTOREDC
+                this.processRestoreDC(record.data);
                 break;
-            case 0x01f0: // SetTextColor
-                this.processSetTextColor(record.data);
-                break;
-            case 0x02fa: // SelectObject
-                this.processSelectObject(record.data);
-                break;
-            case 0x02fc: // CreatePenIndirect
-                this.processCreatePenIndirect(record.data);
-                break;
-            case 0x0324: // SetTextColor
-                this.processSetTextColor(record.data);
-                break;
-            case 0x0538: // Polyline
-                this.processPolyline(record.data);
-                break;
+                
             default:
-                console.log('Unknown WMF function:', record.functionId, '(0x' + record.functionId.toString(16).padStart(4, '0') + ')');
-                // 尝试通用处理逻辑，解析为图形数据
-                this.tryProcessAsCoordinates(record.data);
+                console.log('Unknown/Unimplemented WMF function:', record.functionId, '(0x' + record.functionId.toString(16).padStart(4, '0') + ')');
                 break;
         }
     }
 
-    // 以下是具体的处理方法，从原wmfDrawer.js中提取
+    // ========== 辅助方法 ==========
+    readWordFromData(data, offset) {
+        if (offset + 1 >= data.length) return 0;
+        return data[offset] | (data[offset + 1] << 8);
+    }
+
+    readDwordFromData(data, offset) {
+        if (offset + 3 >= data.length) return 0;
+        return data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24);
+    }
+
+    readStringFromData(data, offset, length) {
+        let str = '';
+        for (let i = 0; i < length && offset + i < data.length; i++) {
+            if (data[offset + i] !== 0) {
+                str += String.fromCharCode(data[offset + i]);
+            }
+        }
+        return str;
+    }
+
+    rgbToHex(rgb) {
+        const r = (rgb & 0xFF).toString(16).padStart(2, '0');
+        const g = ((rgb >> 8) & 0xFF).toString(16).padStart(2, '0');
+        const b = ((rgb >> 16) & 0xFF).toString(16).padStart(2, '0');
+        return `#${r}${g}${b}`;
+    }
+
+    // ========== 实现绘制方法 ==========
+    processSetMapMode(data) {
+        if (data.length < 2) return;
+        const mode = this.readWordFromData(data, 0);
+        console.log('SetMapMode:', mode);
+        this.coordinateTransformer.setMapMode(mode);
+    }
+
     processSetWindowOrg(data) {
-        console.log('Processing SetWindowOrg');
+        if (data.length < 4) return;
+        const y = this.readWordFromData(data, 0);
+        const x = this.readWordFromData(data, 2);
+        console.log('SetWindowOrg:', x, y);
+        this.coordinateTransformer.setWindowOrg(x, y);
     }
 
     processSetWindowExt(data) {
-        console.log('Processing SetWindowExt');
+        if (data.length < 4) return;
+        const y = this.readWordFromData(data, 0);
+        const x = this.readWordFromData(data, 2);
+        console.log('SetWindowExt:', x, y);
+        this.coordinateTransformer.setWindowExt(x, y);
     }
 
     processSetViewportOrg(data) {
-        console.log('Processing SetViewportOrg');
+        if (data.length < 4) return;
+        const y = this.readWordFromData(data, 0);
+        const x = this.readWordFromData(data, 2);
+        console.log('SetViewportOrg:', x, y);
+        this.coordinateTransformer.setViewportOrg(x, y);
     }
 
     processSetViewportExt(data) {
-        console.log('Processing SetViewportExt');
-    }
-
-    processMoveTo(data) {
-        console.log('Processing MoveTo');
-    }
-
-    processLineTo(data) {
-        console.log('Processing LineTo');
-    }
-
-    processRectangle(data) {
-        console.log('Processing Rectangle');
-    }
-
-    processRoundRect(data) {
-        console.log('Processing RoundRect');
-    }
-
-    processEllipse(data) {
-        console.log('Processing Ellipse');
-    }
-
-    processArc(data) {
-        console.log('Processing Arc');
-    }
-
-    processPie(data) {
-        console.log('Processing Pie');
-    }
-
-    processChord(data) {
-        console.log('Processing Chord');
-    }
-
-    processPolyline(data) {
-        console.log('Processing Polyline');
-    }
-
-    processPolygon(data) {
-        console.log('Processing Polygon');
-    }
-
-    processTextOut(data) {
-        console.log('Processing TextOut');
-    }
-
-    processGetTextExtent(data) {
-        console.log('Processing GetTextExtent');
-    }
-
-    processEscape(data) {
-        console.log('Processing Escape');
-    }
-
-    processCreatePenIndirect(data) {
-        console.log('Processing CreatePenIndirect');
-    }
-
-    processCreateBrushIndirect(data) {
-        console.log('Processing CreateBrushIndirect');
-    }
-
-    processSelectObject(data) {
-        console.log('Processing SelectObject');
-    }
-
-    processDeleteObject(data) {
-        console.log('Processing DeleteObject');
-    }
-
-    processSetMapMode(data) {
-        console.log('Processing SetMapMode');
-    }
-
-    processSetTextJustification(data) {
-        console.log('Processing SetTextJustification');
-    }
-
-    processSetTextColor(data) {
-        console.log('Processing SetTextColor');
+        if (data.length < 4) return;
+        const y = this.readWordFromData(data, 0);
+        const x = this.readWordFromData(data, 2);
+        console.log('SetViewportExt:', x, y);
+        this.coordinateTransformer.setViewportExt(x, y);
     }
 
     processSetBkColor(data) {
-        console.log('Processing SetBkColor');
+        if (data.length < 4) return;
+        const color = this.readDwordFromData(data, 0);
+        console.log('SetBkColor:', color);
     }
 
     processSetBkMode(data) {
-        console.log('Processing SetBkMode');
+        if (data.length < 2) return;
+        const mode = this.readWordFromData(data, 0);
+        console.log('SetBkMode:', mode);
+    }
+
+    processSetTextColor(data) {
+        if (data.length < 4) return;
+        const color = this.readDwordFromData(data, 0);
+        console.log('SetTextColor:', color);
+        this.ctx.fillStyle = this.rgbToHex(color);
     }
 
     processSetROP2(data) {
-        console.log('Processing SetROP2');
+        if (data.length < 2) return;
+        const rop2 = this.readWordFromData(data, 0);
+        console.log('SetROP2:', rop2);
     }
 
     processSetPolyFillMode(data) {
-        console.log('Processing SetPolyFillMode');
+        if (data.length < 2) return;
+        const mode = this.readWordFromData(data, 0);
+        console.log('SetPolyFillMode:', mode);
     }
 
     processSetStretchBltMode(data) {
-        console.log('Processing SetStretchBltMode');
+        if (data.length < 2) return;
+        const mode = this.readWordFromData(data, 0);
+        console.log('SetStretchBltMode:', mode);
     }
 
-    processSetTextStretch(data) {
-        console.log('Processing SetTextStretch');
+    processSetTextAlign(data) {
+        if (data.length < 2) return;
+        const align = this.readWordFromData(data, 0);
+        console.log('SetTextAlign:', align);
     }
 
-    processSetWindowOrgEx(data) {
-        console.log('Processing SetWindowOrgEx');
+    processCreatePenIndirect(data) {
+        if (data.length < 10) return;
+        const style = this.readWordFromData(data, 0);
+        const width = this.readWordFromData(data, 2);
+        const color = this.readDwordFromData(data, 6);
+        console.log('CreatePenIndirect:', style, width, color);
+        const penColor = this.rgbToHex(color);
+        this.gdiObjectManager.createPen(style, width, penColor);
     }
 
-    processSetWindowExtEx(data) {
-        console.log('Processing SetWindowExtEx');
+    processCreateBrushIndirect(data) {
+        if (data.length < 8) return;
+        const style = this.readWordFromData(data, 0);
+        const color = this.readDwordFromData(data, 2);
+        console.log('CreateBrushIndirect:', style, color);
+        const brushColor = this.rgbToHex(color);
+        this.gdiObjectManager.createBrush(style, brushColor);
     }
 
-    processSetViewportOrgEx(data) {
-        console.log('Processing SetViewportOrgEx');
+    processSelectObject(data) {
+        if (data.length < 2) return;
+        const objectIndex = this.readWordFromData(data, 0);
+        console.log('SelectObject:', objectIndex);
+        const obj = this.gdiObjectManager.selectObject(objectIndex);
+        if (obj) {
+            this.applyGdiObject(obj);
+        } else if (objectIndex >= 0x80000000) {
+            this.applyStockObject(objectIndex);
+        }
     }
 
-    processSetViewportExtEx(data) {
-        console.log('Processing SetViewportExtEx');
+    applyGdiObject(obj) {
+        if (obj.type === 'pen') {
+            this.ctx.strokeStyle = obj.color;
+            this.ctx.lineWidth = obj.width || 1;
+            this.strokeColor = obj.color;
+        } else if (obj.type === 'brush') {
+            this.ctx.fillStyle = obj.color;
+            this.fillColor = obj.color;
+        }
     }
 
-    processFillRect(data) {
-        console.log('Processing FillRect');
+    applyStockObject(stockIndex) {
+        const color = this.gdiObjectManager.getStockObject(stockIndex);
+        if (color) {
+            this.ctx.fillStyle = color;
+            this.fillColor = color;
+        }
     }
 
-    processFrameRect(data) {
-        console.log('Processing FrameRect');
+    processDeleteObject(data) {
+        if (data.length < 2) return;
+        const objectIndex = this.readWordFromData(data, 0);
+        console.log('DeleteObject:', objectIndex);
+        this.gdiObjectManager.deleteObject(objectIndex);
     }
 
-    processInvertRect(data) {
-        console.log('Processing InvertRect');
+    processMoveTo(data) {
+        if (data.length < 4) return;
+        const y = this.readWordFromData(data, 0);
+        const x = this.readWordFromData(data, 2);
+        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        console.log('MoveTo:', x, y, '->', transformed.x, transformed.y);
+        this.ctx.moveTo(transformed.x, transformed.y);
     }
 
-    processPaintRect(data) {
-        console.log('Processing PaintRect');
+    processLineTo(data) {
+        if (data.length < 4) return;
+        const y = this.readWordFromData(data, 0);
+        const x = this.readWordFromData(data, 2);
+        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        console.log('LineTo:', x, y, '->', transformed.x, transformed.y);
+        this.ctx.lineTo(transformed.x, transformed.y);
+        this.ctx.stroke();
     }
 
-    processFillRgn(data) {
-        console.log('Processing FillRgn');
+    processRectangle(data) {
+        if (data.length < 8) return;
+        const bottom = this.readWordFromData(data, 0);
+        const right = this.readWordFromData(data, 2);
+        const top = this.readWordFromData(data, 4);
+        const left = this.readWordFromData(data, 6);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        console.log('Rectangle:', left, top, right, bottom);
+        this.ctx.fillRect(transformedLeftTop.x, transformedLeftTop.y, 
+            transformedRightBottom.x - transformedLeftTop.x, 
+            transformedRightBottom.y - transformedLeftTop.y);
+        this.ctx.strokeRect(transformedLeftTop.x, transformedLeftTop.y, 
+            transformedRightBottom.x - transformedLeftTop.x, 
+            transformedRightBottom.y - transformedLeftTop.y);
     }
 
-    processFrameRgn(data) {
-        console.log('Processing FrameRgn');
+    processPolyline(data) {
+        if (data.length < 2) return;
+        const numPoints = this.readWordFromData(data, 0);
+        console.log('Polyline, numPoints:', numPoints);
+        
+        if (data.length < 2 + numPoints * 4) return;
+        
+        this.ctx.beginPath();
+        for (let i = 0; i < numPoints; i++) {
+            const x = this.readWordFromData(data, 2 + i * 4);
+            const y = this.readWordFromData(data, 4 + i * 4);
+            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            
+            if (i === 0) {
+                this.ctx.moveTo(transformed.x, transformed.y);
+            } else {
+                this.ctx.lineTo(transformed.x, transformed.y);
+            }
+        }
+        this.ctx.stroke();
     }
 
-    processInvertRgn(data) {
-        console.log('Processing InvertRgn');
+    processPolygon(data) {
+        if (data.length < 2) return;
+        const numPoints = this.readWordFromData(data, 0);
+        console.log('Polygon, numPoints:', numPoints);
+        
+        if (data.length < 2 + numPoints * 4) return;
+        
+        this.ctx.beginPath();
+        for (let i = 0; i < numPoints; i++) {
+            const x = this.readWordFromData(data, 2 + i * 4);
+            const y = this.readWordFromData(data, 4 + i * 4);
+            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            
+            if (i === 0) {
+                this.ctx.moveTo(transformed.x, transformed.y);
+            } else {
+                this.ctx.lineTo(transformed.x, transformed.y);
+            }
+        }
+        this.ctx.closePath();
+        this.ctx.fill();
+        this.ctx.stroke();
     }
 
-    processPaintRgn(data) {
-        console.log('Processing PaintRgn');
+    processPolyPolygon(data) {
+        if (data.length < 2) return;
+        const numPolygons = this.readWordFromData(data, 0);
+        console.log('PolyPolygon, numPolygons:', numPolygons);
+        
+        if (data.length < 2 + numPolygons * 2) return;
+        
+        // 读取每个多边形的点数
+        const pointCounts = [];
+        let offset = 2;
+        for (let i = 0; i < numPolygons; i++) {
+            pointCounts.push(this.readWordFromData(data, offset));
+            offset += 2;
+        }
+        
+        // 绘制每个多边形
+        for (let i = 0; i < numPolygons; i++) {
+            const numPoints = pointCounts[i];
+            console.log(`  Polygon ${i}: ${numPoints} points`);
+            
+            if (offset + numPoints * 4 > data.length) break;
+            
+            this.ctx.beginPath();
+            for (let j = 0; j < numPoints; j++) {
+                const x = this.readWordFromData(data, offset);
+                const y = this.readWordFromData(data, offset + 2);
+                const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+                
+                if (j === 0) {
+                    this.ctx.moveTo(transformed.x, transformed.y);
+                } else {
+                    this.ctx.lineTo(transformed.x, transformed.y);
+                }
+                offset += 4;
+            }
+            this.ctx.closePath();
+            this.ctx.fill();
+            this.ctx.stroke();
+        }
     }
 
-    tryProcessAsCoordinates(data) {
-        console.log('Trying to process as coordinates');
+    processTextOut(data) {
+        if (data.length < 2) return;
+        const textLength = this.readWordFromData(data, 0);
+        if (data.length < 2 + textLength + 4) return;
+        
+        const text = this.readStringFromData(data, 2, textLength);
+        const y = this.readWordFromData(data, 2 + textLength);
+        const x = this.readWordFromData(data, 4 + textLength);
+        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        console.log('TextOut:', text, 'at', x, y, '->', transformed.x, transformed.y);
+        this.ctx.fillText(text, transformed.x, transformed.y);
     }
 
-    finishPath() {
-        console.log('Finishing path');
+    processSaveDC(data) {
+        console.log('SaveDC');
+        this.ctx.save();
+    }
+
+    processRestoreDC(data) {
+        console.log('RestoreDC');
+        this.ctx.restore();
     }
 }
 

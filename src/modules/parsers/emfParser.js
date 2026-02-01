@@ -1,160 +1,120 @@
 // EMF解析器模块
-class EmfParser {
+const BaseParser = require('./baseParser');
+
+class EmfParser extends BaseParser {
     constructor(data) {
-        this.data = new Uint8Array(data);
-        this.offset = 0;
-    }
-
-    // 重置解析器状态
-    reset() {
-        this.offset = 0;
-    }
-
-    // 设置当前偏移量
-    setOffset(offset) {
-        this.offset = offset;
-    }
-
-    // 获取当前偏移量
-    getOffset() {
-        return this.offset;
-    }
-
-    // 读取DWORD值
-    readDword() {
-        if (this.offset + 4 > this.data.length) {
-            return 0;
-        }
-        const value = (this.data[this.offset] & 0xFF) | 
-                     ((this.data[this.offset + 1] & 0xFF) << 8) | 
-                     ((this.data[this.offset + 2] & 0xFF) << 16) | 
-                     ((this.data[this.offset + 3] & 0xFF) << 24);
-        this.offset += 4;
-        return value >>> 0;
-    }
-
-    // 读取WORD值
-    readWord() {
-        if (this.offset + 2 > this.data.length) {
-            return 0;
-        }
-        const value = (this.data[this.offset] & 0xFF) | ((this.data[this.offset + 1] & 0xFF) << 8);
-        this.offset += 2;
-        return value >>> 0;
-    }
-
-    // 读取指定长度的字节
-    readBytes(length) {
-        if (this.offset + length > this.data.length) {
-            length = this.data.length - this.offset;
-        }
-        const bytes = this.data.slice(this.offset, this.offset + length);
-        this.offset += length;
-        return bytes;
+        super(data);
     }
 
     // 解析EMF文件头
+    // 根据MS-EMF规范 2.3.4.2 EMR_HEADER Record
     parseEmfHeader() {
         this.offset = 0;
         
-        // 读取iType
-        const iType = this.readDword();
-        
-        // 读取nSize
-        const nSize = this.readDword();
-        
-        // 读取bounds (16字节)
-        const bounds = {
-            left: this.readDword(),
-            top: this.readDword(),
-            right: this.readDword(),
-            bottom: this.readDword()
-        };
-        
-        // 读取frame (16字节)
-        const frame = {
-            left: this.readDword(),
-            top: this.readDword(),
-            right: this.readDword(),
-            bottom: this.readDword()
-        };
-        
-        // 验证EMF签名 (在offset 40处)
-        const dSignature = this.readDword();
-        
-        // 检查EMF签名
-        if (dSignature !== 0x464D4520) {
+        // EMR_HEADER 最小为88字节，扩展版本可能更大
+        if (this.data.length < 88) {
+            console.error('File too small to be valid EMF');
             return null;
         }
         
-        // 解析EMF头部（小端字节序）
         const header = {
-            iType: this.readDword(),
-            nSize: this.readDword(),
+            // EMR 基础记录头 (8字节)
+            iType: this.readDword(),         // 记录类型，必须为0x00000001 (EMR_HEADER)
+            nSize: this.readDword(),         // 记录大小(字节)
+            
+            // RECTL Bounds (16字节) - 设备单位边界
             bounds: {
-                left: this.readDword(),
-                top: this.readDword(),
-                right: this.readDword(),
-                bottom: this.readDword()
+                left: this.readLong(),       // 有符号32位
+                top: this.readLong(),
+                right: this.readLong(),
+                bottom: this.readLong()
             },
+            
+            // RECTL Frame (16字节) - 0.01毫米单位边界
             frame: {
-                left: this.readDword(),
-                top: this.readDword(),
-                right: this.readDword(),
-                bottom: this.readDword()
+                left: this.readLong(),
+                top: this.readLong(),
+                right: this.readLong(),
+                bottom: this.readLong()
             },
-            dSignature: this.readDword(),
-            nVersion: this.readDword(),
-            nBytes: this.readDword(),
-            nRecords: this.readDword(),
-            nHandles: this.readWord(),
-            sReserved: this.readWord(),
-            nDescription: this.readDword(),
-            offDescription: this.readDword(),
-            nPalEntries: this.readDword(),
+            
+            // EMF签名和版本信息
+            dSignature: this.readDword(),     // 必须为0x464D4520 (" EMF")
+            nVersion: this.readDword(),       // 版本号，通常为0x00010000
+            nBytes: this.readDword(),         // 文件总字节数
+            nRecords: this.readDword(),       // 元文件中记录总数
+            nHandles: this.readWord(),        // 句柄表中的句柄数
+            sReserved: this.readWord(),       // 保留，必须为0
+            nDescription: this.readDword(),   // 描述字符串长度(字符数)
+            offDescription: this.readDword(), // 描述字符串偏移量
+            nPalEntries: this.readDword(),    // 调色板条目数
+            
+            // 参考设备尺寸（像素）
             szlDevice: {
-                cx: this.readDword(),
-                cy: this.readDword()
+                cx: this.readLong(),
+                cy: this.readLong()
             },
+            
+            // 参考设备尺寸（毫米）
             szlMillimeters: {
-                cx: this.readDword(),
-                cy: this.readDword()
+                cx: this.readLong(),
+                cy: this.readLong()
             }
         };
         
-        // 验证EMF头
+        // 验证EMF签名
         if (header.dSignature !== 0x464D4520) {
+            console.error('Invalid EMF signature:', header.dSignature.toString(16), 'expected: 464d4520');
             return null;
         }
         
-        if (header.iType !== 1) {
+        // 验证记录类型
+        if (header.iType !== 0x00000001) {
+            console.error('Invalid EMR_HEADER type:', header.iType, 'expected: 1');
             return null;
         }
         
-        // 确保边界值合理
-        if (header.bounds.right < header.bounds.left) {
-            [header.bounds.left, header.bounds.right] = [header.bounds.right, header.bounds.left];
+        // 验证记录大小
+        if (header.nSize < 88) {
+            console.error('Invalid EMR_HEADER size:', header.nSize, 'expected: >= 88');
+            return null;
         }
-        if (header.bounds.bottom < header.bounds.top) {
-            [header.bounds.top, header.bounds.bottom] = [header.bounds.bottom, header.bounds.top];
-        }
+        
+        console.log('EMF Header validated successfully');
+        console.log('  Version:', header.nVersion.toString(16));
+        console.log('  Total bytes:', header.nBytes);
+        console.log('  Total records:', header.nRecords);
+        console.log('  Bounds:', header.bounds);
+        console.log('  Device size:', header.szlDevice);
         
         return header;
     }
 
     // 解析EMF记录
+    // 根据MS-EMF规范 2.3.1 EMF Records
+    // 每条记录格式: Type(DWORD) + Size(DWORD) + Parameters
     parseEmfRecord() {
         if (this.offset + 8 > this.data.length) {
             return null;
         }
 
-        const type = this.readDword();
-        const size = this.readDword();
+        const recordStart = this.offset;
+        const type = this.readDword();   // 记录类型
+        const size = this.readDword();   // 记录大小（字节），包括Type和Size字段
 
-        if (size < 8 || this.offset + size - 8 > this.data.length) {
+        // 记录大小必须至少为8字节
+        if (size < 8) {
+            console.warn('Invalid EMF record size:', size, 'at offset:', recordStart);
             return null;
         }
 
+        // 检查是否超出文件边界
+        if (this.offset + size - 8 > this.data.length) {
+            console.warn('EMF record exceeds file length at offset:', recordStart);
+            return null;
+        }
+
+        // 读取参数数据
         const recordData = this.readBytes(size - 8);
 
         return {

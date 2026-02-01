@@ -51,13 +51,13 @@ class WmfEditorProvider implements vscode.CustomEditorProvider {
         const webviewPath = path.join(this.context.extensionPath, 'src', 'webview.html');
         let webviewHtml = fs.readFileSync(webviewPath, 'utf8');
         
-        // 创建wmfParser.js的本地URI
-        const parserScriptPath = vscode.Uri.file(path.join(this.context.extensionPath, 'src', 'wmfParser.js'));
+        // 创建metafileParser.browser.js的本地URI
+        const parserScriptPath = vscode.Uri.file(path.join(this.context.extensionPath, 'src', 'metafileParser.browser.js'));
         const parserScriptUri = webviewPanel.webview.asWebviewUri(parserScriptPath);
         
         // 替换WMF数据占位符和脚本路径
         webviewHtml = webviewHtml.replace('${wmfBase64}', wmfBase64);
-        webviewHtml = webviewHtml.replace('wmfParser.js', parserScriptUri.toString());
+        webviewHtml = webviewHtml.replace('metafileParser.browser.js', parserScriptUri.toString());
 
         // 设置WebView内容
         webviewPanel.webview.html = webviewHtml;
@@ -119,13 +119,13 @@ export function activate(context: vscode.ExtensionContext) {
             const webviewPath = path.join(context.extensionPath, 'src', 'webview.html');
             let webviewHtml = fs.readFileSync(webviewPath, 'utf8');
             
-            // 创建wmfParser.js的本地URI
-            const parserScriptPath = vscode.Uri.file(path.join(context.extensionPath, 'src', 'wmfParser.js'));
+            // 创建metafileParser.browser.js的本地URI
+            const parserScriptPath = vscode.Uri.file(path.join(context.extensionPath, 'src', 'metafileParser.browser.js'));
             const parserScriptUri = panel.webview.asWebviewUri(parserScriptPath);
             
             // 替换WMF数据占位符和脚本路径
             webviewHtml = webviewHtml.replace('${wmfBase64}', wmfBase64);
-            webviewHtml = webviewHtml.replace('wmfParser.js', parserScriptUri.toString());
+            webviewHtml = webviewHtml.replace('metafileParser.browser.js', parserScriptUri.toString());
 
             // 创建webview内容
             panel.webview.html = webviewHtml;

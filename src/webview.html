@@ -35,8 +35,8 @@
 <body>
     <canvas id="wmfCanvas"></canvas>
     <div id="error" class="error"></div>
-    <div id="debug" class="debug" style="display: none;"></div>
-    <script src="wmfParser.js"></script>
+    <div id="debug" class="debug"></div>
+    <script src="metafileParser.browser.js"></script>
     <script>
         // 显示调试信息
         function showDebug(message) {
@@ -44,6 +44,13 @@
             debugDiv.textContent += message + '\n';
             debugDiv.style.display = 'block';
         }
+
+        // 检查脚本是否加载
+        showDebug('Script loaded, checking global objects...');
+        showDebug('typeof MetafileParser: ' + typeof MetafileParser);
+        showDebug('typeof window.MetafileParser: ' + typeof window.MetafileParser);
+        showDebug('typeof WmfDrawer: ' + typeof WmfDrawer);
+        showDebug('window keys: ' + Object.keys(window).filter(k => k.includes('Parser') || k.includes('Drawer')).join(', '));
 
         // 预览WMF文件
         function previewWMF(base64Data) {
@@ -58,6 +65,11 @@
 
                 showDebug('Binary data length: ' + bytes.length);
                 showDebug('Creating parser...');
+
+                // 检查 MetafileParser 是否存在
+                if (typeof MetafileParser === 'undefined') {
+                    throw new Error('MetafileParser is not defined. The browser bundle may not have loaded correctly.');
+                }
 
                 // 创建解析器实例
                 const parser = new MetafileParser(bytes);
