@@ -19,6 +19,9 @@ class WmfDrawer extends BaseDrawer {
         console.log('Drawing WMF with header:', metafileData.header);
         console.log('Number of records:', metafileData.records.length);
 
+        // 保存header信息，用于字体大小计算
+        this.header = metafileData.header;
+
         // 初始化画布
         this.initCanvas(metafileData);
 
@@ -478,8 +481,15 @@ class WmfDrawer extends BaseDrawer {
     processCreatePenIndirect(data) {
         if (data.length < 10) return;
         const style = this.readWordFromData(data, 0);
-        const width = this.readWordFromData(data, 2);
+        const originalWidth = this.readWordFromData(data, 2);
+        let width = originalWidth;
         const color = this.readDwordFromData(data, 6);
+        
+        // 使用坐标转换器的缩放比例来计算线条像素宽度
+        const scale = this.coordinateTransformer.getScale();
+        width = Math.max(1, Math.round(width * scale.x));
+        console.log('Pen width conversion:', originalWidth, 'logical units ->', width, 'pixels (scale:', scale.x, ')');
+        
         console.log('CreatePenIndirect:', style, width, color);
         const penColor = this.rgbToHex(color);
         this.gdiObjectManager.createPen(style, width, penColor);
@@ -570,7 +580,14 @@ class WmfDrawer extends BaseDrawer {
             this.fillColor = obj.color;
         } else if (obj.type === 'font') {
             // 应用字体设置
-            const fontSize = Math.abs(obj.height) || 12;
+            let fontSize = Math.abs(obj.height) || 12;
+            
+            // 使用坐标转换器的缩放比例来计算字体像素大小
+            // 字体高度是逻辑单位，需要转换为像素单位
+            const scale = this.coordinateTransformer.getScale();
+            fontSize = Math.max(1, Math.round(fontSize * scale.y));
+            console.log('Font size conversion:', obj.height, 'logical units ->', fontSize, 'pixels (scale:', scale.y, ')');
+            
             const fontWeight = obj.weight >= 700 ? 'bold' : 'normal';
             const fontStyle = obj.italic ? 'italic' : 'normal';
             const fontFamily = obj.faceName || 'Arial';

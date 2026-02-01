@@ -1,7 +1,7 @@
 // 坐标转换模块
 class CoordinateTransformer {
     constructor() {
-        this.mapMode = 0; // 默认映射模式：MM_TEXT
+        this.mapMode = 1; // 默认映射模式：MM_TEXT (1)
         this.windowOrgX = 0; // 窗口原点X
         this.windowOrgY = 0; // 窗口原点Y
         this.windowExtX = 800; // 窗口范围X
@@ -12,13 +12,28 @@ class CoordinateTransformer {
         this.viewportExtY = 600; // 视口范围Y
     }
 
+    // 获取当前缩放比例
+    getScale() {
+        if (this.windowExtX !== 0 && this.windowExtY !== 0) {
+            return {
+                x: this.viewportExtX / this.windowExtX,
+                y: this.viewportExtY / this.windowExtY
+            };
+        }
+        return { x: 1, y: 1 };
+    }
+
     transform(x, y, canvasWidth, canvasHeight) {
+        // 统一使用viewport/window转换逻辑
+        // 公式: 设备坐标 = (逻辑坐标 - windowOrg) * (viewportExt / windowExt) + viewportOrg
         let cx = x - this.windowOrgX;
         let cy = y - this.windowOrgY;
 
         // 根据映射模式调整缩放
         switch (this.mapMode) {
             case 0x01: // MM_TEXT - 使用viewport/window转换
+            case 0x07: // MM_ISOTROPIC
+            case 0x08: // MM_ANISOTROPIC
                 if (this.windowExtX !== 0 && this.windowExtY !== 0) {
                     const scaleX = this.viewportExtX / this.windowExtX;
                     const scaleY = this.viewportExtY / this.windowExtY;
@@ -46,15 +61,6 @@ class CoordinateTransformer {
                 cx = cx * (1.0 / 1440.0);
                 cy = cy * (1.0 / 1440.0);
                 break;
-            case 0x07: // MM_ISOTROPIC
-            case 0x08: // MM_ANISOTROPIC
-                if (this.windowExtX !== 0 && this.windowExtY !== 0) {
-                    const scaleX = this.viewportExtX / this.windowExtX;
-                    const scaleY = this.viewportExtY / this.windowExtY;
-                    cx = cx * scaleX + this.viewportOrgX;
-                    cy = cy * scaleY + this.viewportOrgY;
-                }
-                break;
             default:
                 // 默认使用viewport/window转换
                 if (this.windowExtX !== 0 && this.windowExtY !== 0) {
@@ -62,12 +68,6 @@ class CoordinateTransformer {
                     const scaleY = this.viewportExtY / this.windowExtY;
                     cx = cx * scaleX + this.viewportOrgX;
                     cy = cy * scaleY + this.viewportOrgY;
-                } else {
-                    // 回退到Canvas缩放
-                    const scaleX = canvasWidth / this.windowExtX;
-                    const scaleY = canvasHeight / this.windowExtY;
-                    cx = cx * scaleX;
-                    cy = cy * scaleY;
                 }
         }
 

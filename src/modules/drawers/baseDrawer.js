@@ -16,32 +16,51 @@ class BaseDrawer {
 
     // 初始化画布
     initCanvas(metafileData) {
-        if (metafileData.header.bounds) {
+        let canvasWidth, canvasHeight;
+        
+        if (metafileData.header.placeableHeader) {
+            const ph = metafileData.header.placeableHeader;
+            // 计算逻辑单位范围
+            const logicalWidth = Math.abs(ph.right - ph.left);
+            const logicalHeight = Math.abs(ph.bottom - ph.top);
+            
+            // 计算画布像素尺寸 (限制最大尺寸)
+            canvasWidth = Math.max(Math.min(logicalWidth, 2000), 400);
+            canvasHeight = Math.max(Math.min(logicalHeight, 1500), 300);
+            
+            this.ctx.canvas.width = canvasWidth;
+            this.ctx.canvas.height = canvasHeight;
+            
+            // 设置窗口原点为placeableHeader的左上角
+            this.coordinateTransformer.setWindowOrg(ph.left, ph.top);
+            // 设置窗口范围为逻辑单位尺寸
+            this.coordinateTransformer.setWindowExt(logicalWidth, logicalHeight);
+            // 设置视口范围为画布像素尺寸
+            this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
+            
+            console.log('Canvas initialized with placeableHeader:', {
+                logicalWidth, logicalHeight,
+                canvasWidth, canvasHeight,
+                windowOrg: [ph.left, ph.top]
+            });
+        } else if (metafileData.header.bounds) {
             const width = metafileData.header.bounds.right - metafileData.header.bounds.left;
             const height = metafileData.header.bounds.bottom - metafileData.header.bounds.top;
-            const canvasWidth = Math.max(Math.min(width, 2000), 800);
-            const canvasHeight = Math.max(Math.min(height, 1500), 600);
+            canvasWidth = Math.max(Math.min(width, 2000), 800);
+            canvasHeight = Math.max(Math.min(height, 1500), 600);
             this.ctx.canvas.width = canvasWidth;
             this.ctx.canvas.height = canvasHeight;
-            // 更新 viewport extent 以匹配画布大小
-            this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
-        } else if (metafileData.header.placeableHeader) {
-            const ph = metafileData.header.placeableHeader;
-            const width = Math.abs(ph.right - ph.left);
-            const height = Math.abs(ph.bottom - ph.top);
-            const canvasWidth = Math.max(Math.min(width, 2000), 800);
-            const canvasHeight = Math.max(Math.min(height, 1500), 600);
-            this.ctx.canvas.width = canvasWidth;
-            this.ctx.canvas.height = canvasHeight;
-            this.coordinateTransformer.setWindowOrg(ph.left, ph.top);
-            // 更新 viewport extent 以匹配画布大小
+            this.coordinateTransformer.setWindowExt(width, height);
             this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
         } else {
-            this.ctx.canvas.width = 800;
-            this.ctx.canvas.height = 600;
-            this.coordinateTransformer.setViewportExt(800, 600);
+            canvasWidth = 800;
+            canvasHeight = 600;
+            this.ctx.canvas.width = canvasWidth;
+            this.ctx.canvas.height = canvasHeight;
+            this.coordinateTransformer.setWindowExt(canvasWidth, canvasHeight);
+            this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
         }
-        console.log('Canvas size set to:', this.ctx.canvas.width, 'x', this.ctx.canvas.height);
+        console.log('Canvas size set to:', canvasWidth, 'x', canvasHeight);
 
         // 清空Canvas
         this.ctx.fillStyle = '#ffffff';
