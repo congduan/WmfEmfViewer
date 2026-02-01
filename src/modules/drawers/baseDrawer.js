@@ -20,28 +20,61 @@ class BaseDrawer {
         
         if (metafileData.header.placeableHeader) {
             const ph = metafileData.header.placeableHeader;
-            // 计算逻辑单位范围
+            // 根据placeableHeader计算画布像素尺寸
+            // inch字段表示每英寸的逻辑单位数
+            const inch = ph.inch || 1000;
             const logicalWidth = Math.abs(ph.right - ph.left);
             const logicalHeight = Math.abs(ph.bottom - ph.top);
             
-            // 计算画布像素尺寸 (限制最大尺寸)
-            canvasWidth = Math.max(Math.min(logicalWidth, 2000), 400);
-            canvasHeight = Math.max(Math.min(logicalHeight, 1500), 300);
+            // 计算物理尺寸（英寸）
+            const widthInInch = logicalWidth / inch;
+            const heightInInch = logicalHeight / inch;
+            
+            // 转换为像素（使用96 DPI）
+            let pixelWidth = widthInInch * 96;
+            let pixelHeight = heightInInch * 96;
+            
+            // 限制最大尺寸，同时保持宽高比
+            // 使用统一的缩放因子，避免宽高比被扭曲
+            const maxWidth = 2000;
+            const maxHeight = 1500;
+            const minWidth = 400;
+            const minHeight = 300;
+            
+            // 首先应用最大尺寸限制（保持宽高比）
+            const scaleToFit = Math.min(
+                maxWidth / pixelWidth,
+                maxHeight / pixelHeight,
+                1
+            );
+            pixelWidth *= scaleToFit;
+            pixelHeight *= scaleToFit;
+            
+            // 然后应用最小尺寸限制（保持宽高比）
+            const scaleToMin = Math.max(
+                minWidth / pixelWidth,
+                minHeight / pixelHeight,
+                1
+            );
+            pixelWidth *= scaleToMin;
+            pixelHeight *= scaleToMin;
+            
+            canvasWidth = Math.round(pixelWidth);
+            canvasHeight = Math.round(pixelHeight);
             
             this.ctx.canvas.width = canvasWidth;
             this.ctx.canvas.height = canvasHeight;
             
-            // 设置窗口原点为placeableHeader的左上角
-            this.coordinateTransformer.setWindowOrg(ph.left, ph.top);
-            // 设置窗口范围为逻辑单位尺寸
-            this.coordinateTransformer.setWindowExt(logicalWidth, logicalHeight);
-            // 设置视口范围为画布像素尺寸
+            // 不预设WindowOrg/WindowExt，让WMF记录中的SetWindowExt/SetWindowOrg来设置
+            // 只设置ViewportExt为画布像素尺寸
             this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
             
             console.log('Canvas initialized with placeableHeader:', {
                 logicalWidth, logicalHeight,
+                widthInInch: widthInInch.toFixed(2),
+                heightInInch: heightInInch.toFixed(2),
                 canvasWidth, canvasHeight,
-                windowOrg: [ph.left, ph.top]
+                inch
             });
         } else if (metafileData.header.bounds) {
             const width = metafileData.header.bounds.right - metafileData.header.bounds.left;

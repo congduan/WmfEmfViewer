@@ -660,16 +660,10 @@ class WmfDrawer extends BaseDrawer {
             this.ctx.stroke();
             console.log('  LineTo: drawing line from MoveTo (', this.currentPosX, ',', this.currentPosY, ') to (', transformed.x, ',', transformed.y, ')');
         } 
-        // 如果没有前置MoveTo，使用同一Y坐标的起点(x=0)
-        // 这通常用于绘制水平线（如分数线）
+        // 如果没有前置MoveTo，不绘制线条
+        // 根据WMF规范，LineTo应该从当前位置绘制，如果没有当前位置则不应绘制
         else {
-            const startTransformed = this.coordinateTransformer.transform(0, y, this.ctx.canvas.width, this.ctx.canvas.height);
-            
-            this.ctx.beginPath();
-            this.ctx.moveTo(startTransformed.x, startTransformed.y);
-            this.ctx.lineTo(transformed.x, transformed.y);
-            this.ctx.stroke();
-            console.log('  LineTo: drawing horizontal line from (', startTransformed.x, ',', startTransformed.y, ') to (', transformed.x, ',', transformed.y, ')');
+            console.log('  LineTo: no preceding MoveTo, skipping line drawing');
         }
         
         // 更新当前位置
@@ -710,6 +704,10 @@ class WmfDrawer extends BaseDrawer {
             const x = this.readWordFromData(data, 2 + i * 4);
             const y = this.readWordFromData(data, 4 + i * 4);
             const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            
+            if (i < 3 || i === numPoints - 1) {
+                console.log(`  Point ${i}: logical (${x}, ${y}) -> canvas (${transformed.x.toFixed(2)}, ${transformed.y.toFixed(2)})`);
+            }
             
             if (i === 0) {
                 this.ctx.moveTo(transformed.x, transformed.y);
@@ -771,6 +769,10 @@ class WmfDrawer extends BaseDrawer {
                 const x = this.readWordFromData(data, offset);
                 const y = this.readWordFromData(data, offset + 2);
                 const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+                
+                if (i === 0 && j < 3) {
+                    console.log(`    Point ${j}: logical (${x}, ${y}) -> canvas (${transformed.x.toFixed(2)}, ${transformed.y.toFixed(2)})`);
+                }
                 
                 if (j === 0) {
                     this.ctx.moveTo(transformed.x, transformed.y);
