@@ -887,27 +887,59 @@ class EmfDrawer {
         const destWidth = this.readLongFromData(data, 24);
         const destHeight = this.readLongFromData(data, 28);
         
-        console.log('EMF BitBlt: dest=', destX, destY, 'size=', destWidth, destHeight);
+        // 使用 bounds 来计算实际宽高（如果 cx/cy 为0）
+        const actualWidth = destWidth > 0 ? destWidth : (boundsRight - boundsLeft);
+        const actualHeight = destHeight > 0 ? destHeight : (boundsBottom - boundsTop);
         
-        // 绘制一个占位符矩形表示图像位置
+        console.log('EMF BitBlt: dest=', destX, destY, 'size=', actualWidth, 'x', actualHeight);
+        
+        // 尝试渲染嵌入的位图数据
+        try {
+            const offBmiSrc = this.readDwordFromData(data, 76);
+            const cbBmiSrc = this.readDwordFromData(data, 80);
+            const offBitsSrc = this.readDwordFromData(data, 84);
+            const cbBitsSrc = this.readDwordFromData(data, 88);
+            
+            // 偏移量是相对于整个记录的，需要减去8字节（type+size）
+            const bmiOffset = offBmiSrc - 8;
+            const bitsOffset = offBitsSrc - 8;
+            
+            if (cbBitsSrc > 0 && bitsOffset >= 0 && bitsOffset + cbBitsSrc <= data.length && cbBmiSrc >= 40) {
+                // 解析 BITMAPINFOHEADER
+                const biWidth = this.readLongFromData(data, bmiOffset + 4);
+                const biHeight = this.readLongFromData(data, bmiOffset + 8);
+                const biBitCount = data[bmiOffset + 14] | (data[bmiOffset + 15] << 8);
+                const biCompression = this.readDwordFromData(data, bmiOffset + 16);
+                
+                console.log('  Bitmap:', biWidth, 'x', biHeight, 'bits:', biBitCount, 'compression:', biCompression);
+                
+                // 如果是24位或32位未压缩位图，尝试渲染
+                if (biCompression === 0 && (biBitCount === 24 || biBitCount === 32)) {
+                    this.renderBitmap(destX, destY, actualWidth, actualHeight, 
+                                     biWidth, biHeight, biBitCount, data, bitsOffset, cbBitsSrc);
+                    return;
+                }
+            }
+        } catch (error) {
+            console.log('  Failed to render bitmap:', error.message);
+        }
+        
+        // 降级：绘制一个占位符矩形表示图像位置
         const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed2 = this.coordinateTransformer.transform(destX + actualWidth, destY + actualHeight, this.ctx.canvas.width, this.ctx.canvas.height);
         
         const w = Math.abs(transformed2.x - transformed1.x);
         const h = Math.abs(transformed2.y - transformed1.y);
         
         if (w > 0 && h > 0) {
-            // 保存当前样式
             const savedFillStyle = this.ctx.fillStyle;
             const savedStrokeStyle = this.ctx.strokeStyle;
             
-            // 绘制浅灰色矩形表示图像
             this.ctx.fillStyle = '#f0f0f0';
             this.ctx.strokeStyle = '#cccccc';
             this.ctx.fillRect(transformed1.x, transformed1.y, w, h);
             this.ctx.strokeRect(transformed1.x, transformed1.y, w, h);
             
-            // 恢复样式
             this.ctx.fillStyle = savedFillStyle;
             this.ctx.strokeStyle = savedStrokeStyle;
         }
@@ -915,7 +947,7 @@ class EmfDrawer {
 
     processEmfStretchBlt(data) {
         if (data.length < 100) return;
-        // EMR_STRETCHBLT 结构 (MS-EMF 2.3.1.2)
+        // EMR_STRETCHBLT 结构 (MS-EMF 2.3.1.6)
         // Bounds (16 bytes, offset 0-15): 目标矩形边界
         // xDest (4 bytes, offset 16): 目标X坐标
         // yDest (4 bytes, offset 20): 目标Y坐标
@@ -932,27 +964,59 @@ class EmfDrawer {
         const destWidth = this.readLongFromData(data, 24);
         const destHeight = this.readLongFromData(data, 28);
         
-        console.log('EMF StretchBlt: dest=', destX, destY, 'size=', destWidth, destHeight);
+        // 使用 bounds 来计算实际宽高（如果 cx/cy 为0）
+        const actualWidth = destWidth > 0 ? destWidth : (boundsRight - boundsLeft);
+        const actualHeight = destHeight > 0 ? destHeight : (boundsBottom - boundsTop);
         
-        // 绘制一个占位符矩形表示图像位置
+        console.log('EMF StretchBlt: dest=', destX, destY, 'size=', actualWidth, 'x', actualHeight);
+        
+        // 尝试渲染嵌入的位图数据
+        try {
+            const offBmiSrc = this.readDwordFromData(data, 80);
+            const cbBmiSrc = this.readDwordFromData(data, 84);
+            const offBitsSrc = this.readDwordFromData(data, 88);
+            const cbBitsSrc = this.readDwordFromData(data, 92);
+            
+            // 偏移量是相对于整个记录的，需要减去8字节（type+size）
+            const bmiOffset = offBmiSrc - 8;
+            const bitsOffset = offBitsSrc - 8;
+            
+            if (cbBitsSrc > 0 && bitsOffset >= 0 && bitsOffset + cbBitsSrc <= data.length && cbBmiSrc >= 40) {
+                // 解析 BITMAPINFOHEADER
+                const biWidth = this.readLongFromData(data, bmiOffset + 4);
+                const biHeight = this.readLongFromData(data, bmiOffset + 8);
+                const biBitCount = data[bmiOffset + 14] | (data[bmiOffset + 15] << 8);
+                const biCompression = this.readDwordFromData(data, bmiOffset + 16);
+                
+                console.log('  Bitmap:', biWidth, 'x', biHeight, 'bits:', biBitCount, 'compression:', biCompression);
+                
+                // 如果是24位或32位未压缩位图，尝试渲染
+                if (biCompression === 0 && (biBitCount === 24 || biBitCount === 32)) {
+                    this.renderBitmap(destX, destY, actualWidth, actualHeight, 
+                                     biWidth, biHeight, biBitCount, data, bitsOffset, cbBitsSrc);
+                    return;
+                }
+            }
+        } catch (error) {
+            console.log('  Failed to render bitmap:', error.message);
+        }
+        
+        // 降级：绘制一个占位符矩形表示图像位置
         const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed2 = this.coordinateTransformer.transform(destX + actualWidth, destY + actualHeight, this.ctx.canvas.width, this.ctx.canvas.height);
         
         const w = Math.abs(transformed2.x - transformed1.x);
         const h = Math.abs(transformed2.y - transformed1.y);
         
         if (w > 0 && h > 0) {
-            // 保存当前样式
             const savedFillStyle = this.ctx.fillStyle;
             const savedStrokeStyle = this.ctx.strokeStyle;
             
-            // 绘制浅灰色矩形表示图像
             this.ctx.fillStyle = '#f0f0f0';
             this.ctx.strokeStyle = '#cccccc';
             this.ctx.fillRect(transformed1.x, transformed1.y, w, h);
             this.ctx.strokeRect(transformed1.x, transformed1.y, w, h);
             
-            // 恢复样式
             this.ctx.fillStyle = savedFillStyle;
             this.ctx.strokeStyle = savedStrokeStyle;
         }
@@ -1367,6 +1431,70 @@ class EmfDrawer {
         if (this.pathState === 'active' || this.pathState === 'completed') {
             this.ctx.stroke();
             this.pathState = 'idle';
+        }
+    }
+
+    // 渲染DIB位图数据到Canvas
+    renderBitmap(destX, destY, destWidth, destHeight, biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize) {
+        try {
+            // 创建临时canvas来处理位图
+            const bytesPerPixel = biBitCount / 8;
+            const rowSize = Math.ceil(biWidth * bytesPerPixel / 4) * 4; // 4字节对齐
+            const absHeight = Math.abs(biHeight);
+            const isBottomUp = biHeight > 0;
+            
+            // 创建ImageData
+            const imageData = this.ctx.createImageData(biWidth, absHeight);
+            const pixels = imageData.data;
+            
+            // 读取位图数据
+            for (let y = 0; y < absHeight; y++) {
+                const srcY = isBottomUp ? (absHeight - 1 - y) : y;
+                const srcRowOffset = bitsOffset + srcY * rowSize;
+                
+                for (let x = 0; x < biWidth; x++) {
+                    const srcOffset = srcRowOffset + x * bytesPerPixel;
+                    const dstOffset = (y * biWidth + x) * 4;
+                    
+                    if (srcOffset + bytesPerPixel <= bitsOffset + bitsSize) {
+                        // DIB格式是BGR(A)，需要转换为RGBA
+                        pixels[dstOffset + 2] = data[srcOffset];     // R
+                        pixels[dstOffset + 1] = data[srcOffset + 1]; // G
+                        pixels[dstOffset] = data[srcOffset + 2];     // B
+                        pixels[dstOffset + 3] = biBitCount === 32 ? data[srcOffset + 3] : 255; // A
+                    }
+                }
+            }
+            
+            // 创建临时canvas
+            const tempCanvas = typeof document !== 'undefined' 
+                ? document.createElement('canvas')
+                : this.ctx.canvas.constructor !== undefined 
+                    ? new this.ctx.canvas.constructor(biWidth, absHeight)
+                    : null;
+            
+            if (tempCanvas) {
+                tempCanvas.width = biWidth;
+                tempCanvas.height = absHeight;
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCtx.putImageData(imageData, 0, 0);
+                
+                // 转换坐标并绘制到目标canvas
+                const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
+                const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight, this.ctx.canvas.width, this.ctx.canvas.height);
+                
+                const w = Math.abs(transformed2.x - transformed1.x);
+                const h = Math.abs(transformed2.y - transformed1.y);
+                
+                console.log('  Rendering bitmap to:', transformed1.x, transformed1.y, w, h);
+                this.ctx.drawImage(tempCanvas, transformed1.x, transformed1.y, w, h);
+            } else {
+                // 如果无法创建临时canvas（Node环境），直接使用putImageData
+                const transformed = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
+                this.ctx.putImageData(imageData, transformed.x, transformed.y);
+            }
+        } catch (error) {
+            console.error('Error rendering bitmap:', error.message);
         }
     }
 }
