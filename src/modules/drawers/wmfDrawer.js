@@ -9,6 +9,8 @@ class WmfDrawer extends BaseDrawer {
         this.emfPlusRecordCount = 0;
         this.emfPlusRecords = []; // 存储解析出的 EMF+ 记录
         this.emfPlusDrawer = null; // EMF+ 绘制器
+        this.currentPosX = 0; // 当前画笔位置 X
+        this.currentPosY = 0; // 当前画笔位置 Y
     }
 
     draw(metafileData) {
@@ -575,6 +577,10 @@ class WmfDrawer extends BaseDrawer {
         const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
         console.log('MoveTo:', x, y, '->', transformed.x, transformed.y);
         
+        // 更新当前位置
+        this.currentPosX = transformed.x;
+        this.currentPosY = transformed.y;
+        
         // 如果有未完成的路径,先绘制它
         if (this.currentPath.length > 0) {
             this.ctx.stroke();
@@ -593,6 +599,10 @@ class WmfDrawer extends BaseDrawer {
         const x = this.readWordFromData(data, 2);
         const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
         console.log('LineTo:', x, y, '->', transformed.x, transformed.y);
+        
+        // 更新当前位置
+        this.currentPosX = transformed.x;
+        this.currentPosY = transformed.y;
         
         // 如果还没有路径,先 beginPath 并 moveTo 当前点
         if (this.currentPath.length === 0) {
@@ -726,8 +736,8 @@ class WmfDrawer extends BaseDrawer {
         if (data.length < 8) return;
         
         // META_EXTTEXTOUT 结构 (MS-WMF 2.3.5.7):
-        // Y (2 bytes) - Y 坐标
-        // X (2 bytes) - X 坐标
+        // Y (2 bytes) - Y 坐标或偏移
+        // X (2 bytes) - X 坐标或偏移
         // StringLength (2 bytes) - 字符串长度
         // fwOpts (2 bytes) - 选项标志
         // [Optional] Rectangle (8 bytes) - 如果 fwOpts 包含 ETO_OPAQUE(0x0002) 或 ETO_CLIPPED(0x0004)
@@ -754,12 +764,24 @@ class WmfDrawer extends BaseDrawer {
         if (data.length < offset + stringLength) return;
         const text = this.readStringFromData(data, offset, stringLength);
         
-        // 转换坐标并绘制
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-        console.log('ExtTextOut:', text, 'at', x, y, '->', transformed.x, transformed.y, 'options:', fwOpts);
+        // ExtTextOut 的坐标可能是绝对坐标，也可能使用当前位置
+        // 如果坐标为 (0, 0)，使用当前画笔位置
+        let finalX, finalY;
+        if (x === 0 && y === 0 && this.currentPosX !== undefined) {
+            // 使用当前位置
+            finalX = this.currentPosX;
+            finalY = this.currentPosY;
+            console.log('ExtTextOut:', text, 'at CP', '(using current position', this.currentPosX, this.currentPosY + ')', 'options:', fwOpts);
+        } else {
+            // 使用指定坐标
+            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            finalX = transformed.x;
+            finalY = transformed.y;
+            console.log('ExtTextOut:', text, 'at', x, y, '->', finalX, finalY, 'options:', fwOpts);
+        }
         
         // 绘制文本
-        this.ctx.fillText(text, transformed.x, transformed.y);
+        this.ctx.fillText(text, finalX, finalY);
     }
 
     processSaveDC(data) {
