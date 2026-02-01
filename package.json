@@ -1,7 +1,7 @@
 {
   "name": "wmf-viewer",
-  "displayName": "WMF Viewer",
-  "description": "Preview WMF images in VSCode",
+  "displayName": "WMF/EMF Viewer",
+  "description": "Preview WMF and EMF images in VSCode",
   "version": "0.0.1",
   "repository": {
     "type": "git",
@@ -31,24 +31,27 @@
     "commands": [
       {
         "command": "wmfViewer.preview",
-        "title": "Preview WMF Image"
+        "title": "Preview WMF/EMF Image"
       }
     ],
     "menus": {
       "explorer/context": [
         {
           "command": "wmfViewer.preview",
-          "when": "resourceExtname == .wmf"
+          "when": "resourceExtname == .wmf || resourceExtname == .emf"
         }
       ]
     },
     "customEditors": [
       {
         "viewType": "wmfViewer.editor",
-        "displayName": "WMF Viewer",
+        "displayName": "WMF/EMF Viewer",
         "selector": [
           {
             "filenamePattern": "*.wmf"
+          },
+          {
+            "filenamePattern": "*.emf"
           }
         ]
       }
