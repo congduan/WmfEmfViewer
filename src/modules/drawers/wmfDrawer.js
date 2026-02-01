@@ -11,6 +11,8 @@ class WmfDrawer extends BaseDrawer {
         this.emfPlusDrawer = null; // EMF+ 绘制器
         this.currentPosX = 0; // 当前画笔位置 X
         this.currentPosY = 0; // 当前画笔位置 Y
+        this.hasMoveTo = false; // 标记是否执行过MoveTo
+        this.lastCommandWasMoveTo = false; // 标记上一条命令是否是MoveTo
     }
 
     draw(metafileData) {
@@ -91,8 +93,30 @@ class WmfDrawer extends BaseDrawer {
         console.log('使用标准 WMF 渲染');
         for (let i = 0; i < metafileData.records.length; i++) {
             const record = metafileData.records[i];
+            
+            // 检查接下来的几条记录，看是否有文本输出（用于LineTo定位判断）
+            let isPositioningForText = false;
+            if (record.functionId === 0x0214) { // META_LINETO
+                // 向前查找最多5条记录
+                for (let j = i + 1; j < Math.min(i + 6, metafileData.records.length); j++) {
+                    const futureRecord = metafileData.records[j];
+                    if (futureRecord.functionId === 0x0A32 || futureRecord.functionId === 0x0521) {
+                        // EXTTEXTOUT or TEXTOUT
+                        isPositioningForText = true;
+                        break;
+                    }
+                    // 如果遇到另一个绘图命令，停止查找
+                    if (futureRecord.functionId === 0x0214 || // LINETO
+                        futureRecord.functionId === 0x0213 || // MOVETO
+                        futureRecord.functionId === 0x0325 || // POLYLINE
+                        futureRecord.functionId === 0x041B) { // RECTANGLE
+                        break;
+                    }
+                }
+            }
+            
             console.log('Processing WMF record', i, ':', record.functionId, '(0x' + record.functionId.toString(16).padStart(4, '0') + ')');
-            this.processRecord(record);
+            this.processRecord(record, isPositioningForText);
         }
         
         // 处理剩余的路径
@@ -181,7 +205,7 @@ class WmfDrawer extends BaseDrawer {
         }
     }
     
-    processRecord(record) {
+    processRecord(record, isPositioningForText) {
         // 根据MS-WMF规范2.3.1的函数ID处理不同的WMF命令
         // 函数ID格式: 高字节为类别，低字节为功能
         switch (record.functionId) {
@@ -263,7 +287,7 @@ class WmfDrawer extends BaseDrawer {
                 this.processMoveTo(record.data);
                 break;
             case 0x0214: // META_LINETO
-                this.processLineTo(record.data);
+                this.processLineTo(record.data, isPositioningForText);
                 break;
             case 0x041B: // META_RECTANGLE
                 this.processRectangle(record.data);
@@ -577,42 +601,67 @@ class WmfDrawer extends BaseDrawer {
         const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
         console.log('MoveTo:', x, y, '->', transformed.x, transformed.y);
         
+        // 根据 MS-WMF 2.3.5.17 META_MOVETO:
+        // 设置输出设备上下文中的当前位置，不绘制任何内容
+        
         // 更新当前位置
         this.currentPosX = transformed.x;
         this.currentPosY = transformed.y;
+        this.hasMoveTo = true; // 标记已执行MoveTo
+        this.lastCommandWasMoveTo = true; // 标记上一条命令是MoveTo
         
-        // 如果有未完成的路径,先绘制它
-        if (this.currentPath.length > 0) {
-            this.ctx.stroke();
-            this.currentPath = [];
-        }
-        
-        // 开始新路径
-        this.ctx.beginPath();
-        this.ctx.moveTo(transformed.x, transformed.y);
-        this.currentPath.push({x: transformed.x, y: transformed.y, type: 'moveTo'});
+        // MoveTo 不绘制，只是设置位置
+        // 不需要 beginPath 或 moveTo，等到下一个绘图命令时再处理
     }
 
-    processLineTo(data) {
+    processLineTo(data, isPositioningForText = false) {
         if (data.length < 4) return;
         const y = this.readWordFromData(data, 0);
         const x = this.readWordFromData(data, 2);
         const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-        console.log('LineTo:', x, y, '->', transformed.x, transformed.y);
+        console.log('LineTo:', x, y, '->', transformed.x, transformed.y, isPositioningForText ? '(positioning for text)' : '');
+        
+        // 如果LineTo是为了后续文本定位，只更新当前位置，不绘制
+        if (isPositioningForText) {
+            this.currentPosX = transformed.x;
+            this.currentPosY = transformed.y;
+            this.lastCommandWasMoveTo = false;
+            console.log('  LineTo: only updating position for text, no drawing');
+            return;
+        }
+        
+        // 根据 MS-WMF 2.3.5.12 META_LINETO:
+        // 从当前位置到指定点绘制一条线，并将当前位置更新为该点
+        // 使用当前选中的画笔绘制
+        
+        // 只有在前一条命令是MoveTo时才从当前位置绘制
+        // 这样避免从文本位置等不相关位置绘制斜线
+        if (this.lastCommandWasMoveTo && this.currentPosX !== undefined && this.currentPosY !== undefined) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(this.currentPosX, this.currentPosY);
+            this.ctx.lineTo(transformed.x, transformed.y);
+            this.ctx.stroke();
+            console.log('  LineTo: drawing line from MoveTo (', this.currentPosX, ',', this.currentPosY, ') to (', transformed.x, ',', transformed.y, ')');
+        } 
+        // 如果没有前置MoveTo，使用同一Y坐标的起点(x=0)
+        // 这通常用于绘制水平线（如分数线）
+        else {
+            const startTransformed = this.coordinateTransformer.transform(0, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            
+            this.ctx.beginPath();
+            this.ctx.moveTo(startTransformed.x, startTransformed.y);
+            this.ctx.lineTo(transformed.x, transformed.y);
+            this.ctx.stroke();
+            console.log('  LineTo: drawing horizontal line from (', startTransformed.x, ',', startTransformed.y, ') to (', transformed.x, ',', transformed.y, ')');
+        }
         
         // 更新当前位置
         this.currentPosX = transformed.x;
         this.currentPosY = transformed.y;
+        this.lastCommandWasMoveTo = false; // 重置标记
         
-        // 如果还没有路径,先 beginPath 并 moveTo 当前点
-        if (this.currentPath.length === 0) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(transformed.x, transformed.y);
-        }
-        
-        this.ctx.lineTo(transformed.x, transformed.y);
-        this.currentPath.push({x: transformed.x, y: transformed.y, type: 'lineTo'});
-        this.ctx.stroke();
+        // 清空路径
+        this.currentPath = [];
     }
 
     processRectangle(data) {
@@ -782,6 +831,9 @@ class WmfDrawer extends BaseDrawer {
         
         // 绘制文本
         this.ctx.fillText(text, finalX, finalY);
+        
+        // 文本绘制后重置MoveTo标记，避免后续LineTo从文本位置绘制
+        this.lastCommandWasMoveTo = false;
     }
 
     processSaveDC(data) {
