@@ -65,9 +65,7 @@ class CoordinateTransformer {
                 }
         }
 
-        // 调整坐标系（WMF的Y轴向下，Canvas的Y轴向上）
-        cy = canvasHeight - cy;
-
+        // WMF/EMF坐标系与Canvas一致（Y轴向下），无需翻转
         return { x: cx, y: cy };
     }
 

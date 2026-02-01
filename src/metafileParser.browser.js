@@ -144,9 +144,7 @@ class CoordinateTransformer {
                 }
         }
 
-        // 调整坐标系（WMF的Y轴向下，Canvas的Y轴向上）
-        cy = canvasHeight - cy;
-
+        // WMF/EMF坐标系与Canvas一致（Y轴向下），无需翻转
         return { x: cx, y: cy };
     }
 
@@ -180,47 +178,44 @@ class CoordinateTransformer {
 // GDI 对象管理模块
 class GdiObjectManager {
     constructor() {
-        this.gdiObjects = new Map(); // GDI对象表
-        this.objectHandles = []; // 对象句柄列表
-        this.nextHandle = 0; // 下一个可用的句柄
+        // WMF对象句柄是0基索引，使用对象表来管理
+        this.objectTable = [];
     }
 
     createPen(style, width, color) {
-        this.nextHandle++;
-        this.objectHandles.push(this.nextHandle);
-
-        const penObj = {
+        return this.createObject({
             type: 'pen',
             style,
             width,
             color
-        };
-        this.gdiObjects.set(this.nextHandle, penObj);
-        return this.nextHandle;
+        });
     }
 
     createBrush(style, color) {
-        this.nextHandle++;
-        this.objectHandles.push(this.nextHandle);
-
-        const brushObj = {
+        return this.createObject({
             type: 'brush',
             style,
             color
-        };
-        this.gdiObjects.set(this.nextHandle, brushObj);
-        return this.nextHandle;
+        });
+    }
+
+    createObject(obj) {
+        const index = this.objectTable.findIndex(item => item == null);
+        if (index === -1) {
+            this.objectTable.push(obj);
+            return this.objectTable.length - 1;
+        }
+        this.objectTable[index] = obj;
+        return index;
     }
 
     selectObject(handle) {
-        return this.gdiObjects.get(handle);
+        return this.objectTable[handle];
     }
 
     deleteObject(handle) {
-        this.gdiObjects.delete(handle);
-        const index = this.objectHandles.indexOf(handle);
-        if (index > -1) {
-            this.objectHandles.splice(index, 1);
+        if (handle >= 0 && handle < this.objectTable.length) {
+            this.objectTable[handle] = null;
         }
     }
 
@@ -240,9 +235,7 @@ class GdiObjectManager {
     }
 
     clear() {
-        this.gdiObjects.clear();
-        this.objectHandles = [];
-        this.nextHandle = 0;
+        this.objectTable = [];
     }
 }
 
