@@ -380,43 +380,36 @@ class WmfDrawer extends BaseDrawer {
         let out = '';
         for (let i = 0; i < text.length; i++) {
             const code = text.charCodeAt(i);
-            // Symbol字体编码映射表
-            const symbolMap = {
-                // 希腊字母
-                0x0061: 'α', 0x0062: 'β', 0x0063: 'χ', 0x0064: 'δ', 0x0065: 'ε',
-                0x0066: 'φ', 0x0067: 'γ', 0x0068: 'η', 0x0069: 'ι', 0x006A: 'φ',
-                0x006B: 'κ', 0x006C: 'λ', 0x006D: 'μ', 0x006E: 'ν', 0x006F: 'ω',
-                0x0070: 'π', 0x0071: 'θ', 0x0072: 'ρ', 0x0073: 'σ', 0x0074: 'τ',
-                0x0075: 'υ', 0x0076: 'β', 0x0077: 'ψ', 0x0078: 'ξ', 0x0079: 'γ', 0x007A: 'ζ',
-                0x0041: 'Α', 0x0042: 'Β', 0x0043: 'Χ', 0x0044: 'Δ', 0x0045: 'Ε',
-                0x0046: 'Φ', 0x0047: 'Γ', 0x0048: 'Η', 0x0049: 'Ι', 0x004A: 'Φ',
-                0x004B: 'Κ', 0x004C: 'Λ', 0x004D: 'Μ', 0x004E: 'Ν', 0x004F: 'Ω',
-                0x0050: 'Π', 0x0051: 'Θ', 0x0052: 'Ρ', 0x0053: 'Σ', 0x0054: 'Τ',
-                0x0055: 'Υ', 0x0056: 'Β', 0x0057: 'Ψ', 0x0058: 'Ξ', 0x0059: 'Γ', 0x005A: 'Ζ',
-                
-                // 数学符号
-                0x002B: '＋', 0x002D: '－', 0x002A: '×', 0x002F: '÷', 0x003D: '=',
-                0x003C: '<', 0x003E: '>', 0x00AE: '≤', 0x00AF: '≥', 0x00AA: '≠',
-                0x00BB: '≈', 0x00B1: '±', 0x00B0: '°', 0x00B2: '²', 0x00B3: '³',
-                0x00B4: '¹', 0x00B5: 'µ', 0x00B6: '¶', 0x00B7: '·', 0x00B8: '¸',
-                
-                // 几何符号
-                0x00D8: '○', 0x00D9: '□', 0x00DA: '△', 0x00DB: '▱', 0x00DC: '▭',
-                0x00DD: '▮', 0x00DE: '▯', 0x00DF: '▰',
-                
-                // 箭头符号
-                0x00D0: '↑', 0x00D1: '↓', 0x00D2: '←', 0x00D3: '→', 0x00D4: '↔',
-                0x00D5: '↕', 0x00D6: '↖', 0x00D7: '↗',
-                
-                // 其他符号
-                0x0021: '!', 0x0022: '"', 0x0023: '#', 0x0024: '$', 0x0025: '%',
-                0x0026: '&', 0x0027: "'", 0x0028: '(', 0x0029: ')', 0x002C: ',',
-                0x002E: '.', 0x003A: ':', 0x003B: ';', 0x003F: '?', 0x0040: '@',
-                0x005B: '[', 0x005C: '\\', 0x005D: ']', 0x005E: '^', 0x005F: '_',
-                0x0060: '`', 0x007B: '{', 0x007C: '|', 0x007D: '}', 0x007E: '~'
+            const greekUpper = {
+                0x41: 'Α', 0x42: 'Β', 0x43: 'Χ', 0x44: 'Δ', 0x45: 'Ε', 0x46: 'Φ', 0x47: 'Γ',
+                0x48: 'Η', 0x49: 'Ι', 0x4A: 'ϑ', 0x4B: 'Κ', 0x4C: 'Λ', 0x4D: 'Μ',
+                0x4E: 'Ν', 0x4F: 'Ο', 0x50: 'Π', 0x51: 'Θ', 0x52: 'Ρ', 0x53: 'Σ',
+                0x54: 'Τ', 0x55: 'Υ', 0x56: 'ϒ', 0x57: 'Ω', 0x58: 'Ξ', 0x59: 'Ψ',
+                0x5A: 'Ζ'
             };
-            
-            if (symbolMap[code]) {
+
+            const greekLower = {
+                0x61: 'α', 0x62: 'β', 0x63: 'χ', 0x64: 'δ', 0x65: 'ε', 0x66: 'φ', 0x67: 'γ',
+                0x68: 'η', 0x69: 'ι', 0x6A: 'ϕ', 0x6B: 'κ', 0x6C: 'λ', 0x6D: 'μ',
+                0x6E: 'ν', 0x6F: 'ο', 0x70: 'π', 0x71: 'θ', 0x72: 'ρ', 0x73: 'σ',
+                0x74: 'τ', 0x75: 'υ', 0x76: 'ϖ', 0x77: 'ω', 0x78: 'ξ', 0x79: 'ψ',
+                0x7A: 'ζ'
+            };
+
+            const symbolMap = {
+                0x00B0: '°', 0x00B1: '±', 0x00B2: '≤', 0x00B3: '≥', 0x00B4: '×',
+                0x00B5: 'µ', 0x00B6: '∂', 0x00B7: '·', 0x00B8: '÷', 0x00B9: '≠',
+                0x00BA: '≡', 0x00BB: '≈', 0x00BD: '∞', 0x00BE: '∠', 0x00BF: '∇',
+                0x00D0: '√', 0x00D1: '∫', 0x00D2: '∮', 0x00D3: '∑', 0x00D4: '∏',
+                0x00D5: '∼', 0x00D6: '≅', 0x00D8: '∩', 0x00D9: '∪', 0x00DA: '⊂',
+                0x00DB: '⊃', 0x00DC: '⊆', 0x00DD: '⊇', 0x00DE: '⊕', 0x00DF: '⊗'
+            };
+
+            if (greekUpper[code]) {
+                out += greekUpper[code];
+            } else if (greekLower[code]) {
+                out += greekLower[code];
+            } else if (symbolMap[code]) {
                 out += symbolMap[code];
             } else {
                 out += text[i];
@@ -937,9 +930,23 @@ class WmfDrawer extends BaseDrawer {
         let dxList = null;
         const dxStart = offset + stringLength;
         if (data.length >= dxStart + stringLength * 2) {
-            dxList = [];
+            const dxWords = [];
+            const dxSigned = [];
             for (let i = 0; i < stringLength; i++) {
-                dxList.push(this.readShortFromData(data, dxStart + i * 2));
+                const word = this.readWordFromData(data, dxStart + i * 2);
+                dxWords.push(word);
+                dxSigned.push(this.readShortFromData(data, dxStart + i * 2));
+            }
+
+            const hasNegative = dxSigned.some(v => v < 0);
+            const allAligned = dxWords.every(w => (w & 0xFF) === 0);
+            const maxAbs = Math.max(...dxSigned.map(v => Math.abs(v)));
+
+            if (hasNegative && allAligned && maxAbs > 1024) {
+                // 某些文件使用 8.8 固定小数且以无符号存储
+                dxList = dxWords.map(w => w / 256);
+            } else {
+                dxList = dxSigned;
             }
         }
 
