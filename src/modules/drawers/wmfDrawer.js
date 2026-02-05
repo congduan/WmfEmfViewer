@@ -118,36 +118,36 @@ class WmfDrawer extends BaseDrawer {
         const signature = String.fromCharCode(data[4], data[5], data[6], data[7]);
         
         if (signature === 'WMFC') {
-            // WMFC 块结构：
+            // WMFC 块结构（常见形式）：
             // 0-1: Escape Function (0x000F)
             // 2-3: Byte Count
             // 4-7: "WMFC"
-            // 8-11: Comment Identifier (0x00000001)
-            // 12-15: Comment Type (0x00010000)
-            // 16-27: 其他元数据
-            // 28+: 实际 EMF 数据
-            
-            // 检查是否包含 EMF Header (第一个块)
-            for (let testOffset = 20; testOffset < Math.min(50, data.length - 50); testOffset++) {
-                const type = this.readDwordFromData(data, testOffset);
-                if (type === 1) {
-                    // 验证 EMF 签名
-                    const sigOffset = testOffset + 40;
-                    if (sigOffset + 4 <= data.length) {
-                        if (data[sigOffset] === 0x20 && data[sigOffset+1] === 0x45 &&
-                            data[sigOffset+2] === 0x4D && data[sigOffset+3] === 0x46) {
-                            console.log('找到 EMF Header at offset', testOffset);
-                            return data.slice(testOffset);
-                        }
+            // 8-11: Comment Identifier
+            // 12-15: Comment Type
+            // 16+: 变长元数据 + EMF 数据块
+
+            // 尝试在块内查找 EMF 签名 (" EMF")，并回退 40 字节定位 EMF Header 起点
+            let emfHeaderOffset = -1;
+            for (let i = 0; i < data.length - 3; i++) {
+                if (data[i] === 0x20 && data[i + 1] === 0x45 && data[i + 2] === 0x4D && data[i + 3] === 0x46) {
+                    const candidate = i - 40;
+                    if (candidate >= 0) {
+                        emfHeaderOffset = candidate;
+                        break;
                     }
                 }
             }
-            
-            // 后续块：直接从 offset 28 提取到末尾
-            // WMF record 的 data 字段已经去掉了 WMF 记录头（size + function）
-            // 所以这里的 data 就是 ESCAPE 记录的参数部分
-            if (data.length > 28) {
-                return data.slice(28);
+
+            if (emfHeaderOffset >= 0) {
+                console.log('找到 EMF Header at offset', emfHeaderOffset);
+                return data.slice(emfHeaderOffset);
+            }
+
+            // 后续块：无法定位 EMF 头时，跳过 WMFC 头部数据
+            // 经验上 EMF 数据从偏移 38 开始（根据实际样本）
+            const fallbackOffset = 38;
+            if (data.length > fallbackOffset) {
+                return data.slice(fallbackOffset);
             }
         }
         

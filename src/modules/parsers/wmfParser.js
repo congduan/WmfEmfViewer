@@ -120,7 +120,14 @@ class WmfParser extends BaseParser {
             const records = [];
             console.log('Starting WMF record parsing from offset:', this.getOffset(), 'total length:', this.data.length);
             let iterationCount = 0;
-            while (this.getOffset() < this.data.length && iterationCount < 1000) {
+            const maxRecords = Math.ceil(this.data.length / 6);
+            let lastOffset = -1;
+            while (this.getOffset() < this.data.length && iterationCount < maxRecords) {
+                if (this.getOffset() === lastOffset) {
+                    console.warn('Parser made no progress at offset:', this.getOffset(), 'stopping');
+                    break;
+                }
+                lastOffset = this.getOffset();
                 iterationCount++;
                 try {
                     const record = this.parseWmfRecord();
