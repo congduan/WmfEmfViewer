@@ -1,6 +1,7 @@
 // WMF绘制模块
 const BaseDrawer = require('./baseDrawer');
 const EmfPlusDrawer = require('./emfPlusDrawer');
+const MathTypeMtefParser = require('../utils/mathTypeMtefParser');
 
 class WmfDrawer extends BaseDrawer {
     constructor(ctx) {
@@ -26,6 +27,31 @@ class WmfDrawer extends BaseDrawer {
 
         // 初始化画布
         this.initCanvas(metafileData);
+
+        // 预扫描 MFCOMMENT，提前识别 MathType 私有编码并提取 MTEF
+        this.isMathType = false;
+        this.mathTypeMtefStream = null;
+        this.mathTypeMtefIndex = 0;
+        for (let i = 0; i < metafileData.records.length; i++) {
+            const record = metafileData.records[i];
+            if (record.functionId === 0x0626) { // META_ESCAPE
+                const mtefBytes = this.extractMathTypeMtef(record.data);
+                if (mtefBytes) {
+                    this.isMathType = true;
+                    const parsed = new MathTypeMtefParser(mtefBytes).parse();
+                    if (parsed && Array.isArray(parsed.chars) && parsed.chars.length > 0) {
+                        this.mathTypeMtefStream = parsed.chars;
+                        this.mathTypeMtefIndex = 0;
+                    }
+                    console.log('MathType comment detected (pre-scan)');
+                    break;
+                } else if (this.isMathTypeComment(record.data)) {
+                    this.isMathType = true;
+                    console.log('MathType comment detected (pre-scan)');
+                    break;
+                }
+            }
+        }
 
         // 启用 EMF+ Dual 检测，某些文件包含EMF+数据
         const enableEmfPlusDual = true;
@@ -846,7 +872,9 @@ class WmfDrawer extends BaseDrawer {
         const textLength = this.readWordFromData(data, 0);
         if (data.length < 2 + textLength + 4) return;
         
-        const text = this.mapSymbolString(this.readStringFromData(data, 2, textLength));
+        let text = this.readStringFromData(data, 2, textLength);
+        text = this.mapMathTypeString(text, textLength);
+        text = this.mapSymbolString(text);
         const y = this.readShortFromData(data, 2 + textLength);
         const x = this.readShortFromData(data, 4 + textLength);
 
@@ -905,7 +933,9 @@ class WmfDrawer extends BaseDrawer {
         
         // 读取文本字符串
         if (data.length < offset + stringLength) return;
-        const text = this.mapSymbolString(this.readStringFromData(data, offset, stringLength));
+        let text = this.readStringFromData(data, offset, stringLength);
+        text = this.mapMathTypeString(text, stringLength);
+        text = this.mapSymbolString(text);
         
         // ExtTextOut 的坐标可能是绝对坐标，也可能使用当前位置
         // 如果坐标为 (0, 0)，使用当前画笔位置
@@ -1004,10 +1034,117 @@ class WmfDrawer extends BaseDrawer {
         
         // MFCOMMENT (0x000F) - 在标准 WMF 模式下跳过
         if (escapeFunction === 0x000F) {
-            console.log('MFCOMMENT - skipped in standard WMF mode');
+            const mtefBytes = this.extractMathTypeMtef(data);
+            if (mtefBytes) {
+                this.isMathType = true;
+                const parsed = new MathTypeMtefParser(mtefBytes).parse();
+                if (parsed && Array.isArray(parsed.chars) && parsed.chars.length > 0) {
+                    this.mathTypeMtefStream = parsed.chars;
+                    this.mathTypeMtefIndex = 0;
+                }
+                console.log('MathType comment detected');
+            } else if (this.isMathTypeComment(data)) {
+                this.isMathType = true;
+                console.log('MathType comment detected');
+            } else {
+                console.log('MFCOMMENT - skipped in standard WMF mode');
+            }
         } else {
             console.log('未处理的 Escape 函数:', escapeFunction);
         }
+    }
+
+    extractMathTypeMtef(data) {
+        // MFCOMMENT layout: EscapeFunction (2 bytes) + ByteCount (2 bytes) + CommentData
+        if (!data || data.length < 6) return null;
+        const byteCount = this.readWordFromData(data, 2);
+        if (byteCount <= 0 || data.length < 4 + byteCount) return null;
+        const commentData = data.slice(4, 4 + byteCount);
+
+        // AppsMFCC header detection
+        const appsId = 'AppsMFCC';
+        const idBytes = [];
+        for (let i = 0; i < appsId.length; i++) {
+            idBytes.push(appsId.charCodeAt(i));
+        }
+        const startsWithApps = commentData.length >= idBytes.length &&
+            idBytes.every((b, i) => commentData[i] === b);
+
+        if (!startsWithApps) return null;
+
+        let offset = idBytes.length;
+        if (offset + 2 + 4 + 4 > commentData.length) return null;
+
+        const version = commentData[offset] | (commentData[offset + 1] << 8);
+        offset += 2;
+        const totalLen = this.readDwordFromData(commentData, offset);
+        offset += 4;
+        const dataLen = this.readDwordFromData(commentData, offset);
+        offset += 4;
+
+        // Signature is null-terminated string
+        let signature = '';
+        while (offset < commentData.length) {
+            const b = commentData[offset++];
+            if (b === 0) break;
+            if (b >= 32 && b <= 126) signature += String.fromCharCode(b);
+        }
+
+        if (!signature.includes('MTEF')) return null;
+        if (offset + dataLen > commentData.length) return null;
+
+        const mtefBytes = commentData.slice(offset, offset + dataLen);
+        console.log('MathType AppsMFCC detected:', { version, totalLen, dataLen, signature });
+        return mtefBytes;
+    }
+
+    isMathTypeComment(data) {
+        if (!data || data.length < 4) return false;
+        // data includes EscapeFunction; payload starts at offset 2
+        const payload = data.slice(4);
+        let ascii = '';
+        for (let i = 0; i < payload.length; i++) {
+            const b = payload[i];
+            if (b >= 32 && b <= 126) {
+                ascii += String.fromCharCode(b);
+            } else {
+                ascii += ' ';
+            }
+        }
+        return ascii.includes('MathType') || ascii.includes('AppsMFCC') || ascii.includes('Design Science');
+    }
+
+    mapMathTypeString(text, rawLength) {
+        if (!this.isMathType || !text) return text;
+        if (!this.mathTypeMtefStream) {
+            // Fallback: minimal MathType private mapping when MFCC payload has no MTEF stream
+            const face = (this.currentFontFace || '').toLowerCase();
+            if (face === 'times new roman') {
+                if (text === 'xxx' || text === 'xxJ') {
+                    return '⋯';
+                }
+            }
+            return text;
+        }
+
+        const out = [];
+        const count = rawLength || text.length;
+        for (let i = 0; i < count; i++) {
+            if (this.mathTypeMtefIndex >= this.mathTypeMtefStream.length) break;
+            const item = this.mathTypeMtefStream[this.mathTypeMtefIndex++];
+            if (!item || !item.char) break;
+            if (item.fontKind === 'symbol') {
+                out.push(this.mapSymbolString(item.char));
+            } else {
+                out.push(item.char);
+            }
+        }
+
+        if (out.length > 0) {
+            return out.join('');
+        }
+
+        return text;
     }
     
     // 移除旧的警告方法 - 不再需要
