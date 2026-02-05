@@ -60,7 +60,7 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "npm run build:bundle && npm run compile",
-    "build:bundle": "node src/build-browser-bundle.js",
+    "build:bundle": "node src/build/build-browser-bundle.js",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run build && npm run lint",

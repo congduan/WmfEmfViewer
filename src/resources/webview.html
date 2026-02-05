@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WMF Preview</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        canvas {
+            background-color: white;
+            border: 1px solid #ddd;
+            max-width: 100%;
+            height: auto;
+        }
+        .error {
+            color: red;
+            margin-top: 10px;
+        }
+        .debug {
+            background-color: #f0f0f0;
+            padding: 10px;
+            margin-top: 10px;
+            border: 1px solid #ddd;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="wmfCanvas"></canvas>
+    <div id="error" class="error"></div>
+    <div id="debug" class="debug"></div>
+    <script src="metafileParser.browser.js"></script>
+    <script>
+        // 显示调试信息
+        function showDebug(message) {
+            const debugDiv = document.getElementById('debug');
+            debugDiv.textContent += message + '\n';
+            debugDiv.style.display = 'block';
+        }
+
+        // 检查脚本是否加载
+        showDebug('Script loaded, checking global objects...');
+        showDebug('typeof MetafileParser: ' + typeof MetafileParser);
+        showDebug('typeof window.MetafileParser: ' + typeof window.MetafileParser);
+        showDebug('typeof WmfDrawer: ' + typeof WmfDrawer);
+        showDebug('window keys: ' + Object.keys(window).filter(k => k.includes('Parser') || k.includes('Drawer')).join(', '));
+
+        // 预览WMF文件
+        function previewWMF(base64Data) {
+            try {
+                // 解码base64数据
+                const binaryString = atob(base64Data);
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                showDebug('Binary data length: ' + bytes.length);
+                showDebug('Creating parser...');
+
+                // 检查 MetafileParser 是否存在
+                if (typeof MetafileParser === 'undefined') {
+                    throw new Error('MetafileParser is not defined. The browser bundle may not have loaded correctly.');
+                }
+
+                // 创建解析器实例
+                const parser = new MetafileParser(bytes);
+                showDebug('Parser created, starting parsing...');
+
+                // 解析WMF文件
+                const result = parser.parse();
+                showDebug('Parsing completed.');
+                showDebug('File type: ' + parser.fileType);
+                showDebug('Records count: ' + result.records.length);
+
+                // 检查是否有错误
+                if (result.error) {
+                    throw new Error(result.error);
+                }
+
+                // 获取Canvas上下文
+                const canvas = document.getElementById('wmfCanvas');
+                const ctx = canvas.getContext('2d');
+
+                // 根据文件类型选择绘制器
+                let drawer;
+                if (parser.fileType === 'wmf' || parser.fileType === 'placeable-wmf') {
+                    drawer = new WmfDrawer(ctx);
+                } else if (parser.fileType === 'emf') {
+                    drawer = new EmfDrawer(ctx);
+                } else if (parser.fileType === 'emf+') {
+                    drawer = new EmfPlusDrawer(ctx);
+                } else {
+                    throw new Error('Unknown file type: ' + parser.fileType);
+                }
+                
+                showDebug('Drawer created (' + parser.fileType + '), starting drawing...');
+
+                // 绘制WMF文件
+                drawer.draw(result);
+                
+                showDebug('Drawing completed.');
+                showDebug('Canvas size: ' + canvas.width + ' x ' + canvas.height);
+                
+                // 检查是否有实际内容
+                const imageData = ctx.getImageData(0, 0, Math.min(canvas.width, 100), Math.min(canvas.height, 100));
+                const data = imageData.data;
+                let nonWhitePixels = 0;
+                for (let i = 0; i < data.length; i += 4) {
+                    if (data[i] !== 255 || data[i+1] !== 255 || data[i+2] !== 255) {
+                        nonWhitePixels++;
+                    }
+                }
+                showDebug('Non-white pixels in sample area: ' + nonWhitePixels);
+
+            } catch (error) {
+                console.error('Error in preview:', error);
+                document.getElementById('error').textContent = 'Error: ' + error.message;
+                showDebug('Error: ' + error.message + '\nStack: ' + error.stack);
+            }
+        }
+
+        // 执行预览
+        try {
+            const base64Data = '${wmfBase64}';
+            showDebug('Base64 data length: ' + base64Data.length);
+            showDebug('Starting WMF preview...');
+            previewWMF(base64Data);
+        } catch (error) {
+            console.error('Error in preview:', error);
+            document.getElementById('error').textContent = 'Error: ' + error.message;
+            showDebug('Error: ' + error.message + '\nStack: ' + error.stack);
+        }
+    </script>
+</body>
+</html>

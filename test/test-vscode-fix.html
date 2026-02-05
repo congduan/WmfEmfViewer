@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试 VSCode WMF 修复</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #1e1e1e;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #canvasContainer {
+            background: white;
+            padding: 20px;
+            display: inline-block;
+            margin-bottom: 20px;
+        }
+        canvas {
+            background-color: white;
+            border: 1px solid #ddd;
+        }
+        .debug {
+            background-color: #252526;
+            padding: 15px;
+            border: 1px solid #3e3e42;
+            font-family: 'Consolas', 'Courier New', monospace;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .error {
+            color: #f48771;
+        }
+        .success {
+            color: #89d185;
+        }
+        h1 {
+            color: #4ec9b0;
+        }
+    </style>
+</head>
+<body>
+    <h1>测试 sample.wmf 修复 (VSCode环境模拟)</h1>
+    <div id="canvasContainer">
+        <canvas id="wmfCanvas"></canvas>
+    </div>
+    <div class="debug" id="debug"></div>
+
+    <script src="src/metafileParser.browser.js"></script>
+    <script>
+        const debugDiv = document.getElementById('debug');
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type === 'error' ? 'error' : (type === 'success' ? 'success' : '');
+            debugDiv.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+            console.log(message);
+        }
+
+        async function loadAndRender() {
+            try {
+                log('开始加载 sample.wmf...', 'info');
+                
+                // 检查全局对象
+                log('检查全局对象...', 'info');
+                log(`typeof MetafileParser: ${typeof MetafileParser}`, 'info');
+                log(`typeof WmfDrawer: ${typeof WmfDrawer}`, 'info');
+                
+                if (typeof MetafileParser === 'undefined') {
+                    throw new Error('MetafileParser 未定义!');
+                }
+                
+                // 加载 WMF 文件
+                const response = await fetch('test_files/sample.wmf');
+                const arrayBuffer = await response.arrayBuffer();
+                const wmfData = new Uint8Array(arrayBuffer);
+                
+                log(`文件大小: ${wmfData.length} 字节`, 'info');
+                
+                // 解析
+                log('开始解析...', 'info');
+                const parser = new MetafileParser(wmfData);
+                const result = parser.parse();
+                
+                log(`文件类型: ${parser.fileType}`, 'info');
+                log(`记录数量: ${result.records.length}`, 'info');
+                log(`Header: ${JSON.stringify(result.header, null, 2)}`, 'info');
+                
+                // 获取 Canvas
+                const canvas = document.getElementById('wmfCanvas');
+                const ctx = canvas.getContext('2d');
+                
+                // 绘制
+                log('开始绘制...', 'info');
+                const drawer = new WmfDrawer(ctx);
+                drawer.draw(result);
+                
+                log(`Canvas 大小: ${canvas.width} x ${canvas.height}`, 'success');
+                log('✓ 绘制完成!', 'success');
+                
+                // 检查是否有实际内容被绘制
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const data = imageData.data;
+                let hasContent = false;
+                
+                // 检查是否有非白色像素
+                for (let i = 0; i < data.length; i += 4) {
+                    if (data[i] !== 255 || data[i+1] !== 255 || data[i+2] !== 255) {
+                        hasContent = true;
+                        break;
+                    }
+                }
+                
+                if (hasContent) {
+                    log('✓ 检测到绘制内容 (有非白色像素)', 'success');
+                } else {
+                    log('⚠ 警告: Canvas 全是白色,可能没有正确绘制', 'error');
+                }
+                
+            } catch (error) {
+                log('错误: ' + error.message, 'error');
+                log('Stack: ' + error.stack, 'error');
+                console.error(error);
+            }
+        }
+
+        // 执行
+        loadAndRender();
+    </script>
+</body>
+</html>
