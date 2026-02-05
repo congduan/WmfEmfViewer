@@ -927,27 +927,19 @@ class WmfDrawer extends BaseDrawer {
         }
 
         // 检查是否有 Dx 数组
+        // 根据 MS-WMF 2.3.3.5：
+        // StringLength 为字节长度；如果为奇数，需填充 1 字节使 Dx 在 16-bit 边界对齐
         let dxList = null;
-        const dxStart = offset + stringLength;
+        let dxStart = offset + stringLength;
+        if (stringLength % 2 !== 0) {
+            dxStart += 1;
+        }
         if (data.length >= dxStart + stringLength * 2) {
-            const dxWords = [];
             const dxSigned = [];
             for (let i = 0; i < stringLength; i++) {
-                const word = this.readWordFromData(data, dxStart + i * 2);
-                dxWords.push(word);
                 dxSigned.push(this.readShortFromData(data, dxStart + i * 2));
             }
-
-            const hasNegative = dxSigned.some(v => v < 0);
-            const allAligned = dxWords.every(w => (w & 0xFF) === 0);
-            const maxAbs = Math.max(...dxSigned.map(v => Math.abs(v)));
-
-            if (hasNegative && allAligned && maxAbs > 1024) {
-                // 某些文件使用 8.8 固定小数且以无符号存储
-                dxList = dxWords.map(w => w / 256);
-            } else {
-                dxList = dxSigned;
-            }
+            dxList = dxSigned;
         }
 
         if (dxList) {
