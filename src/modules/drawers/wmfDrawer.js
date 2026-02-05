@@ -9,8 +9,8 @@ class WmfDrawer extends BaseDrawer {
         this.emfPlusRecordCount = 0;
         this.emfPlusRecords = []; // 存储解析出的 EMF+ 记录
         this.emfPlusDrawer = null; // EMF+ 绘制器
-        this.currentPosX = 0; // 当前画笔位置 X
-        this.currentPosY = 0; // 当前画笔位置 Y
+        this.currentPosX = 0; // 当前画笔位置 X（逻辑坐标）
+        this.currentPosY = 0; // 当前画笔位置 Y（逻辑坐标）
         this.hasValidPosition = false; // 标记是否有有效的当前位置
     }
 
@@ -262,11 +262,11 @@ class WmfDrawer extends BaseDrawer {
                 break;
                 
             // ========== 绘图记录 (Drawing Records) ==========
-            case 0x0213: // META_MOVETO (旧版) 或 0x0214 META_LINETO
-                this.processMoveTo(record.data);
-                break;
-            case 0x0214: // META_LINETO
+            case 0x0213: // META_LINETO
                 this.processLineTo(record.data);
+                break;
+            case 0x0214: // META_MOVETO
+                this.processMoveTo(record.data);
                 break;
             case 0x041B: // META_RECTANGLE
                 this.processRectangle(record.data);
@@ -349,6 +349,11 @@ class WmfDrawer extends BaseDrawer {
         return data[offset] | (data[offset + 1] << 8);
     }
 
+    readShortFromData(data, offset) {
+        const value = this.readWordFromData(data, offset);
+        return (value & 0x8000) ? value - 0x10000 : value;
+    }
+
     readDwordFromData(data, offset) {
         if (offset + 3 >= data.length) return 0;
         return data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24);
@@ -381,32 +386,32 @@ class WmfDrawer extends BaseDrawer {
 
     processSetWindowOrg(data) {
         if (data.length < 4) return;
-        const y = this.readWordFromData(data, 0);
-        const x = this.readWordFromData(data, 2);
+        const y = this.readShortFromData(data, 0);
+        const x = this.readShortFromData(data, 2);
         console.log('SetWindowOrg:', x, y);
         this.coordinateTransformer.setWindowOrg(x, y);
     }
 
     processSetWindowExt(data) {
         if (data.length < 4) return;
-        const y = this.readWordFromData(data, 0);
-        const x = this.readWordFromData(data, 2);
+        const y = this.readShortFromData(data, 0);
+        const x = this.readShortFromData(data, 2);
         console.log('SetWindowExt:', x, y);
         this.coordinateTransformer.setWindowExt(x, y);
     }
 
     processSetViewportOrg(data) {
         if (data.length < 4) return;
-        const y = this.readWordFromData(data, 0);
-        const x = this.readWordFromData(data, 2);
+        const y = this.readShortFromData(data, 0);
+        const x = this.readShortFromData(data, 2);
         console.log('SetViewportOrg:', x, y);
         this.coordinateTransformer.setViewportOrg(x, y);
     }
 
     processSetViewportExt(data) {
         if (data.length < 4) return;
-        const y = this.readWordFromData(data, 0);
-        const x = this.readWordFromData(data, 2);
+        const y = this.readShortFromData(data, 0);
+        const x = this.readShortFromData(data, 2);
         console.log('SetViewportExt:', x, y);
         this.coordinateTransformer.setViewportExt(x, y);
     }
@@ -589,8 +594,8 @@ class WmfDrawer extends BaseDrawer {
 
     processMoveTo(data) {
         if (data.length < 4) return;
-        const y = this.readWordFromData(data, 0);
-        const x = this.readWordFromData(data, 2);
+        const y = this.readShortFromData(data, 0);
+        const x = this.readShortFromData(data, 2);
         const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
         console.log('MoveTo:', x, y, '->', transformed.x, transformed.y);
         
@@ -598,8 +603,9 @@ class WmfDrawer extends BaseDrawer {
         // 设置输出设备上下文中的当前位置，不绘制任何内容
         
         // 更新当前位置
-        this.currentPosX = transformed.x;
-        this.currentPosY = transformed.y;
+        // 当前位置存储为逻辑坐标，避免后续映射变化导致起点错误
+        this.currentPosX = x;
+        this.currentPosY = y;
         this.hasValidPosition = true;
         
         // MoveTo 不绘制，只是设置位置
@@ -608,8 +614,8 @@ class WmfDrawer extends BaseDrawer {
 
     processLineTo(data) {
         if (data.length < 4) return;
-        const y = this.readWordFromData(data, 0);
-        const x = this.readWordFromData(data, 2);
+        const y = this.readShortFromData(data, 0);
+        const x = this.readShortFromData(data, 2);
         const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
         console.log('LineTo:', x, y, '->', transformed.x, transformed.y);
         
@@ -619,9 +625,15 @@ class WmfDrawer extends BaseDrawer {
         // 确定线条起点
         let startX, startY;
         if (this.hasValidPosition) {
-            // 有有效位置，从当前位置开始
-            startX = this.currentPosX;
-            startY = this.currentPosY;
+            // 有有效位置，从当前位置（逻辑坐标）开始
+            const startTransformed = this.coordinateTransformer.transform(
+                this.currentPosX,
+                this.currentPosY,
+                this.ctx.canvas.width,
+                this.ctx.canvas.height
+            );
+            startX = startTransformed.x;
+            startY = startTransformed.y;
         } else {
             // 没有有效位置，从(0,0)开始
             const startTransformed = this.coordinateTransformer.transform(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
@@ -636,8 +648,8 @@ class WmfDrawer extends BaseDrawer {
         this.ctx.stroke();
         
         // 更新当前位置
-        this.currentPosX = transformed.x;
-        this.currentPosY = transformed.y;
+        this.currentPosX = x;
+        this.currentPosY = y;
         this.hasValidPosition = true;
         
         // 清空路径
@@ -646,10 +658,10 @@ class WmfDrawer extends BaseDrawer {
 
     processRectangle(data) {
         if (data.length < 8) return;
-        const bottom = this.readWordFromData(data, 0);
-        const right = this.readWordFromData(data, 2);
-        const top = this.readWordFromData(data, 4);
-        const left = this.readWordFromData(data, 6);
+        const bottom = this.readShortFromData(data, 0);
+        const right = this.readShortFromData(data, 2);
+        const top = this.readShortFromData(data, 4);
+        const left = this.readShortFromData(data, 6);
         const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
         const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
         console.log('Rectangle:', left, top, right, bottom);
@@ -670,8 +682,8 @@ class WmfDrawer extends BaseDrawer {
         
         this.ctx.beginPath();
         for (let i = 0; i < numPoints; i++) {
-            const x = this.readWordFromData(data, 2 + i * 4);
-            const y = this.readWordFromData(data, 4 + i * 4);
+            const x = this.readShortFromData(data, 2 + i * 4);
+            const y = this.readShortFromData(data, 4 + i * 4);
             const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
             
             if (i < 3 || i === numPoints - 1) {
@@ -696,8 +708,8 @@ class WmfDrawer extends BaseDrawer {
         
         this.ctx.beginPath();
         for (let i = 0; i < numPoints; i++) {
-            const x = this.readWordFromData(data, 2 + i * 4);
-            const y = this.readWordFromData(data, 4 + i * 4);
+            const x = this.readShortFromData(data, 2 + i * 4);
+            const y = this.readShortFromData(data, 4 + i * 4);
             const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
             
             if (i === 0) {
@@ -735,8 +747,8 @@ class WmfDrawer extends BaseDrawer {
             
             this.ctx.beginPath();
             for (let j = 0; j < numPoints; j++) {
-                const x = this.readWordFromData(data, offset);
-                const y = this.readWordFromData(data, offset + 2);
+                const x = this.readShortFromData(data, offset);
+                const y = this.readShortFromData(data, offset + 2);
                 const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
                 
                 if (i === 0 && j < 3) {
@@ -762,8 +774,8 @@ class WmfDrawer extends BaseDrawer {
         if (data.length < 2 + textLength + 4) return;
         
         const text = this.readStringFromData(data, 2, textLength);
-        const y = this.readWordFromData(data, 2 + textLength);
-        const x = this.readWordFromData(data, 4 + textLength);
+        const y = this.readShortFromData(data, 2 + textLength);
+        const x = this.readShortFromData(data, 4 + textLength);
         const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
         console.log('TextOut:', text, 'at', x, y, '->', transformed.x, transformed.y);
         this.ctx.fillText(text, transformed.x, transformed.y);
@@ -781,8 +793,8 @@ class WmfDrawer extends BaseDrawer {
         // String (StringLength bytes) - 文本字符串
         // [Optional] Dx (StringLength * 2 bytes) - 字符间距数组
         
-        const y = this.readWordFromData(data, 0);
-        const x = this.readWordFromData(data, 2);
+        const y = this.readShortFromData(data, 0);
+        const x = this.readShortFromData(data, 2);
         const stringLength = this.readWordFromData(data, 4);
         const fwOpts = this.readWordFromData(data, 6);
         
@@ -804,10 +816,16 @@ class WmfDrawer extends BaseDrawer {
         // ExtTextOut 的坐标可能是绝对坐标，也可能使用当前位置
         // 如果坐标为 (0, 0)，使用当前画笔位置
         let finalX, finalY;
-        if (x === 0 && y === 0 && this.currentPosX !== undefined) {
-            // 使用当前位置
-            finalX = this.currentPosX;
-            finalY = this.currentPosY;
+        if (x === 0 && y === 0 && this.hasValidPosition) {
+            // 使用当前位置（逻辑坐标）
+            const cpTransformed = this.coordinateTransformer.transform(
+                this.currentPosX,
+                this.currentPosY,
+                this.ctx.canvas.width,
+                this.ctx.canvas.height
+            );
+            finalX = cpTransformed.x;
+            finalY = cpTransformed.y;
             console.log('ExtTextOut:', text, 'at CP', '(using current position', this.currentPosX, this.currentPosY + ')', 'options:', fwOpts);
         } else {
             // 使用指定坐标
