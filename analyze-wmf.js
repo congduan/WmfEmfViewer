@@ -7,8 +7,9 @@ const FileTypeDetector = require('./src/modules/fileTypeDetector');
 const wmfFunctionNames = {
     0x0000: 'EOF',
     0x0102: 'SETROP2',
+    0x012c: 'SELECTCLIPREGION',
     0x012d: 'SELECTOBJECT',
-    0x012e: 'SELECTCLIPRGN',
+    0x012e: 'SETTEXTALIGN',
     0x01f0: 'DELETEOBJECT',
     0x0201: 'SETBKCOLOR',
     0x0209: 'SETTEXTCOLOR',

@@ -12,6 +12,8 @@ class WmfDrawer extends BaseDrawer {
         this.currentPosX = 0; // 当前画笔位置 X（逻辑坐标）
         this.currentPosY = 0; // 当前画笔位置 Y（逻辑坐标）
         this.hasValidPosition = false; // 标记是否有有效的当前位置
+        this.textAlignFlags = 0; // 文本对齐标志
+        this.textUpdateCp = false; // TA_UPDATECP
     }
 
     draw(metafileData) {
@@ -240,8 +242,11 @@ class WmfDrawer extends BaseDrawer {
             case 0x02FB: // META_CREATEFONTINDIRECT
                 this.processCreateFontIndirect(record.data);
                 break;
-            case 0x012E: // META_SELECTCLIPRGN
+            case 0x012C: // META_SELECTCLIPREGION
                 this.processSelectClipRgn(record.data);
+                break;
+            case 0x012E: // META_SETTEXTALIGN
+                this.processSetTextAlign(record.data);
                 break;
             case 0x00F8: // META_CREATEPALETTE
                 this.processCreatePalette(record.data);
@@ -457,6 +462,29 @@ class WmfDrawer extends BaseDrawer {
         if (data.length < 2) return;
         const align = this.readWordFromData(data, 0);
         console.log('SetTextAlign:', align);
+
+        this.textAlignFlags = align;
+        this.textUpdateCp = (align & 0x0001) !== 0; // TA_UPDATECP
+
+        // 水平对齐
+        const horiz = align & 0x0006;
+        if (horiz === 0x0002) {
+            this.ctx.textAlign = 'right';
+        } else if (horiz === 0x0006) {
+            this.ctx.textAlign = 'center';
+        } else {
+            this.ctx.textAlign = 'left';
+        }
+
+        // 垂直对齐
+        const vert = align & 0x0018;
+        if (vert === 0x0008) {
+            this.ctx.textBaseline = 'bottom';
+        } else if (vert === 0x0018) {
+            this.ctx.textBaseline = 'alphabetic';
+        } else {
+            this.ctx.textBaseline = 'top';
+        }
     }
 
     processCreatePenIndirect(data) {
@@ -776,9 +804,30 @@ class WmfDrawer extends BaseDrawer {
         const text = this.readStringFromData(data, 2, textLength);
         const y = this.readShortFromData(data, 2 + textLength);
         const x = this.readShortFromData(data, 4 + textLength);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-        console.log('TextOut:', text, 'at', x, y, '->', transformed.x, transformed.y);
-        this.ctx.fillText(text, transformed.x, transformed.y);
+
+        let finalX;
+        let finalY;
+        if (this.textUpdateCp && this.hasValidPosition) {
+            const transformed = this.coordinateTransformer.transform(this.currentPosX, this.currentPosY, this.ctx.canvas.width, this.ctx.canvas.height);
+            finalX = transformed.x;
+            finalY = transformed.y;
+        } else if (x === 0 && y === 0 && this.hasValidPosition) {
+            // 兼容旧文件：坐标为 0 时使用当前位置
+            const transformed = this.coordinateTransformer.transform(this.currentPosX, this.currentPosY, this.ctx.canvas.width, this.ctx.canvas.height);
+            finalX = transformed.x;
+            finalY = transformed.y;
+        } else {
+            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            finalX = transformed.x;
+            finalY = transformed.y;
+        }
+
+        console.log('TextOut:', text, 'at', x, y, '->', finalX, finalY);
+        this.ctx.fillText(text, finalX, finalY);
+
+        if (this.textUpdateCp) {
+            this.updateCurrentPositionByText(text);
+        }
     }
     
     processExtTextOut(data) {
@@ -815,28 +864,74 @@ class WmfDrawer extends BaseDrawer {
         
         // ExtTextOut 的坐标可能是绝对坐标，也可能使用当前位置
         // 如果坐标为 (0, 0)，使用当前画笔位置
-        let finalX, finalY;
-        if (x === 0 && y === 0 && this.hasValidPosition) {
-            // 使用当前位置（逻辑坐标）
-            const cpTransformed = this.coordinateTransformer.transform(
-                this.currentPosX,
-                this.currentPosY,
+        let logicalX;
+        let logicalY;
+        if (this.textUpdateCp && this.hasValidPosition) {
+            logicalX = this.currentPosX;
+            logicalY = this.currentPosY;
+            console.log('ExtTextOut:', text, 'at CP', '(using current position', this.currentPosX, this.currentPosY + ')', 'options:', fwOpts);
+        } else if (x === 0 && y === 0 && this.hasValidPosition) {
+            // 兼容旧文件：坐标为 0 时使用当前位置
+            logicalX = this.currentPosX;
+            logicalY = this.currentPosY;
+            console.log('ExtTextOut:', text, 'at CP', '(using current position', this.currentPosX, this.currentPosY + ')', 'options:', fwOpts);
+        } else {
+            logicalX = x;
+            logicalY = y;
+            console.log('ExtTextOut:', text, 'at', x, y, 'options:', fwOpts);
+        }
+
+        // 检查是否有 Dx 数组
+        let dxList = null;
+        const dxStart = offset + stringLength;
+        if (data.length >= dxStart + stringLength * 2) {
+            dxList = [];
+            for (let i = 0; i < stringLength; i++) {
+                dxList.push(this.readShortFromData(data, dxStart + i * 2));
+            }
+        }
+
+        if (dxList) {
+            let advance = 0;
+            for (let i = 0; i < text.length; i++) {
+                const ch = text[i];
+                const transformed = this.coordinateTransformer.transform(
+                    logicalX + advance,
+                    logicalY,
+                    this.ctx.canvas.width,
+                    this.ctx.canvas.height
+                );
+                this.ctx.fillText(ch, transformed.x, transformed.y);
+                advance += dxList[i] || 0;
+            }
+
+            if (this.textUpdateCp) {
+                this.currentPosX = logicalX + dxList.reduce((sum, v) => sum + v, 0);
+                this.currentPosY = logicalY;
+                this.hasValidPosition = true;
+            }
+        } else {
+            const transformed = this.coordinateTransformer.transform(
+                logicalX,
+                logicalY,
                 this.ctx.canvas.width,
                 this.ctx.canvas.height
             );
-            finalX = cpTransformed.x;
-            finalY = cpTransformed.y;
-            console.log('ExtTextOut:', text, 'at CP', '(using current position', this.currentPosX, this.currentPosY + ')', 'options:', fwOpts);
-        } else {
-            // 使用指定坐标
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-            finalX = transformed.x;
-            finalY = transformed.y;
-            console.log('ExtTextOut:', text, 'at', x, y, '->', finalX, finalY, 'options:', fwOpts);
+            this.ctx.fillText(text, transformed.x, transformed.y);
+
+            if (this.textUpdateCp) {
+                this.updateCurrentPositionByText(text);
+            }
         }
-        
-        // 绘制文本
-        this.ctx.fillText(text, finalX, finalY);
+    }
+
+    updateCurrentPositionByText(text) {
+        if (!this.ctx || !this.ctx.measureText) return;
+        const metrics = this.ctx.measureText(text);
+        const scale = this.coordinateTransformer.getScale();
+        if (scale.x !== 0) {
+            this.currentPosX += metrics.width / scale.x;
+        }
     }
 
     processSaveDC(data) {
