@@ -189,6 +189,7 @@
                 <div class="title">WMF/EMF Viewer</div>
                 <div class="toolbar">
                     <button id="exportPngBtn">导出为PNG</button>
+                    <button id="exportPdfBtn">导出为PDF</button>
                 </div>
             </div>
             <div class="canvas-section">
@@ -243,6 +244,109 @@
                 console.error('Error exporting PNG:', error);
                 showDebug('导出PNG时出错: ' + error.message);
             }
+        }
+
+        // 导出为PDF（单页，使用JPEG嵌入）
+        function exportToPDF() {
+            const canvas = document.getElementById('wmfCanvas');
+            try {
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+                const base64 = dataUrl.split(',')[1];
+                const binary = atob(base64);
+                const jpegBytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                    jpegBytes[i] = binary.charCodeAt(i);
+                }
+
+                const pdfBytes = buildPdfFromJpeg(jpegBytes, canvas.width, canvas.height);
+                const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+
+                const link = document.createElement('a');
+                link.download = 'metafile-export.pdf';
+                link.href = URL.createObjectURL(blob);
+                link.click();
+                URL.revokeObjectURL(link.href);
+            } catch (error) {
+                console.error('Error exporting PDF:', error);
+                showDebug('导出PDF时出错: ' + error.message);
+            }
+        }
+
+        // 使用最小PDF结构嵌入JPEG图像
+        function buildPdfFromJpeg(jpegBytes, width, height) {
+            const encoder = new TextEncoder();
+            const parts = [];
+            let position = 0;
+            const offsets = [0];
+
+            function pushString(str) {
+                const bytes = encoder.encode(str);
+                parts.push(bytes);
+                position += bytes.length;
+            }
+
+            function pushBytes(bytes) {
+                parts.push(bytes);
+                position += bytes.length;
+            }
+
+            function addObject(objNumber, contentBytes) {
+                offsets[objNumber] = position;
+                pushString(objNumber + ' 0 obj\n');
+                pushBytes(contentBytes);
+                pushString('\nendobj\n');
+            }
+
+            pushString('%PDF-1.4\n');
+
+            const obj1 = encoder.encode('<< /Type /Catalog /Pages 2 0 R >>');
+            addObject(1, obj1);
+
+            const obj2 = encoder.encode('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+            addObject(2, obj2);
+
+            const pageDict = `<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Im0 4 0 R >> >> /MediaBox [0 0 ${width} ${height}] /Contents 5 0 R >>`;
+            addObject(3, encoder.encode(pageDict));
+
+            const imageHeader = `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`;
+            const imageFooter = '\nendstream';
+            const imageHeaderBytes = encoder.encode(imageHeader);
+            const imageFooterBytes = encoder.encode(imageFooter);
+            const imageContent = new Uint8Array(imageHeaderBytes.length + jpegBytes.length + imageFooterBytes.length);
+            imageContent.set(imageHeaderBytes, 0);
+            imageContent.set(jpegBytes, imageHeaderBytes.length);
+            imageContent.set(imageFooterBytes, imageHeaderBytes.length + jpegBytes.length);
+            addObject(4, imageContent);
+
+            const contentStream = `q\n${width} 0 0 ${height} 0 0 cm\n/Im0 Do\nQ\n`;
+            const contentHeader = `<< /Length ${contentStream.length} >>\nstream\n`;
+            const contentFooter = 'endstream';
+            const contentBytes = encoder.encode(contentHeader + contentStream + contentFooter);
+            addObject(5, contentBytes);
+
+            const xrefPosition = position;
+            pushString('xref\n');
+            pushString(`0 ${offsets.length}\n`);
+            pushString('0000000000 65535 f \n');
+            for (let i = 1; i < offsets.length; i++) {
+                const offset = offsets[i].toString().padStart(10, '0');
+                pushString(`${offset} 00000 n \n`);
+            }
+
+            pushString('trailer\n');
+            pushString(`<< /Size ${offsets.length} /Root 1 0 R >>\n`);
+            pushString('startxref\n');
+            pushString(`${xrefPosition}\n`);
+            pushString('%%EOF\n');
+
+            const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+            const pdfBytes = new Uint8Array(totalLength);
+            let offset = 0;
+            for (const part of parts) {
+                pdfBytes.set(part, offset);
+                offset += part.length;
+            }
+            return pdfBytes;
         }
 
         // 格式化参数为友好的字符串
@@ -511,6 +615,7 @@
 
         // 绑定事件
         document.getElementById('exportPngBtn').addEventListener('click', exportToPNG);
+        document.getElementById('exportPdfBtn').addEventListener('click', exportToPDF);
 
         // 执行预览
         try {
