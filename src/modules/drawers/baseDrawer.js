@@ -17,7 +17,7 @@ class BaseDrawer {
     // 初始化画布
     initCanvas(metafileData) {
         let canvasWidth, canvasHeight;
-        
+
         if (metafileData.header.placeableHeader) {
             const ph = metafileData.header.placeableHeader;
             // 根据placeableHeader计算画布像素尺寸
@@ -25,22 +25,22 @@ class BaseDrawer {
             const inch = ph.inch || 1000;
             const logicalWidth = Math.abs(ph.right - ph.left);
             const logicalHeight = Math.abs(ph.bottom - ph.top);
-            
+
             // 计算物理尺寸（英寸）
             const widthInInch = logicalWidth / inch;
             const heightInInch = logicalHeight / inch;
-            
+
             // 转换为像素（使用96 DPI）
             let pixelWidth = widthInInch * 96;
             let pixelHeight = heightInInch * 96;
-            
+
             // 限制最大尺寸，同时保持宽高比
             // 使用统一的缩放因子，避免宽高比被扭曲
             const maxWidth = 2000;
             const maxHeight = 1500;
             const minWidth = 400;
             const minHeight = 300;
-            
+
             // 首先应用最大尺寸限制（保持宽高比）
             const scaleToFit = Math.min(
                 maxWidth / pixelWidth,
@@ -49,7 +49,7 @@ class BaseDrawer {
             );
             pixelWidth *= scaleToFit;
             pixelHeight *= scaleToFit;
-            
+
             // 然后应用最小尺寸限制（保持宽高比）
             const scaleToMin = Math.max(
                 minWidth / pixelWidth,
@@ -58,17 +58,13 @@ class BaseDrawer {
             );
             pixelWidth *= scaleToMin;
             pixelHeight *= scaleToMin;
-            
+
             canvasWidth = Math.round(pixelWidth);
             canvasHeight = Math.round(pixelHeight);
-            
-            this.ctx.canvas.width = canvasWidth;
-            this.ctx.canvas.height = canvasHeight;
-            
-            // 不预设WindowOrg/WindowExt，让WMF记录中的SetWindowExt/SetWindowOrg来设置
-            // 只设置ViewportExt为画布像素尺寸
+
+            // 保存逻辑尺寸用于坐标转换
             this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
-            
+
             console.log('Canvas initialized with placeableHeader:', {
                 logicalWidth, logicalHeight,
                 widthInInch: widthInInch.toFixed(2),
@@ -81,23 +77,35 @@ class BaseDrawer {
             const height = metafileData.header.bounds.bottom - metafileData.header.bounds.top;
             canvasWidth = Math.max(Math.min(width, 2000), 800);
             canvasHeight = Math.max(Math.min(height, 1500), 600);
-            this.ctx.canvas.width = canvasWidth;
-            this.ctx.canvas.height = canvasHeight;
             this.coordinateTransformer.setWindowExt(width, height);
             this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
         } else {
             canvasWidth = 800;
             canvasHeight = 600;
-            this.ctx.canvas.width = canvasWidth;
-            this.ctx.canvas.height = canvasHeight;
             this.coordinateTransformer.setWindowExt(canvasWidth, canvasHeight);
             this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
         }
-        console.log('Canvas size set to:', canvasWidth, 'x', canvasHeight);
+
+        // HiDPI 支持：获取设备像素比
+        const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+        this.devicePixelRatio = dpr;
+
+        // 设置 Canvas 实际尺寸（考虑设备像素比）
+        this.ctx.canvas.width = Math.round(canvasWidth * dpr);
+        this.ctx.canvas.height = Math.round(canvasHeight * dpr);
+
+        // 设置 CSS 显示尺寸（逻辑像素）
+        this.ctx.canvas.style.width = canvasWidth + 'px';
+        this.ctx.canvas.style.height = canvasHeight + 'px';
+
+        // 缩放上下文以匹配设备像素比
+        this.ctx.scale(dpr, dpr);
+
+        console.log('Canvas size set to:', canvasWidth, 'x', canvasHeight, '(DPR:', dpr, ', actual:', this.ctx.canvas.width, 'x', this.ctx.canvas.height + ')');
 
         // 清空Canvas
         this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
+        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
         console.log('Canvas cleared');
 
         // 设置默认绘制样式

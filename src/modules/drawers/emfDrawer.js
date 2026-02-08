@@ -19,34 +19,49 @@ class EmfDrawer {
         console.log('Number of records:', metafileData.records.length);
 
         // 设置Canvas大小和坐标转换
+        let canvasWidth, canvasHeight;
         if (metafileData.header.bounds) {
             const bounds = metafileData.header.bounds;
             const width = bounds.right - bounds.left;
             const height = bounds.bottom - bounds.top;
-            
+
             // 设置Canvas大小
-            const canvasWidth = Math.max(Math.min(width, 2000), 800);
-            const canvasHeight = Math.max(Math.min(height, 1500), 600);
-            this.ctx.canvas.width = canvasWidth;
-            this.ctx.canvas.height = canvasHeight;
-            
+            canvasWidth = Math.max(Math.min(width, 2000), 800);
+            canvasHeight = Math.max(Math.min(height, 1500), 600);
+
             // 设置窗口范围用于坐标转换
             this.coordinateTransformer.setWindowOrg(bounds.left, bounds.top);
             this.coordinateTransformer.setWindowExt(width, height);
             this.coordinateTransformer.setViewportOrg(0, 0);
             this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
-            
+
             console.log('Window:', { org: [bounds.left, bounds.top], ext: [width, height] });
             console.log('Viewport:', { org: [0, 0], ext: [canvasWidth, canvasHeight] });
         } else {
-            this.ctx.canvas.width = 800;
-            this.ctx.canvas.height = 600;
+            canvasWidth = 800;
+            canvasHeight = 600;
         }
-        console.log('Canvas size set to:', this.ctx.canvas.width, 'x', this.ctx.canvas.height);
+
+        // HiDPI 支持：获取设备像素比
+        const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+        this.devicePixelRatio = dpr;
+
+        // 设置 Canvas 实际尺寸（考虑设备像素比）
+        this.ctx.canvas.width = Math.round(canvasWidth * dpr);
+        this.ctx.canvas.height = Math.round(canvasHeight * dpr);
+
+        // 设置 CSS 显示尺寸（逻辑像素）
+        this.ctx.canvas.style.width = canvasWidth + 'px';
+        this.ctx.canvas.style.height = canvasHeight + 'px';
+
+        // 缩放上下文以匹配设备像素比
+        this.ctx.scale(dpr, dpr);
+
+        console.log('Canvas size set to:', canvasWidth, 'x', canvasHeight, '(DPR:', dpr, ', actual:', this.ctx.canvas.width, 'x', this.ctx.canvas.height + ')');
 
         // 清空Canvas
         this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
+        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
         console.log('Canvas cleared');
 
         // 设置默认绘制样式

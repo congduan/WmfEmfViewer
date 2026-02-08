@@ -18,22 +18,37 @@ class EmfPlusDrawer {
         console.log('Drawing EMF+ with header:', metafileData.header);
         console.log('Number of records:', metafileData.records.length);
 
+        let canvasWidth, canvasHeight;
         if (metafileData.header.bounds) {
             const width = metafileData.header.bounds.right - metafileData.header.bounds.left;
             const height = metafileData.header.bounds.bottom - metafileData.header.bounds.top;
-            const canvasWidth = Math.max(Math.min(width, 2000), 800);
-            const canvasHeight = Math.max(Math.min(height, 1500), 600);
-            this.ctx.canvas.width = canvasWidth;
-            this.ctx.canvas.height = canvasHeight;
+            canvasWidth = Math.max(Math.min(width, 2000), 800);
+            canvasHeight = Math.max(Math.min(height, 1500), 600);
         } else {
-            this.ctx.canvas.width = 800;
-            this.ctx.canvas.height = 600;
+            canvasWidth = 800;
+            canvasHeight = 600;
         }
-        console.log('Canvas size set to:', this.ctx.canvas.width, 'x', this.ctx.canvas.height);
+
+        // HiDPI 支持：获取设备像素比
+        const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+        this.devicePixelRatio = dpr;
+
+        // 设置 Canvas 实际尺寸（考虑设备像素比）
+        this.ctx.canvas.width = Math.round(canvasWidth * dpr);
+        this.ctx.canvas.height = Math.round(canvasHeight * dpr);
+
+        // 设置 CSS 显示尺寸（逻辑像素）
+        this.ctx.canvas.style.width = canvasWidth + 'px';
+        this.ctx.canvas.style.height = canvasHeight + 'px';
+
+        // 缩放上下文以匹配设备像素比
+        this.ctx.scale(dpr, dpr);
+
+        console.log('Canvas size set to:', canvasWidth, 'x', canvasHeight, '(DPR:', dpr, ', actual:', this.ctx.canvas.width, 'x', this.ctx.canvas.height + ')');
 
         // 清空Canvas
         this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
+        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
         console.log('Canvas cleared');
 
         // 设置默认绘制样式
