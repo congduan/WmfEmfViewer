@@ -1,5 +1,7 @@
 # WMF/EMF Viewer for VSCode
 
+[![Node.js CI](https://github.com/vscode-extensions/wmf-viewer/actions/workflows/node.js.yml/badge.svg)](https://github.com/vscode-extensions/wmf-viewer/actions/workflows/node.js.yml)
+
 A Visual Studio Code extension that allows you to preview WMF (Windows Metafile Format) and EMF (Enhanced Metafile Format) images directly in the editor.
 
 ![WMF/EMF Viewer preview](./screenshots/1.png)
