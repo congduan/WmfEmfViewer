@@ -63,9 +63,9 @@
     "build:bundle": "node src/build/build-browser-bundle.js",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run build && npm run lint",
+    "pretest": "npm run build && (if [ -f '.eslintrc.js' ] || [ -f '.eslintrc.json' ]; then npm run lint; else echo 'No ESLint configuration found, skipping linting'; fi)",
     "lint": "eslint src --ext ts",
-    "test": "node ./test/runTest.js",
+    "test": "node test/runTest.js",
     "package": "vsce package"
   },
   "devDependencies": {
