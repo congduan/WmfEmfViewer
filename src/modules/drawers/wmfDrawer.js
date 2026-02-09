@@ -18,15 +18,15 @@ class WmfDrawer extends BaseDrawer {
         this.currentFontFace = 'Arial';
     }
 
-    draw(metafileData) {
+    draw(metafileData, options = {}) {
         console.log('Drawing WMF with header:', metafileData.header);
         console.log('Number of records:', metafileData.records.length);
 
         // 保存header信息，用于字体大小计算
         this.header = metafileData.header;
 
-        // 初始化画布
-        this.initCanvas(metafileData);
+        // 初始化画布，传入view尺寸
+        this.initCanvas(metafileData, options);
 
         // 预扫描 MFCOMMENT，提前识别 MathType 私有编码并提取 MTEF
         this.isMathType = false;

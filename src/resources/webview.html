@@ -890,6 +890,12 @@
                 const canvas = document.getElementById('wmfCanvas');
                 const ctx = canvas.getContext('2d');
 
+                // 获取canvas-wrapper的可用尺寸
+                const canvasWrapper = document.querySelector('.canvas-wrapper');
+                const viewWidth = canvasWrapper.clientWidth;
+                const viewHeight = canvasWrapper.clientHeight;
+                showDebug('View size: ' + viewWidth + ' x ' + viewHeight);
+
                 // 根据文件类型选择绘制器
                 let drawer;
                 if (parser.fileType === 'wmf' || parser.fileType === 'placeable-wmf') {
@@ -904,8 +910,8 @@
                 
                 showDebug('Drawer created (' + parser.fileType + '), starting drawing...');
 
-                // 绘制WMF文件
-                drawer.draw(result);
+                // 绘制WMF文件，传入view尺寸
+                drawer.draw(result, { viewWidth, viewHeight });
                 
                 showDebug('Drawing completed.');
                 showDebug('Canvas size: ' + canvas.width + ' x ' + canvas.height);

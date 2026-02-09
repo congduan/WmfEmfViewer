@@ -14,19 +14,29 @@ class EmfPlusDrawer {
         this.lineWidth = 1; // 默认线宽
     }
 
-    draw(metafileData) {
+    draw(metafileData, options = {}) {
         console.log('Drawing EMF+ with header:', metafileData.header);
         console.log('Number of records:', metafileData.records.length);
+
+        // 获取view尺寸，默认为800x600
+        const viewWidth = options.viewWidth || 800;
+        const viewHeight = options.viewHeight || 600;
 
         let canvasWidth, canvasHeight;
         if (metafileData.header.bounds) {
             const width = metafileData.header.bounds.right - metafileData.header.bounds.left;
             const height = metafileData.header.bounds.bottom - metafileData.header.bounds.top;
-            canvasWidth = Math.max(Math.min(width, 2000), 800);
-            canvasHeight = Math.max(Math.min(height, 1500), 600);
+
+            // 在保持宽高比的情况下，尽可能占满view
+            const scaleToFit = Math.min(
+                viewWidth / width,
+                viewHeight / height
+            );
+            canvasWidth = Math.round(width * scaleToFit);
+            canvasHeight = Math.round(height * scaleToFit);
         } else {
-            canvasWidth = 800;
-            canvasHeight = 600;
+            canvasWidth = viewWidth;
+            canvasHeight = viewHeight;
         }
 
         // HiDPI 支持：获取设备像素比

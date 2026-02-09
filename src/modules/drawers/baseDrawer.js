@@ -15,8 +15,12 @@ class BaseDrawer {
     }
 
     // 初始化画布
-    initCanvas(metafileData) {
+    initCanvas(metafileData, options = {}) {
         let canvasWidth, canvasHeight;
+
+        // 获取view尺寸，默认为800x600
+        const viewWidth = options.viewWidth || 800;
+        const viewHeight = options.viewHeight || 600;
 
         if (metafileData.header.placeableHeader) {
             const ph = metafileData.header.placeableHeader;
@@ -34,30 +38,14 @@ class BaseDrawer {
             let pixelWidth = widthInInch * 96;
             let pixelHeight = heightInInch * 96;
 
-            // 限制最大尺寸，同时保持宽高比
+            // 在保持宽高比的情况下，尽可能占满view
             // 使用统一的缩放因子，避免宽高比被扭曲
-            const maxWidth = 2000;
-            const maxHeight = 1500;
-            const minWidth = 400;
-            const minHeight = 300;
-
-            // 首先应用最大尺寸限制（保持宽高比）
             const scaleToFit = Math.min(
-                maxWidth / pixelWidth,
-                maxHeight / pixelHeight,
-                1
+                viewWidth / pixelWidth,
+                viewHeight / pixelHeight
             );
             pixelWidth *= scaleToFit;
             pixelHeight *= scaleToFit;
-
-            // 然后应用最小尺寸限制（保持宽高比）
-            const scaleToMin = Math.max(
-                minWidth / pixelWidth,
-                minHeight / pixelHeight,
-                1
-            );
-            pixelWidth *= scaleToMin;
-            pixelHeight *= scaleToMin;
 
             canvasWidth = Math.round(pixelWidth);
             canvasHeight = Math.round(pixelHeight);
@@ -70,18 +58,26 @@ class BaseDrawer {
                 widthInInch: widthInInch.toFixed(2),
                 heightInInch: heightInInch.toFixed(2),
                 canvasWidth, canvasHeight,
+                viewWidth, viewHeight,
                 inch
             });
         } else if (metafileData.header.bounds) {
             const width = metafileData.header.bounds.right - metafileData.header.bounds.left;
             const height = metafileData.header.bounds.bottom - metafileData.header.bounds.top;
-            canvasWidth = Math.max(Math.min(width, 2000), 800);
-            canvasHeight = Math.max(Math.min(height, 1500), 600);
+
+            // 在保持宽高比的情况下，尽可能占满view
+            const scaleToFit = Math.min(
+                viewWidth / width,
+                viewHeight / height
+            );
+            canvasWidth = Math.round(width * scaleToFit);
+            canvasHeight = Math.round(height * scaleToFit);
+
             this.coordinateTransformer.setWindowExt(width, height);
             this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
         } else {
-            canvasWidth = 800;
-            canvasHeight = 600;
+            canvasWidth = viewWidth;
+            canvasHeight = viewHeight;
             this.coordinateTransformer.setWindowExt(canvasWidth, canvasHeight);
             this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
         }

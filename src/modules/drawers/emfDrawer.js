@@ -14,9 +14,13 @@ class EmfDrawer {
         this.lineWidth = 1; // 默认线宽
     }
 
-    draw(metafileData) {
+    draw(metafileData, options = {}) {
         console.log('Drawing EMF with header:', metafileData.header);
         console.log('Number of records:', metafileData.records.length);
+
+        // 获取view尺寸，默认为800x600
+        const viewWidth = options.viewWidth || 800;
+        const viewHeight = options.viewHeight || 600;
 
         // 设置Canvas大小和坐标转换
         let canvasWidth, canvasHeight;
@@ -25,9 +29,13 @@ class EmfDrawer {
             const width = bounds.right - bounds.left;
             const height = bounds.bottom - bounds.top;
 
-            // 设置Canvas大小
-            canvasWidth = Math.max(Math.min(width, 2000), 800);
-            canvasHeight = Math.max(Math.min(height, 1500), 600);
+            // 在保持宽高比的情况下，尽可能占满view
+            const scaleToFit = Math.min(
+                viewWidth / width,
+                viewHeight / height
+            );
+            canvasWidth = Math.round(width * scaleToFit);
+            canvasHeight = Math.round(height * scaleToFit);
 
             // 设置窗口范围用于坐标转换
             this.coordinateTransformer.setWindowOrg(bounds.left, bounds.top);
@@ -37,9 +45,10 @@ class EmfDrawer {
 
             console.log('Window:', { org: [bounds.left, bounds.top], ext: [width, height] });
             console.log('Viewport:', { org: [0, 0], ext: [canvasWidth, canvasHeight] });
+            console.log('View size:', { viewWidth, viewHeight });
         } else {
-            canvasWidth = 800;
-            canvasHeight = 600;
+            canvasWidth = viewWidth;
+            canvasHeight = viewHeight;
         }
 
         // HiDPI 支持：获取设备像素比
