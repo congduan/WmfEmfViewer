@@ -72,7 +72,7 @@ This extension contributes no settings — it just works.
 ## Known Issues
 
 - Rendering of some rarely-used EMF records may be incomplete.
-- Please report issues on the [GitHub repository](https://github.com/vscode-extensions/wmf-viewer).
+- Please report issues on the [GitHub repository](https://github.com/congduan/WmfEmfViewer).
 
 ## License
 
