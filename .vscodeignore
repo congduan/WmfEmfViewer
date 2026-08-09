@@ -3,6 +3,7 @@ README.md
 
 # 开发/测试资源无需打包进 VSIX
 .vscode/**
+.github/**
 docs/**
 test/**
 test_files/**

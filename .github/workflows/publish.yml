@@ -1,0 +1,60 @@
+name: Publish to GitHub Releases
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Determine version and tag
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME}"
+          # 手动触发时没有 tag，使用 v<version> 作为发布 tag
+          if [ -z "$TAG" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="v${VERSION}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Package VSIX
+        run: npx vsce package --readme-path MARKETPLACE.md -o "wmf-viewer-${{ steps.version.outputs.version }}.vsix"
+
+      - name: Create GitHub Release and attach VSIX
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VSIX="wmf-viewer-${{ steps.version.outputs.version }}.vsix"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Release 已存在（如重跑工作流），仅上传/覆盖 VSIX 资产
+            gh release upload "$TAG" "$VSIX" --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$TAG" "$VSIX" \
+              --repo "${{ github.repository }}" \
+              --title "$TAG" \
+              --generate-notes
+          fi
