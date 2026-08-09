@@ -228,13 +228,12 @@ class EmfPlusParser extends BaseParser {
             return null; // 不是EMF+记录
         }
         
-        // EMF+记录头结构 (16字节):
-        // Type (WORD) - 记录类型 + 标志位
-        // Flags (WORD) - 标志
-        // Size (DWORD) - 记录大小
-        // DataSize (DWORD) - 数据大小
-        
-        if (offset + 12 > emfRecordData.length) {
+        // EMF+记录头结构（MS-EMFPLUS 2.3.4.1，共 8 字节）：
+        // Type (WORD) - 记录类型
+        // Flags (WORD) - 标志（低字节通常为 ObjectId）
+        // Size (DWORD) - 记录总大小（含 8 字节头）
+        // 数据长度为 Size - 8
+        if (offset + 8 > emfRecordData.length) {
             return null;
         }
         
@@ -249,12 +248,8 @@ class EmfPlusParser extends BaseParser {
                     ((emfRecordData[offset + 2] & 0xFF) << 16) |
                     ((emfRecordData[offset + 3] & 0xFF) << 24);
         offset += 4;
-        
-        const recordDataSize = (emfRecordData[offset] & 0xFF) |
-                              ((emfRecordData[offset + 1] & 0xFF) << 8) |
-                              ((emfRecordData[offset + 2] & 0xFF) << 16) |
-                              ((emfRecordData[offset + 3] & 0xFF) << 24);
-        offset += 4;
+
+        const recordDataSize = size - 8;
         
         // 读取记录数据
         const recordData = emfRecordData.slice(offset, offset + recordDataSize);

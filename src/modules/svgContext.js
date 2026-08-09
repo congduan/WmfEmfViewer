@@ -126,28 +126,70 @@ class SvgContext {
         };
     }
 
-    ellipse(cx, cy, rx, ry, rot, start, end) {
-        // 画椭圆弧（canvas 默认顺时针）
-        const sweep = end - start;
+    ellipse(cx, cy, rx, ry, rot, start, end, anticlockwise) {
+        // 画椭圆弧。canvas 默认顺时针；anticlockwise 时沿角度递减方向。
+        let sweep = end - start;
+        if (anticlockwise) {
+            if (sweep > 0) sweep -= Math.PI * 2;
+        } else {
+            if (sweep < 0) sweep += Math.PI * 2;
+        }
+        // 若路径已有当前点，先连线到弧起点（canvas ellipse 语义）
+        const connect = this._hasSubpath && this._segments.length > 0 ? 'L ' : 'M ';
         if (Math.abs(sweep) >= Math.PI * 2 - 1e-6) {
             // 完整椭圆：两段半椭圆弧
             const p0 = this._ellipsePoint(cx, cy, rx, ry, rot, 0);
             const p1 = this._ellipsePoint(cx, cy, rx, ry, rot, Math.PI);
+            const flag = sweep > 0 ? 1 : 0;
             this._segments.push(
-                'M ' + this._fmt(p0.x) + ' ' + this._fmt(p0.y) +
-                ' A ' + this._fmt(rx) + ' ' + this._fmt(ry) + ' ' + this._fmt(rot) + ' 1 1 ' + this._fmt(p1.x) + ' ' + this._fmt(p1.y) +
-                ' A ' + this._fmt(rx) + ' ' + this._fmt(ry) + ' ' + this._fmt(rot) + ' 1 1 ' + this._fmt(p0.x) + ' ' + this._fmt(p0.y)
+                connect + this._fmt(p0.x) + ' ' + this._fmt(p0.y) +
+                ' A ' + this._fmt(rx) + ' ' + this._fmt(ry) + ' ' + this._fmt(rot) + ' 1 ' + flag + ' ' + this._fmt(p1.x) + ' ' + this._fmt(p1.y) +
+                ' A ' + this._fmt(rx) + ' ' + this._fmt(ry) + ' ' + this._fmt(rot) + ' 1 ' + flag + ' ' + this._fmt(p0.x) + ' ' + this._fmt(p0.y)
             );
         } else {
             const p0 = this._ellipsePoint(cx, cy, rx, ry, rot, start);
             const p1 = this._ellipsePoint(cx, cy, rx, ry, rot, end);
             const largeArc = Math.abs(sweep) > Math.PI ? 1 : 0;
+            const sweepFlag = sweep > 0 ? 1 : 0;
             this._segments.push(
-                'M ' + this._fmt(p0.x) + ' ' + this._fmt(p0.y) +
-                ' A ' + this._fmt(rx) + ' ' + this._fmt(ry) + ' ' + this._fmt(rot) + ' ' + largeArc + ' 1 ' + this._fmt(p1.x) + ' ' + this._fmt(p1.y)
+                connect + this._fmt(p0.x) + ' ' + this._fmt(p0.y) +
+                ' A ' + this._fmt(rx) + ' ' + this._fmt(ry) + ' ' + this._fmt(rot) + ' ' + largeArc + ' ' + sweepFlag + ' ' + this._fmt(p1.x) + ' ' + this._fmt(p1.y)
             );
         }
         this._hasSubpath = true;
+    }
+
+    roundRect(x, y, w, h, radii) {
+        // 兼容 canvas roundRect：radii 可为数值或数组（仅用第 1/2 项作 rx/ry）
+        let rx, ry;
+        if (Array.isArray(radii)) {
+            rx = Number(radii[0]) || 0;
+            ry = Number(radii[1]) !== undefined ? Number(radii[1]) || 0 : rx;
+        } else if (typeof radii === 'number') {
+            rx = radii;
+            ry = radii;
+        } else {
+            rx = 0;
+            ry = 0;
+        }
+        const n = this._normalizeRect(x, y, w, h);
+        x = Number(n.x); y = Number(n.y); w = Number(n.w); h = Number(n.h);
+        rx = Math.min(rx, w / 2);
+        ry = Math.min(ry, h / 2);
+        if (rx <= 0 || ry <= 0) {
+            this.rect(x, y, w, h);
+            return;
+        }
+        this.moveTo(x + rx, y);
+        this.lineTo(x + w - rx, y);
+        this.ellipse(x + w - rx, y + ry, rx, ry, 0, -Math.PI / 2, 0);
+        this.lineTo(x + w, y + h - ry);
+        this.ellipse(x + w - rx, y + h - ry, rx, ry, 0, 0, Math.PI / 2);
+        this.lineTo(x + rx, y + h);
+        this.ellipse(x + rx, y + h - ry, rx, ry, 0, Math.PI / 2, Math.PI);
+        this.lineTo(x, y + ry);
+        this.ellipse(x + rx, y + ry, rx, ry, 0, Math.PI, Math.PI * 1.5);
+        this.closePath();
     }
 
     arc(x, y, r, start, end, anticlockwise) {

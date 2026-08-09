@@ -40,21 +40,29 @@ class FileTypeDetector {
     // 检查是否是EMF+文件
     isEmfPlusFile() {
         try {
-            // 首先解析EMF头，获取头大小
             if (this.data.length < 88) return false;
-            
+
             // 读取EMF头大小（在offset 4处）
             const headerSize = this.readDwordAt(4);
-            
-            // 跳过EMF头，检查第一个记录是否是EMF+记录
-            const firstRecordOffset = headerSize;
-            if (firstRecordOffset + 12 > this.data.length) return false;
-            
-            // 读取第一个记录的类型
-            const recordType = this.readDwordAt(firstRecordOffset);
-            
-            // EMF+记录类型范围通常从0x4001开始
-            return recordType >= 0x4001 && recordType <= 0x4044;
+
+            // 遍历EMF记录，查找 EMR_COMMENT (0x46) 记录，
+            // 其 CommentIdentifier 字段为 0x2B464D45 ("+FME"，小端) 时即为 EMF+ 数据
+            let offset = headerSize;
+            while (offset + 8 <= this.data.length) {
+                const type = this.readDwordAt(offset);
+                const size = this.readDwordAt(offset + 4);
+                if (size < 8 || offset + size > this.data.length) break;
+
+                if (type === 0x46 && size >= 12) {
+                    const commentId = this.readDwordAt(offset + 8);
+                    if (commentId === 0x2B464D45) {
+                        return true;
+                    }
+                }
+                if (type === 0x0E) break; // EMR_EOF
+                offset += size;
+            }
+            return false;
         } catch (error) {
             return false;
         }

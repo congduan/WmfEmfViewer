@@ -13,6 +13,8 @@ class EmfDrawer {
     this.strokeColor = '#000000'; // 默认描边颜色
     this.lineWidth = 1; // 默认线宽
     this.arcDirection = 0x01; // 弧方向：默认 AD_COUNTERCLOCKWISE (1)
+    this.textColor = '#000000'; // 文本颜色（SetTextColor）
+    this.dcStateStack = []; // SaveDC/RestoreDC 状态栈
   }
 
   draw(metafileData, options = {}) {
@@ -662,9 +664,9 @@ class EmfDrawer {
   processEmfSetTextColor(data) {
     if (data.length < 4) return;
     const color = this.readDwordFromData(data, 0);
-    this.strokeColor = this.rgbToHex(color);
-    this.ctx.strokeStyle = this.strokeColor;
-    console.log('EMF SetTextColor:', color, '->', this.strokeColor);
+    // 文本颜色：仅在绘制文本时应用到 fillStyle，避免覆盖画刷颜色
+    this.textColor = this.rgbToHex(color);
+    console.log('EMF SetTextColor:', color, '->', this.textColor);
   }
 
   processEmfSetBkColor(data) {
@@ -687,7 +689,19 @@ class EmfDrawer {
   processEmfRestoreDC(data) {
     if (data.length < 4) return;
     const savedDC = this.readDwordFromData(data, 0);
-    console.log('EMF RestoreDC:', savedDC);
+    // nSavedDC：0 = 最近一次 SaveDC，1 = 前一次，依此类推
+    const count = Math.min((savedDC >>> 0) + 1, this.dcStateStack.length);
+    let restored = null;
+    for (let i = 0; i < count; i++) {
+      if (this.dcStateStack.length > 0) {
+        restored = this.dcStateStack.pop();
+      }
+      this.ctx.restore();
+    }
+    if (restored) {
+      this._restoreDcState(restored);
+    }
+    console.log('EMF RestoreDC:', savedDC, 'count:', count);
   }
 
   processEmfSelectObject(data) {
@@ -827,7 +841,24 @@ class EmfDrawer {
     if (data.length < 4) return;
     const align = this.readDwordFromData(data, 0);
     console.log('EMF SetTextAlign:', align);
-    // Text alignment mode
+    // 水平对齐：TA_LEFT=0x0000, TA_RIGHT=0x0002, TA_CENTER=0x0006
+    const horiz = align & 0x0006;
+    if (horiz === 0x0002) {
+      this.ctx.textAlign = 'right';
+    } else if (horiz === 0x0006) {
+      this.ctx.textAlign = 'center';
+    } else {
+      this.ctx.textAlign = 'left';
+    }
+    // 垂直对齐：TA_TOP=0x0000, TA_BOTTOM=0x0008, TA_BASELINE=0x0018
+    const vert = align & 0x0018;
+    if (vert === 0x0008) {
+      this.ctx.textBaseline = 'bottom';
+    } else if (vert === 0x0018) {
+      this.ctx.textBaseline = 'alphabetic';
+    } else {
+      this.ctx.textBaseline = 'top';
+    }
   }
 
   processEmfDeleteObject(data) {
@@ -868,11 +899,12 @@ class EmfDrawer {
     const y = this.readLongFromData(data, 32);  // Reference point Y
     const stringLength = this.readDwordFromData(data, 36);  // Number of characters
     const offString = this.readDwordFromData(data, 40);  // Offset to string
+    const options = this.readDwordFromData(data, 44);  // Options (ETO_*)
 
     // offString 相对记录起始（含 8 字节 EMR 头），而 record.data 不含头
     const stringOffset = offString - 8;
 
-    console.log(`EMF ExtTextOut${isUnicode ? 'W' : 'A'}:`, x, y, 'length:', stringLength, 'offString:', offString);
+    console.log(`EMF ExtTextOut${isUnicode ? 'W' : 'A'}:`, x, y, 'length:', stringLength, 'offString:', offString, 'options:', options);
 
     if (stringLength > 0 && stringOffset >= 0 && stringOffset < data.length) {
       let text = '';
@@ -895,7 +927,30 @@ class EmfDrawer {
         // 绘制文本
         if (text.length > 0) {
           const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const savedFillStyle = this.ctx.fillStyle;
+
+          // ETO_OPAQUE (0x0002)：用背景色（SetBkColor 设置的 fillColor）填充 rcl 矩形
+          if ((options & 0x0002) !== 0 && data.length >= 64) {
+            const rclLeft = this.readLongFromData(data, 48);
+            const rclTop = this.readLongFromData(data, 52);
+            const rclRight = this.readLongFromData(data, 56);
+            const rclBottom = this.readLongFromData(data, 60);
+            const bg1 = this.coordinateTransformer.transform(rclLeft, rclTop, this.ctx.canvas.width, this.ctx.canvas.height);
+            const bg2 = this.coordinateTransformer.transform(rclRight, rclBottom, this.ctx.canvas.width, this.ctx.canvas.height);
+            const bgX = Math.min(bg1.x, bg2.x);
+            const bgY = Math.min(bg1.y, bg2.y);
+            const bgW = Math.abs(bg2.x - bg1.x);
+            const bgH = Math.abs(bg2.y - bg1.y);
+            if (bgW > 0 && bgH > 0) {
+              this.ctx.fillStyle = this.fillColor;
+              this.ctx.fillRect(bgX, bgY, bgW, bgH);
+            }
+          }
+
+          // 文本使用 SetTextColor 设置的颜色
+          this.ctx.fillStyle = this.textColor;
           this.ctx.fillText(text, transformed.x, transformed.y);
+          this.ctx.fillStyle = savedFillStyle;
           console.log('  Rendered text:', text.substring(0, 50));
         }
       } catch (error) {
@@ -975,7 +1030,7 @@ class EmfDrawer {
         // 如果是未压缩位图，尝试渲染
         if (biCompression === 0 && bitsOffset < data.length) {
           this.renderBitmap(destX, destY, actualWidth, actualHeight,
-            biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize);
+            biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize, bmiOffset + biSize);
           return;
         }
       }
@@ -1072,7 +1127,7 @@ class EmfDrawer {
           // 如果是未压缩位图，尝试渲染
           if (biCompression === 0 && bitsOffset < data.length) {
             this.renderBitmap(destX, destY, actualWidth, actualHeight,
-              biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize);
+              biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize, bmiOffset + biSize);
             return;
           }
         }
@@ -1224,7 +1279,55 @@ class EmfDrawer {
 
   processEmfSaveDC(data) {
     this.ctx.save();
+    this.dcStateStack.push(this._captureDcState());
     console.log('EMF SaveDC');
+  }
+
+  // 快照当前设备上下文状态（GDI 对象 + 坐标变换 + 绘制样式）
+  _captureDcState() {
+    const ct = this.coordinateTransformer;
+    return {
+      fillColor: this.fillColor,
+      strokeColor: this.strokeColor,
+      lineWidth: this.lineWidth,
+      arcDirection: this.arcDirection,
+      textColor: this.textColor,
+      objectTable: this.gdiObjectManager
+        ? this.gdiObjectManager.objectTable.slice()
+        : null,
+      mapMode: ct.mapMode,
+      windowOrgX: ct.windowOrgX,
+      windowOrgY: ct.windowOrgY,
+      windowExtX: ct.windowExtX,
+      windowExtY: ct.windowExtY,
+      viewportOrgX: ct.viewportOrgX,
+      viewportOrgY: ct.viewportOrgY,
+      viewportExtX: ct.viewportExtX,
+      viewportExtY: ct.viewportExtY,
+    };
+  }
+
+  // 恢复设备上下文状态
+  _restoreDcState(state) {
+    if (!state) return;
+    this.fillColor = state.fillColor;
+    this.strokeColor = state.strokeColor;
+    this.lineWidth = state.lineWidth;
+    this.arcDirection = state.arcDirection;
+    if (state.textColor) this.textColor = state.textColor;
+    if (this.gdiObjectManager && state.objectTable) {
+      this.gdiObjectManager.objectTable = state.objectTable.slice();
+    }
+    const ct = this.coordinateTransformer;
+    ct.mapMode = state.mapMode;
+    ct.windowOrgX = state.windowOrgX;
+    ct.windowOrgY = state.windowOrgY;
+    ct.windowExtX = state.windowExtX;
+    ct.windowExtY = state.windowExtY;
+    ct.viewportOrgX = state.viewportOrgX;
+    ct.viewportOrgY = state.viewportOrgY;
+    ct.viewportExtX = state.viewportExtX;
+    ct.viewportExtY = state.viewportExtY;
   }
 
   processEmfSetWorldTransform(data) {
@@ -1566,11 +1669,10 @@ class EmfDrawer {
   }
 
   // 渲染DIB位图数据到Canvas
-  renderBitmap(destX, destY, destWidth, destHeight, biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize) {
+  renderBitmap(destX, destY, destWidth, destHeight, biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize, colorTableOffset) {
     try {
-      // 创建临时canvas来处理位图
-      const bytesPerPixel = biBitCount / 8;
-      const rowSize = Math.ceil(biWidth * bytesPerPixel / 4) * 4; // 4字节对齐
+      // 行字节数按 DWORD（4 字节）对齐
+      const rowSize = Math.ceil((biWidth * biBitCount) / 32) * 4;
       const absHeight = Math.abs(biHeight);
       const isBottomUp = biHeight > 0;
 
@@ -1578,22 +1680,70 @@ class EmfDrawer {
       const imageData = this.ctx.createImageData(biWidth, absHeight);
       const pixels = imageData.data;
 
-      // 读取位图数据
+      // 读取调色板（1/4/8bpp 时有效），条目为 BGR(A)
+      const palette = [];
+      if (biBitCount <= 8 && colorTableOffset !== undefined) {
+        const count = 1 << biBitCount;
+        for (let i = 0; i < count; i++) {
+          const o = colorTableOffset + i * 4;
+          if (o + 4 > data.length) break;
+          palette.push([data[o + 2], data[o + 1], data[o], 255]);
+        }
+      }
+
+      // 读取位图数据（按位深解码）
       for (let y = 0; y < absHeight; y++) {
         const srcY = isBottomUp ? (absHeight - 1 - y) : y;
         const srcRowOffset = bitsOffset + srcY * rowSize;
 
         for (let x = 0; x < biWidth; x++) {
-          const srcOffset = srcRowOffset + x * bytesPerPixel;
           const dstOffset = (y * biWidth + x) * 4;
+          let r = 0, g = 0, b = 0, a = 255;
 
-          if (srcOffset + bytesPerPixel <= bitsOffset + bitsSize) {
-            // DIB格式是BGR(A)，需要转换为RGBA
-            pixels[dstOffset + 2] = data[srcOffset];     // R
-            pixels[dstOffset + 1] = data[srcOffset + 1]; // G
-            pixels[dstOffset] = data[srcOffset + 2];     // B
-            pixels[dstOffset + 3] = biBitCount === 32 ? data[srcOffset + 3] : 255; // A
+          if (biBitCount === 1) {
+            const byteIdx = srcRowOffset + (x >> 3);
+            if (byteIdx < bitsOffset + bitsSize) {
+              const bit = 7 - (x & 7);
+              const idx = (data[byteIdx] >> bit) & 1;
+              const c = palette[idx] || [0, 0, 0, 255];
+              r = c[0]; g = c[1]; b = c[2];
+            }
+          } else if (biBitCount === 4) {
+            const byteIdx = srcRowOffset + (x >> 1);
+            if (byteIdx < bitsOffset + bitsSize) {
+              const idx = (x & 1) === 0 ? (data[byteIdx] >> 4) : (data[byteIdx] & 0x0F);
+              const c = palette[idx] || [0, 0, 0, 255];
+              r = c[0]; g = c[1]; b = c[2];
+            }
+          } else if (biBitCount === 8) {
+            const idx = data[srcRowOffset + x];
+            const c = palette[idx] || [0, 0, 0, 255];
+            r = c[0]; g = c[1]; b = c[2];
+          } else if (biBitCount === 16) {
+            // RGB555：b[0-4] g[5-9] r[10-14]
+            const o = srcRowOffset + x * 2;
+            if (o + 2 <= bitsOffset + bitsSize) {
+              const v = data[o] | (data[o + 1] << 8);
+              r = ((v >> 10) & 0x1F) * 255 / 31;
+              g = ((v >> 5) & 0x1F) * 255 / 31;
+              b = (v & 0x1F) * 255 / 31;
+            }
+          } else if (biBitCount === 24) {
+            const o = srcRowOffset + x * 3;
+            if (o + 3 <= bitsOffset + bitsSize) {
+              b = data[o]; g = data[o + 1]; r = data[o + 2];
+            }
+          } else if (biBitCount === 32) {
+            const o = srcRowOffset + x * 4;
+            if (o + 4 <= bitsOffset + bitsSize) {
+              b = data[o]; g = data[o + 1]; r = data[o + 2]; a = data[o + 3];
+            }
           }
+
+          pixels[dstOffset] = r | 0;
+          pixels[dstOffset + 1] = g | 0;
+          pixels[dstOffset + 2] = b | 0;
+          pixels[dstOffset + 3] = a;
         }
       }
 

@@ -16,6 +16,7 @@ class WmfDrawer extends BaseDrawer {
     this.textAlignFlags = 0; // 文本对齐标志
     this.textUpdateCp = false; // TA_UPDATECP
     this.currentFontFace = 'Arial';
+    this.arcDirection = 0x01; // 弧方向：默认 AD_COUNTERCLOCKWISE (1)
   }
 
   draw(metafileData, options = {}) {
@@ -389,6 +390,12 @@ class WmfDrawer extends BaseDrawer {
   readDwordFromData(data, offset) {
     if (offset + 3 >= data.length) return 0;
     return data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24);
+  }
+
+  // 读取有符号 32 位整数
+  readLongFromData(data, offset) {
+    const value = this.readDwordFromData(data, offset);
+    return value > 0x7FFFFFFF ? value - 0x100000000 : value;
   }
 
   readStringFromData(data, offset, length) {
@@ -770,6 +777,352 @@ class WmfDrawer extends BaseDrawer {
     this.ctx.strokeRect(transformedLeftTop.x, transformedLeftTop.y,
       transformedRightBottom.x - transformedLeftTop.x,
       transformedRightBottom.y - transformedLeftTop.y);
+  }
+
+  // 计算部分椭圆弧的起止角（画布角度）。
+  // WMF 的 META_ARC 按 MS-WMF 规范始终逆时针绘制：
+  // GDI 坐标 Y 轴向下，"逆时针" 在屏幕上即逆时针 = 画布 anticlockwise=true
+  _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {
+    const st = this.coordinateTransformer.transform(startX, startY, this.ctx.canvas.width, this.ctx.canvas.height);
+    const en = this.coordinateTransformer.transform(endX, endY, this.ctx.canvas.width, this.ctx.canvas.height);
+    const startAngle = Math.atan2((st.y - cy) / ry, (st.x - cx) / rx);
+    const endAngle = Math.atan2((en.y - cy) / ry, (en.x - cx) / rx);
+    return {
+      startAngle,
+      endAngle,
+      anticlockwise: this.arcDirection !== 0x02,
+    };
+  }
+
+  processEllipse(data) {
+    // META_ELLIPSE: Bounds(8) = bottom, right, top, left
+    if (data.length < 8) return;
+    const bottom = this.readShortFromData(data, 0);
+    const right = this.readShortFromData(data, 2);
+    const top = this.readShortFromData(data, 4);
+    const left = this.readShortFromData(data, 6);
+    console.log('Ellipse:', left, top, right, bottom);
+
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
+    const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
+    const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
+    const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
+    if (radiusX === 0 || radiusY === 0) return;
+
+    this.ctx.beginPath();
+    this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.stroke();
+  }
+
+  processRoundRect(data) {
+    // META_ROUNDRECT: Bounds(8) + Width(2) + Height(2)
+    if (data.length < 12) return;
+    const bottom = this.readShortFromData(data, 0);
+    const right = this.readShortFromData(data, 2);
+    const top = this.readShortFromData(data, 4);
+    const left = this.readShortFromData(data, 6);
+    const cornerWidth = this.readWordFromData(data, 8);  // 圆角椭圆的全宽
+    const cornerHeight = this.readWordFromData(data, 10); // 圆角椭圆的全高
+    console.log('RoundRect:', left, top, right, bottom, 'corner:', cornerWidth, cornerHeight);
+
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const x = Math.min(transformedLeftTop.x, transformedRightBottom.x);
+    const y = Math.min(transformedLeftTop.y, transformedRightBottom.y);
+    const w = Math.abs(transformedRightBottom.x - transformedLeftTop.x);
+    const h = Math.abs(transformedRightBottom.y - transformedLeftTop.y);
+
+    // 圆角半径（画布像素）= 椭圆全宽/高的一半，再按逻辑→画布比例换算
+    const scale = this.coordinateTransformer.getScale();
+    let rx = Math.max(0, (cornerWidth / 2) * Math.abs(scale.x));
+    let ry = Math.max(0, (cornerHeight / 2) * Math.abs(scale.y));
+    rx = Math.min(rx, w / 2);
+    ry = Math.min(ry, h / 2);
+
+    this.ctx.beginPath();
+    if (typeof this.ctx.roundRect === 'function') {
+      this.ctx.roundRect(x, y, w, h, [rx, ry]);
+    } else {
+      this._roundRectPath(x, y, w, h, rx, ry);
+    }
+    this.ctx.fill();
+    this.ctx.stroke();
+  }
+
+  // 兼容不支持 ctx.roundRect 的上下文（如旧版 SvgContext / Mock 环境）
+  _roundRectPath(x, y, w, h, rx, ry) {
+    if (rx <= 0 || ry <= 0) {
+      this.ctx.rect(x, y, w, h);
+      return;
+    }
+    this.ctx.moveTo(x + rx, y);
+    this.ctx.lineTo(x + w - rx, y);
+    this.ctx.ellipse(x + w - rx, y + ry, rx, ry, 0, -Math.PI / 2, 0);
+    this.ctx.lineTo(x + w, y + h - ry);
+    this.ctx.ellipse(x + w - rx, y + h - ry, rx, ry, 0, 0, Math.PI / 2);
+    this.ctx.lineTo(x + rx, y + h);
+    this.ctx.ellipse(x + rx, y + h - ry, rx, ry, 0, Math.PI / 2, Math.PI);
+    this.ctx.lineTo(x, y + ry);
+    this.ctx.ellipse(x + rx, y + ry, rx, ry, 0, Math.PI, Math.PI * 1.5);
+    this.ctx.closePath();
+  }
+
+  // 绘制椭圆弧/饼图/弦的公共逻辑
+  _drawArcRecord(data, kind) {
+    // Bounds(8) = bottom, right, top, left + Start(4, y,x) + End(4, y,x)
+    if (data.length < 16) return;
+    const bottom = this.readShortFromData(data, 0);
+    const right = this.readShortFromData(data, 2);
+    const top = this.readShortFromData(data, 4);
+    const left = this.readShortFromData(data, 6);
+    const startY = this.readShortFromData(data, 8);
+    const startX = this.readShortFromData(data, 10);
+    const endY = this.readShortFromData(data, 12);
+    const endX = this.readShortFromData(data, 14);
+    console.log(kind + ':', left, top, right, bottom, 'start:', startX, startY, 'end:', endX, endY);
+
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
+    const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
+    const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
+    const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
+    if (radiusX === 0 || radiusY === 0) return;
+
+    const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
+    const full = Math.abs(endAngle - startAngle) < 1e-6;
+
+    this.ctx.beginPath();
+    if (kind === 'Pie') {
+      this.ctx.moveTo(centerX, centerY);
+    }
+    if (full) {
+      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+    } else {
+      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
+    }
+    if (kind === 'Chord' || kind === 'Pie') {
+      this.ctx.closePath(); // 弦：连接起止点；饼：回到圆心
+      this.ctx.fill();
+      this.ctx.stroke();
+    } else {
+      this.ctx.stroke();
+    }
+  }
+
+  processArc(data) {
+    this._drawArcRecord(data, 'Arc');
+  }
+
+  processPie(data) {
+    this._drawArcRecord(data, 'Pie');
+  }
+
+  processChord(data) {
+    this._drawArcRecord(data, 'Chord');
+  }
+
+  // ========== DIB 位图记录 ==========
+
+  // 渲染 DIB 位图到 destX/destY/destWidth/destHeight（逻辑坐标）
+  renderDib(data, dibOffset, destX, destY, destWidth, destHeight) {
+    try {
+      if (dibOffset + 40 > data.length) return false;
+
+      // 跳过可能的 BITMAPFILEHEADER（"BM" 签名 14 字节）
+      let bmiOffset = dibOffset;
+      if (data[dibOffset] === 0x42 && data[dibOffset + 1] === 0x4D) {
+        bmiOffset = dibOffset + 14;
+      }
+
+      const biSize = this.readDwordFromData(data, bmiOffset);
+      if (biSize !== 40 && biSize !== 108 && biSize !== 124) return false;
+
+      const biWidth = this.readLongFromData(data, bmiOffset + 4);
+      const biHeightRaw = this.readLongFromData(data, bmiOffset + 8);
+      const biBitCount = this.readWordFromData(data, bmiOffset + 14);
+      const biCompression = this.readDwordFromData(data, bmiOffset + 16);
+
+      if (biWidth <= 0 || biWidth > 20000 || Math.abs(biHeightRaw) > 20000) return false;
+      if (biBitCount !== 1 && biBitCount !== 4 && biBitCount !== 8 &&
+        biBitCount !== 16 && biBitCount !== 24 && biBitCount !== 32) return false;
+
+      console.log('  DIB Bitmap:', biWidth, 'x', biHeightRaw, 'bits:', biBitCount, 'compression:', biCompression);
+
+      // 调色板（1/4/8bpp）
+      let colorTableSize = 0;
+      if (biBitCount <= 8) {
+        const biClrUsed = this.readDwordFromData(data, bmiOffset + 32);
+        colorTableSize = (biClrUsed || (1 << biBitCount)) * 4;
+      }
+      const bitsOffset = bmiOffset + biSize + colorTableSize;
+      const bitsSize = data.length - bitsOffset;
+      if (biCompression !== 0 || bitsOffset >= data.length) return false;
+
+      const rowSize = Math.ceil((biWidth * biBitCount) / 32) * 4;
+      const absHeight = Math.abs(biHeightRaw);
+      const isBottomUp = biHeightRaw > 0;
+
+      const imageData = this.ctx.createImageData(biWidth, absHeight);
+      const pixels = imageData.data;
+
+      // 调色板条目为 BGR(A)
+      const palette = [];
+      if (biBitCount <= 8) {
+        const count = 1 << biBitCount;
+        for (let i = 0; i < count; i++) {
+          const o = bmiOffset + biSize + i * 4;
+          if (o + 4 > data.length) break;
+          palette.push([data[o + 2], data[o + 1], data[o], 255]);
+        }
+      }
+
+      for (let y = 0; y < absHeight; y++) {
+        const srcY = isBottomUp ? (absHeight - 1 - y) : y;
+        const srcRowOffset = bitsOffset + srcY * rowSize;
+        for (let x = 0; x < biWidth; x++) {
+          const dstOffset = (y * biWidth + x) * 4;
+          let r = 0, g = 0, b = 0, a = 255;
+          if (biBitCount === 1) {
+            const byteIdx = srcRowOffset + (x >> 3);
+            if (byteIdx < bitsOffset + bitsSize) {
+              const bit = 7 - (x & 7);
+              const c = palette[(data[byteIdx] >> bit) & 1] || [0, 0, 0, 255];
+              r = c[0]; g = c[1]; b = c[2];
+            }
+          } else if (biBitCount === 4) {
+            const byteIdx = srcRowOffset + (x >> 1);
+            if (byteIdx < bitsOffset + bitsSize) {
+              const idx = (x & 1) === 0 ? (data[byteIdx] >> 4) : (data[byteIdx] & 0x0F);
+              const c = palette[idx] || [0, 0, 0, 255];
+              r = c[0]; g = c[1]; b = c[2];
+            }
+          } else if (biBitCount === 8) {
+            const idx = data[srcRowOffset + x];
+            const c = palette[idx] || [0, 0, 0, 255];
+            r = c[0]; g = c[1]; b = c[2];
+          } else if (biBitCount === 16) {
+            // RGB555
+            const o = srcRowOffset + x * 2;
+            if (o + 2 <= bitsOffset + bitsSize) {
+              const v = data[o] | (data[o + 1] << 8);
+              r = ((v >> 10) & 0x1F) * 255 / 31;
+              g = ((v >> 5) & 0x1F) * 255 / 31;
+              b = (v & 0x1F) * 255 / 31;
+            }
+          } else if (biBitCount === 24) {
+            const o = srcRowOffset + x * 3;
+            if (o + 3 <= bitsOffset + bitsSize) {
+              b = data[o]; g = data[o + 1]; r = data[o + 2];
+            }
+          } else if (biBitCount === 32) {
+            const o = srcRowOffset + x * 4;
+            if (o + 4 <= bitsOffset + bitsSize) {
+              b = data[o]; g = data[o + 1]; r = data[o + 2]; a = data[o + 3];
+            }
+          }
+          pixels[dstOffset] = r | 0;
+          pixels[dstOffset + 1] = g | 0;
+          pixels[dstOffset + 2] = b | 0;
+          pixels[dstOffset + 3] = a;
+        }
+      }
+
+      // 临时 canvas（浏览器可用真实 canvas 序列化；Node 环境降级）
+      const tempCanvas = typeof document !== 'undefined'
+        ? document.createElement('canvas')
+        : (this.ctx.canvas.constructor !== undefined ? new this.ctx.canvas.constructor(biWidth, absHeight) : null);
+
+      if (tempCanvas) {
+        tempCanvas.width = biWidth;
+        tempCanvas.height = absHeight;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.putImageData(imageData, 0, 0);
+        const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight, this.ctx.canvas.width, this.ctx.canvas.height);
+        const w = Math.abs(transformed2.x - transformed1.x);
+        const h = Math.abs(transformed2.y - transformed1.y);
+        console.log('  Rendering DIB to:', transformed1.x, transformed1.y, w, h);
+        this.ctx.drawImage(tempCanvas, transformed1.x, transformed1.y, w, h);
+      } else {
+        const transformed = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
+        this.ctx.putImageData(imageData, transformed.x, transformed.y);
+      }
+      return true;
+    } catch (error) {
+      console.log('  Failed to render DIB:', error.message);
+      return false;
+    }
+  }
+
+  processDibBitBlt(data) {
+    // META_DIBBITBLT (2.3.1.2.1)：RasterOperation(4) + YSrc(2) + XSrc(2) + Height(2) + Width(2) + YDest(2) + XDest(2) + DIB
+    if (data.length < 16) return;
+    const rop = this.readDwordFromData(data, 0);
+    const destHeight = this.readShortFromData(data, 8);
+    const destWidth = this.readShortFromData(data, 10);
+    const destY = this.readShortFromData(data, 12);
+    const destX = this.readShortFromData(data, 14);
+    console.log('DibBitBlt: rop=', rop.toString(16), 'dest=', destX, destY, destWidth, 'x', destHeight);
+
+    if (!this.renderDib(data, 16, destX, destY, destWidth, destHeight)) {
+      this._drawDibPlaceholder(destX, destY, destWidth, destHeight);
+    }
+  }
+
+  processDibStretchBlt(data) {
+    // META_DIBSTRETCHBLT (2.3.1.3)：ROP(4) + SrcHeight(2) + SrcWidth(2) + YSrc(2) + XSrc(2) + DestHeight(2) + DestWidth(2) + YDest(2) + XDest(2) + DIB
+    if (data.length < 20) return;
+    const rop = this.readDwordFromData(data, 0);
+    const srcHeight = this.readShortFromData(data, 4);
+    const srcWidth = this.readShortFromData(data, 6);
+    const destHeight = this.readShortFromData(data, 12);
+    const destWidth = this.readShortFromData(data, 14);
+    const destY = this.readShortFromData(data, 16);
+    const destX = this.readShortFromData(data, 18);
+    console.log('DibStretchBlt: rop=', rop.toString(16), 'src=', srcWidth, 'x', srcHeight, 'dest=', destX, destY, destWidth, 'x', destHeight);
+
+    if (!this.renderDib(data, 20, destX, destY, destWidth, destHeight)) {
+      this._drawDibPlaceholder(destX, destY, destWidth, destHeight);
+    }
+  }
+
+  processStretchDib(data) {
+    // META_STRETCHDIB (2.3.1.6)：ROP(4) + ColorUsage(2) + SrcHeight(2) + SrcWidth(2) + YSrc(2) + XSrc(2) + DestHeight(2) + DestWidth(2) + yDst(2) + xDst(2) + DIB
+    if (data.length < 22) return;
+    const rop = this.readDwordFromData(data, 0);
+    const colorUsage = this.readWordFromData(data, 4);
+    const srcHeight = this.readShortFromData(data, 6);
+    const srcWidth = this.readShortFromData(data, 8);
+    const destHeight = this.readShortFromData(data, 14);
+    const destWidth = this.readShortFromData(data, 16);
+    const destY = this.readShortFromData(data, 18);
+    const destX = this.readShortFromData(data, 20);
+    console.log('StretchDib: rop=', rop.toString(16), 'colorUsage=', colorUsage, 'dest=', destX, destY, destWidth, 'x', destHeight);
+
+    if (!this.renderDib(data, 22, destX, destY, destWidth, destHeight)) {
+      this._drawDibPlaceholder(destX, destY, destWidth, destHeight);
+    }
+  }
+
+  // 位图解析失败时绘制占位矩形
+  _drawDibPlaceholder(destX, destY, destWidth, destHeight) {
+    const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight, this.ctx.canvas.width, this.ctx.canvas.height);
+    const w = Math.abs(transformed2.x - transformed1.x);
+    const h = Math.abs(transformed2.y - transformed1.y);
+    if (w <= 0 || h <= 0) return;
+    const savedFill = this.ctx.fillStyle;
+    const savedStroke = this.ctx.strokeStyle;
+    this.ctx.fillStyle = '#f0f0f0';
+    this.ctx.strokeStyle = '#cccccc';
+    this.ctx.fillRect(transformed1.x, transformed1.y, w, h);
+    this.ctx.strokeRect(transformed1.x, transformed1.y, w, h);
+    this.ctx.fillStyle = savedFill;
+    this.ctx.strokeStyle = savedStroke;
   }
 
   processPolyline(data) {
