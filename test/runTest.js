@@ -266,6 +266,48 @@ function realMathTypeTest() {
 }
 realMathTypeTest();
 
+// 5. 回归测试：image213.wmf（MathType 6 混排旧式 "MathType" 注释 + AppsMFCC）
+// 回归背景：MTEF 流曾错误替换 WMF 文本，导致对数表渲染成 "g2\".8451"。
+function image213Test() {
+  const filePath = path.join(__dirname, '..', 'test_files', 'media', 'image213.wmf');
+  if (!fs.existsSync(filePath)) {
+    check('image213.wmf 存在', false, '文件缺失');
+    return;
+  }
+
+  const buffer = fs.readFileSync(filePath);
+  const data = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const parser = new MetafileParser(data);
+  const result = parser.parse();
+  check('image213.wmf 解析无错误', !result.error, result.error || '');
+  check('image213.wmf 文件类型', parser.fileType === 'placeable-wmf', parser.fileType);
+  if (result.error) return;
+
+  try {
+    const svgCtx = new SvgContext();
+    const drawer = new WmfDrawer(svgCtx);
+    drawer.draw(result, { viewWidth: 800, viewHeight: 600 });
+    const svg = svgCtx.getSvg();
+    const texts = (svg.match(/<text[^>]*>[^<]*<\/text>/g) || [])
+      .map(t => { const m = />([^<]*)</.exec(t); return m ? m[1] : ''; })
+      .join('');
+    check('image213.wmf 渲染不抛错', true);
+    check('image213.wmf 文本未被 MTEF 流替换', texts.includes('log20.3010'),
+      `文本: ${texts.slice(0, 80)}`);
+    check('image213.wmf 对数表完整', texts.includes('log30.4771') &&
+      texts.includes('log50.6990') && texts.includes('log70.8451'),
+      `文本: ${texts.slice(0, 80)}`);
+    // 不应残留 Latin-1 乱码（如 æ ç ò ö）或 MTEF 替换产生的非法字符
+    const mojibake = texts.match(/[æçèéêëìíîïòóôõöùúûüåø]/g) || [];
+    check('image213.wmf 无 Latin-1 乱码', mojibake.length === 0, `乱码: ${mojibake.join('')}`);
+    check('image213.wmf SVG 生成', svg.includes('<svg') && svg.length > 200,
+      `${svg.length} 字节`);
+  } catch (error) {
+    check('image213.wmf 渲染不抛错', false, error.message);
+  }
+}
+image213Test();
+
 console.log('\n' + '='.repeat(70));
 console.log(`结果: ${passed} 通过, ${failed} 失败`);
 console.log('='.repeat(70));
