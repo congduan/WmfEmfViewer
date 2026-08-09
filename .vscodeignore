@@ -1,0 +1,9 @@
+# 排除根 README，市场详情页使用 MARKETPLACE.md（通过 --readme-path 指定）
+README.md
+
+# 开发/测试资源无需打包进 VSIX
+.vscode/**
+docs/**
+test/**
+test_files/**
+scripts/**

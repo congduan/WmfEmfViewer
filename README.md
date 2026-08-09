@@ -1,204 +1,78 @@
-# WMF/EMF Viewer for VSCode
+# WmfEmfViewer
 
-A Visual Studio Code extension that allows you to preview WMF (Windows Metafile Format) and EMF (Enhanced Metafile Format) images directly in the editor.
+A Visual Studio Code extension for previewing **WMF** (Windows Metafile), **EMF** (Enhanced Metafile) and **EMF+** images directly in the editor.
 
 ![WMF/EMF Viewer preview](./screenshots/1.png)
-![WMF/EMF Viewer preview](./screenshots/2.png)
 
 ## Features
 
-- 📁 Preview WMF, EMF, and EMF+ files directly in VSCode
-- 🖼️ Supports both view and editor modes
-- 🎨 High-quality Canvas 2D rendering
-- 📋 Context menu integration for quick access
-- 🔍 Automatic file type detection
-- 🎯 Comprehensive format support (WMF, EMF, EMF+)
+- Open `.wmf` / `.emf` files in a custom editor with built-in preview
+- Automatic detection of WMF, Placeable WMF, EMF and EMF+
+- High-quality Canvas 2D rendering of vector graphics, text and GDI objects
+- Explorer context menu integration
+- Zero runtime dependencies
 
-## Supported Formats
-
-- **WMF** (Windows Metafile) - Classic vector graphics format
-- **EMF** (Enhanced Metafile) - Enhanced version with better features
-- **EMF+** (Enhanced Metafile Plus) - Modern format with advanced graphics
-
-## Installation
-
-### Method 1: From VSCode Marketplace
-
-1. Open VSCode
-2. Go to Extensions view (`Ctrl+Shift+X` / `Cmd+Shift+X`)
-3. Search for "WMF/EMF Viewer"
-4. Click "Install"
-
-### Method 2: From VSIX File
-
-1. Download the `.vsix` file from releases
-2. Open VSCode
-3. Go to Extensions view (`Ctrl+Shift+X` / `Cmd+Shift+X`)
-4. Click on the three dots (`...`) in the top right corner
-5. Select "Install from VSIX..."
-6. Navigate to the downloaded `.vsix` file and select it
-
-### Method 3: From Source
+## Quick Start
 
 ```bash
-# Clone the repository
-git clone https://github.com/vscode-extensions/wmf-viewer.git
-cd wmf-viewer
-
-# Install dependencies
-npm install
-
-# Build the extension
-npm run build
-
-# Press F5 in VSCode to run in debug mode
+npm install        # install dependencies
+npm run build      # build browser bundle + compile TypeScript
 ```
 
-## Usage
+Press `F5` in VS Code to launch the Extension Development Host, then open a `.wmf` or `.emf` file from `test_files/`.
 
-### Preview Mode
+## Development Commands
 
-1. Right-click on a `.wmf` or `.emf` file in the Explorer
-2. Select "Preview WMF/EMF Image"
-3. The image will open in a new preview tab
-
-### Editor Mode
-
-1. Simply click on a `.wmf` or `.emf` file
-2. The file will automatically open in the WMF/EMF Viewer editor
+| Command | Description |
+| ------- | ----------- |
+| `npm run build` | Full build (browser bundle + TypeScript compile) |
+| `npm run build:bundle` | Build the browser bundle only |
+| `npm run compile` | Compile TypeScript to `out/` |
+| `npm run watch` | Compile in watch mode |
+| `npm run lint` | Lint TypeScript sources |
+| `npm run test` | Run tests (builds, lints, runs test suite) |
+| `npm run package` | Package the extension into a `.vsix` file |
 
 ## Project Structure
 
 ```
-WmfEmfViewer/
-├── .vscode/              # VSCode workspace configuration
-├── docs/                 # Documentation and format specifications
-├── scripts/              # Development and analysis scripts
-├── src/                  # Source code
-│   ├── build/           # Build scripts
-│   ├── commands/        # VSCode command implementations
-│   ├── modules/         # Core parsing and rendering
-│   │   ├── drawers/    # Format-specific renderers
-│   │   └── parsers/    # Format-specific parsers
-│   ├── providers/       # VSCode provider implementations
-│   ├── resources/       # Static resources (HTML templates)
-│   ├── utils/           # Utility modules
-│   └── extension.ts     # Main extension entry point
-├── test/                 # Test files and examples
-├── test_files/          # Sample WMF/EMF files for testing
-├── out/                 # Compiled output (gitignored)
-├── package.json         # Package configuration
-├── tsconfig.json        # TypeScript configuration
-└── README.md            # This file
+src/
+├── build/               # Browser bundling script
+├── commands/            # VSCode command implementations
+├── modules/             # Core logic
+│   ├── parsers/        # WMF / EMF / EMF+ binary parsers
+│   └── drawers/        # Canvas 2D renderers
+├── providers/           # VSCode custom editor provider
+├── resources/           # Webview HTML template, extension icon
+├── utils/               # Coordinate transforms, GDI object manager, etc.
+└── extension.ts         # Extension entry point
 ```
 
-## Development
+See [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) for the full architecture documentation.
 
-### Prerequisites
+## Architecture
 
-- Node.js (v16+)
-- npm (v7+)
-- Visual Studio Code (v1.75.0+)
-
-### Available Commands
-
-```bash
-# Install dependencies
-npm install
-
-# Build the extension (bundle + compile)
-npm run build
-
-# Build browser bundle only
-npm run build:bundle
-
-# Compile TypeScript to JavaScript
-npm run compile
-
-# Watch for changes and compile automatically
-npm run watch
-
-# Lint TypeScript files
-npm run lint
-
-# Run tests
-npm run test
-
-# Package the extension into a VSIX file
-npm run package
-```
-
-### Development Workflow
-
-1. **Setup**: `npm install`
-2. **Development**: `npm run watch` (in terminal) + Press `F5` (to debug)
-3. **Testing**: Open any `.wmf` or `.emf` file in the Extension Development Host
-4. **Building**: `npm run build`
-5. **Packaging**: `npm run package`
-
-### Project Architecture
-
-The extension follows a modular architecture:
-
-- **Providers**: Handle VSCode integration (custom editor, commands)
-- **Parsers**: Parse binary WMF/EMF/EMF+ file formats
-- **Drawers**: Render parsed data to Canvas 2D
-- **Utils**: Helper functions (coordinate transformation, GDI object management)
-- **Build**: Scripts to bundle modules for browser compatibility
-
-## Technical Details
-
-### Parsing Strategy
-
-The extension uses a multi-format parsing strategy:
-
-1. **File Type Detection**: Automatically detects WMF, EMF, or EMF+ format
-2. **Format-Specific Parsing**: Uses specialized parsers for each format
-3. **Record Processing**: Parses metafile records sequentially
-4. **Coordinate Transformation**: Applies appropriate transformations for Canvas rendering
-
-### Rendering Pipeline
-
-1. Parse binary metafile data
-2. Extract drawing commands and GDI objects
-3. Transform coordinates to Canvas coordinate system
-4. Render using Canvas 2D API in webview
-
-## Documentation
-
-- **AGENTS.md**: Comprehensive guide for AI coding agents
-- **docs/PROJECT_STRUCTURE.md**: Detailed project structure documentation
-- **docs/[MS-WMF].pdf**: WMF format specification
-- **docs/[MS-EMF].pdf**: EMF format specification
-- **docs/[MS-EMFPLUS].pdf**: EMF+ format specification
+- **Separation of concerns**: TypeScript extension layer, JavaScript parsing/rendering layer
+- **Format-specific modules**: each format has a dedicated parser and drawer
+- **Shared base classes**: `BaseParser` / `BaseDrawer` provide common functionality
+- **Browser bundling**: `build-browser-bundle.js` produces a single-file browser bundle for the webview
 
 ## Testing
 
-Sample WMF/EMF files are available in `test_files/` directory for testing various format features.
+- `test/test-wmf.js` — WMF parsing unit tests
+- `test/test-all-formats.js` — multi-format support tests
+- `test_files/` — 200+ sample WMF/EMF files
+
+## Format Specifications
+
+- [MS-WMF] Windows Metafile Format — `docs/[MS-WMF].pdf`
+- [MS-EMF] Enhanced Metafile Format — `docs/[MS-EMF].pdf`
+- [MS-EMFPLUS] Enhanced Metafile Plus Format — `docs/[MS-EMFPLUS].pdf`
+
+## Publishing
+
+The Marketplace detail page uses [MARKETPLACE.md](MARKETPLACE.md), configured via the `package` / `publish` scripts in `package.json`.
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-### Contribution Guidelines
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run `npm run lint` and fix any issues
-5. Test your changes with sample files
-6. Submit a Pull Request
-
-## Acknowledgments
-
-- Based on Microsoft's WMF, EMF, and EMF+ format specifications
-- Built with TypeScript and VSCode extension API
-- Uses Canvas 2D API for high-quality rendering
-
-## Support
-
-For issues, questions, or feature requests, please visit the [GitHub repository](https://github.com/vscode-extensions/wmf-viewer).
+[MIT](LICENSE)

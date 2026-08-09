@@ -4,6 +4,7 @@
   "publisher": "congduan",
   "description": "Preview WMF and EMF images in VSCode",
   "version": "0.0.1",
+  "icon": "src/resources/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/vscode-extensions/wmf-viewer.git"
@@ -67,7 +68,8 @@
     "pretest": "npm run build && (if [ -f '.eslintrc.js' ] || [ -f '.eslintrc.json' ]; then npm run lint; else echo 'No ESLint configuration found, skipping linting'; fi)",
     "lint": "eslint src --ext ts",
     "test": "node test/runTest.js",
-    "package": "vsce package"
+    "package": "vsce package --readme-path MARKETPLACE.md",
+    "publish": "vsce publish --readme-path MARKETPLACE.md"
   },
   "devDependencies": {
     "@types/vscode": "^1.75.0",
