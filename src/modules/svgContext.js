@@ -296,7 +296,7 @@ class SvgContext {
         return (
             '<?xml version="1.0" encoding="UTF-8"?>\n' +
             '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"' +
-            ' width="' + w + '" height="' + h + '" viewBox="0 0 ' + cw + ' ' + ch + '">\n' +
+            ' width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">\n' +
             defs + '\n' +
             this._nodes.join('\n') + '\n' +
             '</svg>\n'

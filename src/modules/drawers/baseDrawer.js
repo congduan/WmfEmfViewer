@@ -50,7 +50,11 @@ class BaseDrawer {
             canvasWidth = Math.round(pixelWidth);
             canvasHeight = Math.round(pixelHeight);
 
-            // 保存逻辑尺寸用于坐标转换
+            // 设置 window/viewport 映射：将 placeable 边界映射到画布
+            // （与 EMF bounds 分支保持一致；文件内的 SetWindow* 记录会覆盖这里的默认值）
+            this.coordinateTransformer.setWindowOrg(ph.left, ph.top);
+            this.coordinateTransformer.setWindowExt(logicalWidth, logicalHeight);
+            this.coordinateTransformer.setViewportOrg(0, 0);
             this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
 
             console.log('Canvas initialized with placeableHeader:', {
