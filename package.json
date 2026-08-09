@@ -3,7 +3,7 @@
   "displayName": "WMF/EMF Viewer",
   "publisher": "congduan",
   "description": "Preview WMF and EMF images in VSCode",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "icon": "src/resources/icon.png",
   "repository": {
     "type": "git",
