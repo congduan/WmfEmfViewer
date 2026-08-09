@@ -29,13 +29,15 @@ class WmfDrawer extends BaseDrawer {
     // 初始化画布，传入view尺寸
     this.initCanvas(metafileData, options);
 
-    // 预扫描 MFCOMMENT，识别 MathType 私有编码并收集全部 MTEF 字符流。
-    // 真实 MathType 文件将 AppsMFCC 注释放在 WMF 末尾（绘制命令之后），
-    // 因此必须在渲染前完成流收集，渲染时再按公式顺序消费。
+    // 预扫描 MFCOMMENT，识别 MathType 私有编码（仅标记）。
+    // 注意：WMF 中的公式文本由 TEXTOUT 记录 + Symbol/正文 字体编码直接绘制，
+    // AppsMFCC/MTEF 只是描述公式语义的辅助数据，其字符流并不总是与 TEXTOUT
+    // 文本一一对应（例如 image213.wmf 含旧式 "MathType" 注释与 AppsMFCC 混排），
+    // 因此不能用来替换 WMF 文本，仅保留提取能力供诊断/未来使用。
     this.isMathType = false;
-    this.mathTypeMtefStreams = []; // 每个 MathType 公式的 MTEF 字符流队列
-    this.mathTypeMtefStreamIndex = 0; // 当前字符流索引
-    this.mathTypeMtefIndex = 0; // 当前字符流内索引
+    this.mathTypeMtefStreams = []; // 仅用于提取验证，不参与文本替换
+    this.mathTypeMtefStreamIndex = 0;
+    this.mathTypeMtefIndex = 0;
     this.appsMfccSkipping = 0; // 多块 MathML 注释剩余待跳过的数据字节数
     for (let i = 0; i < metafileData.records.length; i++) {
       const record = metafileData.records[i];
@@ -54,7 +56,7 @@ class WmfDrawer extends BaseDrawer {
       }
     }
     if (this.isMathType) {
-      console.log('MathType 注释检测到，收集 MTEF 流数:', this.mathTypeMtefStreams.length);
+      console.log('MathType 注释检测到，MTEF 流数（仅诊断）:', this.mathTypeMtefStreams.length);
     }
 
     // 启用 EMF+ Dual 检测，某些文件包含EMF+数据
@@ -1507,47 +1509,15 @@ class WmfDrawer extends BaseDrawer {
 
   mapMathTypeString(text, rawLength) {
     if (!this.isMathType || !text) return text;
-
-    // 跳过已耗尽的字符流，切换到下一个公式
-    while (this.mathTypeMtefStreamIndex < this.mathTypeMtefStreams.length &&
-      this.mathTypeMtefIndex >= this.mathTypeMtefStreams[this.mathTypeMtefStreamIndex].length) {
-      this.mathTypeMtefStreamIndex++;
-      this.mathTypeMtefIndex = 0;
-    }
-
-    if (this.mathTypeMtefStreamIndex >= this.mathTypeMtefStreams.length) {
+    // MTEF 流仅作诊断/提取，不替换 WMF 文本（原因见 draw() 预扫描注释）。
+    // 公式文本由 TEXTOUT 字节 + Symbol/正文 字体编码直接渲染。
+    const face = (this.currentFontFace || '').toLowerCase();
+    if (face === 'times new roman') {
       // Fallback: minimal MathType private mapping when MFCC payload has no MTEF stream
-      const face = (this.currentFontFace || '').toLowerCase();
-      if (face === 'times new roman') {
-        if (text === 'xxx' || text === 'xxJ') {
-          return '⋯';
-        }
-      }
-      return text;
-    }
-
-    const out = [];
-    const count = rawLength || text.length;
-    for (let i = 0; i < count; i++) {
-      // 当前流耗尽时自动切换到下一个公式的字符流
-      if (this.mathTypeMtefIndex >= this.mathTypeMtefStreams[this.mathTypeMtefStreamIndex].length) {
-        this.mathTypeMtefStreamIndex++;
-        this.mathTypeMtefIndex = 0;
-        if (this.mathTypeMtefStreamIndex >= this.mathTypeMtefStreams.length) break;
-      }
-      const item = this.mathTypeMtefStreams[this.mathTypeMtefStreamIndex][this.mathTypeMtefIndex++];
-      if (!item || !item.char) break;
-      if (item.fontKind === 'symbol') {
-        out.push(this.mapSymbolString(item.char));
-      } else {
-        out.push(item.char);
+      if (text === 'xxx' || text === 'xxJ') {
+        return '⋯';
       }
     }
-
-    if (out.length > 0) {
-      return out.join('');
-    }
-
     return text;
   }
 
