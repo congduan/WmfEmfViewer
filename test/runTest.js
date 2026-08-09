@@ -136,29 +136,42 @@ function buildWmfRecord(funcId, dataBytes) {
   return u32(3 + dataBytes.length / 2).concat(u16(funcId), dataBytes);
 }
 
-// 构建含 2 个 MathType 公式的标准 WMF
+// 构建含 2 个 MathType 公式的标准 WMF。
+// 与真实 MathType 一致：Symbol 字符用 Symbol 字体绘制、正文用 Times 字体绘制，
+// 每个公式 = AppsMFCC 注释块 + 各字符的（选字体 + TEXTOUT）记录。
 function buildMathTypeWmf() {
   const header = u16(0x0001).concat(u16(0x0009), u16(0x0300), u32(0), u16(0), u32(0), u16(0));
 
-  // CREATEFONTINDIRECT: height=20, faceName="Symbol"
-  const fontData = i16(20).concat(u16(0), u16(0), u16(0), u16(400), [0, 0, 0, 2, 0, 0, 0, 0]);
-  'Symbol\0'.split('').forEach(c => fontData.push(c.charCodeAt(0)));
+  // CREATEFONTINDIRECT：height=20，faceName="Symbol"（对象 0）/ "Times New Roman"（对象 1）
+  function makeFont(name) {
+    const d = i16(20).concat(u16(0), u16(0), u16(0), u16(400), [0, 0, 0, 2, 0, 0, 0, 0]);
+    (name + '\0').split('').forEach(c => d.push(c.charCodeAt(0)));
+    return d;
+  }
+
+  // 公式记录：选字体 + 逐字符 TEXTOUT
+  function equationRecords(mtefChars) {
+    const recs = [buildWmfRecord(0x0626, buildMathTypeEscape(buildAppsMfcc(buildMtef(mtefChars))))];
+    for (const c of mtefChars) {
+      recs.push(buildWmfRecord(0x012D, u16(c.symbol ? 0 : 1))); // SELECTOBJECT：0=Symbol, 1=Times
+      recs.push(buildWmfRecord(0x0521, buildTextOut(String.fromCharCode(c.code))));
+    }
+    return recs;
+  }
 
   const records = [
     buildWmfRecord(0x020B, i16(0).concat(i16(0))),     // SETWINDOWORG: y, x
     buildWmfRecord(0x020C, i16(100).concat(i16(500))), // SETWINDOWEXT: y=100, x=500
-    buildWmfRecord(0x02FB, fontData),                  // CREATEFONTINDIRECT (Symbol)
-    buildWmfRecord(0x012D, u16(0)),                    // SELECTOBJECT 0 -> Symbol 字体
-    buildWmfRecord(0x0626, buildMathTypeEscape(buildAppsMfcc(buildMtef([
+    buildWmfRecord(0x02FB, makeFont('Symbol')),        // CREATEFONTINDIRECT 0: Symbol
+    buildWmfRecord(0x02FB, makeFont('Times New Roman')), // CREATEFONTINDIRECT 1: Times
+    ...equationRecords([
       { symbol: true, code: 0x61 },  // 'a' -> 'α'
       { symbol: false, code: 0x62 }, // 'b'
-    ])))),                                              // 公式 1
-    buildWmfRecord(0x0521, buildTextOut('ab')),
-    buildWmfRecord(0x0626, buildMathTypeEscape(buildAppsMfcc(buildMtef([
+    ]),
+    ...equationRecords([
       { symbol: true, code: 0x47 },  // 'G' -> 'Γ'
       { symbol: false, code: 0x64 }, // 'd'
-    ])))),                                              // 公式 2
-    buildWmfRecord(0x0521, buildTextOut('Gd')),
+    ]),
     buildWmfRecord(0x0000, []),                          // EOF
   ];
 
@@ -188,8 +201,10 @@ function mathTypeTest() {
       drawer.draw(result, { viewWidth: 800, viewHeight: 600 });
       const svg = svgCtx.getSvg();
       const textNodes = (svg.match(/<text[^>]*>[^<]*<\/text>/g) || []).join(' | ');
-      check('MathType 公式 1 映射为 αb', svg.includes('>αb<'), textNodes);
-      check('MathType 公式 2 映射为 Γd', svg.includes('>Γd<'), textNodes);
+      check('MathType 公式 1 渲染 α', svg.includes('>α<'), textNodes);
+      check('MathType 公式 1 渲染 b', svg.includes('>b<'), textNodes);
+      check('MathType 公式 2 渲染 Γ', svg.includes('>Γ<'), textNodes);
+      check('MathType 公式 2 渲染 d', svg.includes('>d<'), textNodes);
       check('MathType 未出现未映射的原始文本', !svg.includes('>ab<') && !svg.includes('>Gd<'), textNodes);
     } catch (error) {
       check('MathType WMF 渲染不抛错', false, error.message);

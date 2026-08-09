@@ -412,7 +412,9 @@ class WmfDrawer extends BaseDrawer {
   }
 
   mapSymbolString(text) {
-    if (this.currentFontFace !== 'Symbol') return text;
+    // MathType 使用 "Symbol"/"Symbol Tiger Expert" 等 Symbol 字体，
+    // 其编码与 Adobe Symbol 字体一致（PS 名即码位）
+    if (!/symbol/i.test(this.currentFontFace || '')) return text;
     let out = '';
     for (let i = 0; i < text.length; i++) {
       const code = text.charCodeAt(i);
@@ -420,7 +422,7 @@ class WmfDrawer extends BaseDrawer {
         0x41: 'Α', 0x42: 'Β', 0x43: 'Χ', 0x44: 'Δ', 0x45: 'Ε', 0x46: 'Φ', 0x47: 'Γ',
         0x48: 'Η', 0x49: 'Ι', 0x4A: 'ϑ', 0x4B: 'Κ', 0x4C: 'Λ', 0x4D: 'Μ',
         0x4E: 'Ν', 0x4F: 'Ο', 0x50: 'Π', 0x51: 'Θ', 0x52: 'Ρ', 0x53: 'Σ',
-        0x54: 'Τ', 0x55: 'Υ', 0x56: 'ϒ', 0x57: 'Ω', 0x58: 'Ξ', 0x59: 'Ψ',
+        0x54: 'Τ', 0x55: 'Υ', 0x56: 'ς', 0x57: 'Ω', 0x58: 'Ξ', 0x59: 'Ψ',
         0x5A: 'Ζ'
       };
 
@@ -432,13 +434,33 @@ class WmfDrawer extends BaseDrawer {
         0x7A: 'ζ'
       };
 
+      // Windows Symbol / Adobe Symbol 字体编码表。
+      // 码位依据 groff devps/S（Adobe Symbol 的 PS 字符表，octal 码位）：
+      // https://github.com/386bsd/386bsd/blob/master/usr/share/groff_font/devps/S
+      // 0xE6~0xFE 为可扩展括号/积分号的拼装片段（tp=顶/ex=延伸/bt=底/mid=中），
+      // 无 Unicode 等价物，映射为对应括号字符或竖线近似。
       const symbolMap = {
-        0x00B0: '°', 0x00B1: '±', 0x00B2: '≤', 0x00B3: '≥', 0x00B4: '×',
-        0x00B5: 'µ', 0x00B6: '∂', 0x00B7: '·', 0x00B8: '÷', 0x00B9: '≠',
-        0x00BA: '≡', 0x00BB: '≈', 0x00BD: '∞', 0x00BE: '∠', 0x00BF: '∇',
-        0x00D0: '√', 0x00D1: '∫', 0x00D2: '∮', 0x00D3: '∑', 0x00D4: '∏',
-        0x00D5: '∼', 0x00D6: '≅', 0x00D8: '∩', 0x00D9: '∪', 0x00DA: '⊂',
-        0x00DB: '⊃', 0x00DC: '⊆', 0x00DD: '⊇', 0x00DE: '⊕', 0x00DF: '⊗'
+        0x00A1: 'ϒ', 0x00A2: '′', 0x00A3: '≤', 0x00A4: '⁄', 0x00A5: '∞',
+        0x00A6: 'ƒ', 0x00A7: '♣', 0x00A8: '♦', 0x00A9: '♥', 0x00AA: '♠',
+        0x00AB: '↔', 0x00AC: '←', 0x00AD: '↑', 0x00AE: '→', 0x00AF: '↓',
+        0x00B0: '°', 0x00B1: '±', 0x00B2: '″', 0x00B3: '≥', 0x00B4: '×',
+        0x00B5: '∝', 0x00B6: '∂', 0x00B7: '•', 0x00B8: '÷', 0x00B9: '≠',
+        0x00BA: '≡', 0x00BB: '≈', 0x00BC: '…', 0x00BD: '│', 0x00BE: '─',
+        0x00BF: '↵', 0x00C0: 'ℵ', 0x00C1: 'ℑ', 0x00C2: 'ℜ', 0x00C3: '℘',
+        0x00C4: '⊗', 0x00C5: '⊕', 0x00C6: '∅', 0x00C7: '∩', 0x00C8: '∪',
+        0x00C9: '⊃', 0x00CA: '⊇', 0x00CB: '⊄', 0x00CC: '⊂', 0x00CD: '⊆',
+        0x00CE: '∈', 0x00CF: '∉', 0x00D0: '∠', 0x00D1: '∇', 0x00D2: '®',
+        0x00D3: '©', 0x00D4: '™', 0x00D5: '∏', 0x00D6: '√', 0x00D7: '⋅',
+        0x00D8: '¬', 0x00D9: '∧', 0x00DA: '∨', 0x00DB: '⇔', 0x00DC: '⇐',
+        0x00DD: '⇑', 0x00DE: '⇒', 0x00DF: '⇓',
+        0x00E0: '◊', 0x00E1: '⟨', 0x00E2: '®', 0x00E3: '©', 0x00E4: '™',
+        0x00E5: '∑',
+        0x00E6: '(', 0x00E7: '|', 0x00E8: '(', 0x00E9: '[',
+        0x00EA: '|', 0x00EB: '[', 0x00EC: '{', 0x00ED: '|',
+        0x00EE: '{', 0x00EF: '|', 0x00F1: '⟩', 0x00F2: '∫',
+        0x00F3: '∫', 0x00F4: '|', 0x00F5: '∫', 0x00F6: ')',
+        0x00F7: '|', 0x00F8: ')', 0x00F9: ']', 0x00FA: '|',
+        0x00FB: ']', 0x00FC: '}', 0x00FD: '|', 0x00FE: '}'
       };
 
       if (greekUpper[code]) {
@@ -1230,11 +1252,9 @@ class WmfDrawer extends BaseDrawer {
 
     let text = this.readStringFromData(data, 2, textLength);
     text = this.mapMathTypeString(text, textLength);
-    // MathType 文本已在 mapMathTypeString 内按 fontKind 完成 Symbol 映射；
-    // 非 MathType（或 MTEF 流缺失的兜底）才在此按当前字体整体映射
-    if (!this.isMathType || this.mathTypeMtefStreams.length === 0) {
-      text = this.mapSymbolString(text);
-    }
+    // 按当前字体映射 Symbol 字体字符（mapMathTypeString 对 MTEF symbol 字符
+    // 已做同样映射；对已输出的 Unicode 数学字符映射表不会重复修改）
+    text = this.mapSymbolString(text);
     const y = this.readShortFromData(data, 2 + textLength);
     const x = this.readShortFromData(data, 4 + textLength);
 
@@ -1295,10 +1315,8 @@ class WmfDrawer extends BaseDrawer {
     if (data.length < offset + stringLength) return;
     let text = this.readStringFromData(data, offset, stringLength);
     text = this.mapMathTypeString(text, stringLength);
-    // MathType 文本已在 mapMathTypeString 内按 fontKind 完成 Symbol 映射
-    if (!this.isMathType || this.mathTypeMtefStreams.length === 0) {
-      text = this.mapSymbolString(text);
-    }
+    // 按当前字体映射 Symbol 字体字符（含 MathType 的括号/积分拼装片段）
+    text = this.mapSymbolString(text);
 
     // ExtTextOut 的坐标可能是绝对坐标，也可能使用当前位置
     // 如果坐标为 (0, 0)，使用当前画笔位置
