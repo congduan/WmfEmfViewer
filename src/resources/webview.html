@@ -602,7 +602,8 @@
       }
 
       function PdfContext() {
-        this.canvas = { width: 0, height: 0 };
+        // style 对象允许绘制器（baseDrawer.initCanvas）设置 CSS 尺寸而不抛错
+        this.canvas = { width: 0, height: 0, style: {} };
         this.strokeStyle = "#000000";
         this.fillStyle = "#000000";
         this.lineWidth = 1;
@@ -612,6 +613,8 @@
         this._path = [];
         this._stateStack = [];
         this._currentPoint = null;
+        this._ctm = [1, 0, 0, 1, 0, 0]; // PDF 变换矩阵 [a, b, c, d, e, f]
+        this._images = []; // 嵌入的位图 XObject
       }
 
       PdfContext.prototype._formatNumber = function (value) {
@@ -621,6 +624,48 @@
 
       PdfContext.prototype._convertY = function (y) {
         return this.canvas.height - y;
+      };
+
+      // 将逻辑坐标经 CTM 变换并翻转为 PDF 坐标系（原点在左下角）
+      PdfContext.prototype._pt = function (x, y) {
+        const [a, b, c, d, e, f] = this._ctm;
+        return {
+          x: a * x + c * y + e,
+          y: b * x + d * y + f,
+        };
+      };
+
+      // 变换 + 翻转 + 格式化，供路径/文本操作符直接使用
+      PdfContext.prototype._emitPt = function (x, y) {
+        const p = this._pt(x, y);
+        return {
+          x: this._formatNumber(p.x),
+          y: this._formatNumber(this.canvas.height - p.y),
+        };
+      };
+
+      PdfContext.prototype.scale = function (sx, sy) {
+        const [a, b, c, d, e, f] = this._ctm;
+        this._ctm = [a * sx, b * sx, c * sy, d * sy, e, f];
+      };
+
+      PdfContext.prototype.translate = function (tx, ty) {
+        const [a, b, c, d, e, f] = this._ctm;
+        this._ctm = [a, b, c, d, a * tx + c * ty + e, b * tx + d * ty + f];
+      };
+
+      PdfContext.prototype.rotate = function (angle) {
+        const [a, b, c, d, e, f] = this._ctm;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        this._ctm = [
+          a * cos + c * sin,
+          b * cos + d * sin,
+          -a * sin + c * cos,
+          -b * sin + d * cos,
+          e,
+          f,
+        ];
       };
 
       PdfContext.prototype._parseColor = function (style) {
@@ -690,36 +735,31 @@
       };
 
       PdfContext.prototype.moveTo = function (x, y) {
-        const px = this._formatNumber(x);
-        const py = this._formatNumber(this._convertY(y));
-        this._path.push(`${px} ${py} m`);
+        const p = this._emitPt(x, y);
+        this._path.push(`${p.x} ${p.y} m`);
         this._currentPoint = { x, y };
       };
 
       PdfContext.prototype.lineTo = function (x, y) {
-        const px = this._formatNumber(x);
-        const py = this._formatNumber(this._convertY(y));
-        this._path.push(`${px} ${py} l`);
+        const p = this._emitPt(x, y);
+        this._path.push(`${p.x} ${p.y} l`);
         this._currentPoint = { x, y };
       };
 
       PdfContext.prototype.rect = function (x, y, w, h) {
-        const px = this._formatNumber(x);
-        const py = this._formatNumber(this._convertY(y + h));
-        const pw = this._formatNumber(w);
-        const ph = this._formatNumber(h);
-        this._path.push(`${px} ${py} ${pw} ${ph} re`);
+        const p1 = this._emitPt(x, y + h);
+        const p2 = this._emitPt(x + w, y);
+        this._path.push(
+          `${p1.x} ${p1.y} ${this._formatNumber(p2.x - p1.x)} ${this._formatNumber(p2.y - p1.y)} re`,
+        );
         this._currentPoint = { x: x + w, y: y + h };
       };
 
       PdfContext.prototype._bezierTo = function (cp1x, cp1y, cp2x, cp2y, x, y) {
-        const p1x = this._formatNumber(cp1x);
-        const p1y = this._formatNumber(this._convertY(cp1y));
-        const p2x = this._formatNumber(cp2x);
-        const p2y = this._formatNumber(this._convertY(cp2y));
-        const px = this._formatNumber(x);
-        const py = this._formatNumber(this._convertY(y));
-        this._path.push(`${p1x} ${p1y} ${p2x} ${p2y} ${px} ${py} c`);
+        const p1 = this._emitPt(cp1x, cp1y);
+        const p2 = this._emitPt(cp2x, cp2y);
+        const p = this._emitPt(x, y);
+        this._path.push(`${p1.x} ${p1.y} ${p2.x} ${p2.y} ${p.x} ${p.y} c`);
         this._currentPoint = { x, y };
       };
 
@@ -942,6 +982,7 @@
           lineWidth: this.lineWidth,
           font: this.font,
           fillRule: this.fillRule,
+          ctm: this._ctm.slice(),
         });
       };
 
@@ -954,6 +995,7 @@
           this.lineWidth = state.lineWidth;
           this.font = state.font;
           this.fillRule = state.fillRule;
+          this._ctm = state.ctm;
         }
       };
 
@@ -977,14 +1019,67 @@
         const r = this._formatNumber(color.r / 255);
         const g = this._formatNumber(color.g / 255);
         const b = this._formatNumber(color.b / 255);
-        const px = this._formatNumber(x);
-        const py = this._formatNumber(this._convertY(y));
+        const p = this._emitPt(x, y);
         const escaped = String(text)
           .replace(/\\/g, "\\\\")
           .replace(/\(/g, "\\(")
           .replace(/\)/g, "\\)");
         this._commands.push(
-          `BT /F1 ${this._formatNumber(size)} Tf ${r} ${g} ${b} rg 1 0 0 1 ${px} ${py} Tm (${escaped}) Tj ET`,
+          `BT /F1 ${this._formatNumber(size)} Tf ${r} ${g} ${b} rg 1 0 0 1 ${p.x} ${p.y} Tm (${escaped}) Tj ET`,
+        );
+      };
+
+      // 位图输出：支持真实 canvas 与 {width, height, data} ImageData，
+      // 转为 RGB 后作为 PDF 图像 XObject 嵌入（白色背景合成 alpha）
+      PdfContext.prototype.drawImage = function (img, dx, dy, dw, dh) {
+        if (!img) return;
+        let width = img.width;
+        let height = img.height;
+        let data = null;
+
+        if (typeof img.getContext === "function") {
+          const ctx2d = img.getContext("2d");
+          if (ctx2d && typeof ctx2d.getImageData === "function") {
+            const imageData = ctx2d.getImageData(0, 0, img.width, img.height);
+            width = imageData.width;
+            height = imageData.height;
+            data = imageData.data;
+          }
+        } else if (img.data) {
+          data = img.data;
+        }
+
+        if (!data) {
+          // 无法读取像素时用灰色占位，避免导出崩溃
+          const prev = this.fillStyle;
+          this.fillStyle = "#cccccc";
+          this.fillRect(dx, dy, dw || width, dh || height);
+          this.fillStyle = prev;
+          return;
+        }
+
+        // RGBA → RGB（与白色背景合成）
+        const rgb = new Uint8Array(width * height * 3);
+        for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+          const a = data[i + 3] / 255;
+          rgb[j] = Math.round(data[i] * a + 255 * (1 - a));
+          rgb[j + 1] = Math.round(data[i + 1] * a + 255 * (1 - a));
+          rgb[j + 2] = Math.round(data[i + 2] * a + 255 * (1 - a));
+        }
+        this._images.push({ width, height, data: rgb });
+        const index = this._images.length;
+
+        // 目标矩形经 CTM 变换后放置在 PDF 坐标系
+        const tl = this._pt(dx, dy);
+        const br = this._pt(dx + (dw || width), dy + (dh || height));
+        const llx = this._formatNumber(Math.min(tl.x, br.x));
+        const lly = this._formatNumber(
+          this.canvas.height - Math.max(tl.y, br.y),
+        );
+        const w = this._formatNumber(Math.abs(br.x - tl.x));
+        const h = this._formatNumber(Math.abs(br.y - tl.y));
+        this._commands.push(
+          `q ${llx} ${lly} ${w} 0 0 ${h} cm /Im${index} Do Q`,
         );
       };
 
@@ -992,14 +1087,15 @@
         const width = this.canvas.width || 800;
         const height = this.canvas.height || 600;
         const contentStream = this._commands.join("\n") + "\n";
-        return buildPdfFromContent(contentStream, width, height);
+        return buildPdfFromContent(contentStream, width, height, this._images);
       };
 
-      function buildPdfFromContent(contentStream, width, height) {
+      function buildPdfFromContent(contentStream, width, height, images) {
         const encoder = new TextEncoder();
         const parts = [];
         let position = 0;
         const offsets = [0];
+        const imageList = images || [];
 
         function pushString(str) {
           const bytes = encoder.encode(str);
@@ -1019,6 +1115,17 @@
           pushString("\nendobj\n");
         }
 
+        // 图像对象包含二进制流，需按字节写入（TextEncoder 会破坏 >127 的字节）
+        function addImageObject(objNumber, img) {
+          offsets[objNumber] = position;
+          pushString(`${objNumber} 0 obj\n`);
+          pushString(
+            `<< /Type /XObject /Subtype /Image /Width ${img.width} /Height ${img.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length ${img.data.length} >>\nstream\n`,
+          );
+          pushBytes(img.data);
+          pushString("\nendstream\nendobj\n");
+        }
+
         pushString("%PDF-1.4\n");
 
         addObject(1, encoder.encode("<< /Type /Catalog /Pages 2 0 R >>"));
@@ -1027,7 +1134,16 @@
           encoder.encode("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
         );
 
-        const pageDict = `<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /MediaBox [0 0 ${width} ${height}] /Contents 5 0 R >>`;
+        const imageObjStart = 6;
+        const xobjectDict =
+          imageList.length > 0
+            ? " /XObject << " +
+              imageList
+                .map((_, i) => `/Im${i + 1} ${imageObjStart + i} 0 R`)
+                .join(" ") +
+              " >>"
+            : "";
+        const pageDict = `<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >>${xobjectDict} >> /MediaBox [0 0 ${width} ${height}] /Contents 5 0 R >>`;
         addObject(3, encoder.encode(pageDict));
 
         const fontDict =
@@ -1040,6 +1156,8 @@
           5,
           encoder.encode(contentHeader + contentStream + contentFooter),
         );
+
+        imageList.forEach((img, i) => addImageObject(imageObjStart + i, img));
 
         const xrefPosition = position;
         pushString("xref\n");
@@ -1180,86 +1298,23 @@
             }
             return `[文本数据]`;
           case "META_EXTTEXTOUT":
-            // 调试信息
-            console.log("META_EXTTEXTOUT data length:", data.length);
-            console.log("META_EXTTEXTOUT data:", Array.from(data));
-
-            // 尝试多种方法解析文本数据
-            // 方法1: 标准结构 (保留2字节 + 选项2字节 + RECT 8字节 + 长度2字节 = 14字节)
+            // META_EXTTEXTOUT 结构: 保留字节(2) + 选项(2) + 边界RECT(8) + 字符串长度(2) + 文本数据
             if (data.length >= 14) {
               const length = data[12] | (data[13] << 8);
-              console.log("Method 1 - Length from header:", length);
-
-              if (data.length >= 14 + length && length > 0) {
+              if (length > 0 && data.length >= 14 + length) {
                 try {
-                  const textData = data.slice(14, 14 + length);
-                  console.log("Method 1 - Text data:", Array.from(textData));
                   const text = new TextDecoder("ascii")
-                    .decode(textData)
+                    .decode(data.slice(14, 14 + length))
                     .replace(/\0/g, "")
                     .replace(/[\x00-\x1F]/g, "");
-                  console.log("Method 1 - Decoded text:", text);
                   if (text.length > 0) {
                     return `"${text}"`;
                   }
                 } catch (e) {
-                  console.log("Method 1 failed:", e.message);
+                  return `[文本数据]`;
                 }
               }
             }
-
-            // 方法2: 尝试从不同位置提取文本
-            // 假设文本从第12字节开始
-            if (data.length >= 12) {
-              console.log("Method 2 - Trying from offset 12");
-              try {
-                const textData = data.slice(12);
-                const text = new TextDecoder("ascii")
-                  .decode(textData)
-                  .replace(/\0/g, "")
-                  .replace(/[\x00-\x1F]/g, "");
-                console.log("Method 2 - Decoded text:", text);
-                if (text.length > 0) {
-                  return `"${text}"`;
-                }
-              } catch (e) {
-                console.log("Method 2 failed:", e.message);
-              }
-            }
-
-            // 方法3: 尝试从第8字节开始
-            if (data.length >= 8) {
-              console.log("Method 3 - Trying from offset 8");
-              try {
-                const textData = data.slice(8);
-                const text = new TextDecoder("ascii")
-                  .decode(textData)
-                  .replace(/\0/g, "")
-                  .replace(/[\x00-\x1F]/g, "");
-                console.log("Method 3 - Decoded text:", text);
-                if (text.length > 0) {
-                  return `"${text}"`;
-                }
-              } catch (e) {
-                console.log("Method 3 failed:", e.message);
-              }
-            }
-
-            // 方法4: 尝试整个数据的ASCII解码
-            console.log("Method 4 - Trying entire data");
-            try {
-              const text = new TextDecoder("ascii")
-                .decode(data)
-                .replace(/\0/g, "")
-                .replace(/[\x00-\x1F]/g, "");
-              console.log("Method 4 - Decoded text:", text);
-              if (text.length > 0) {
-                return `"${text}"`;
-              }
-            } catch (e) {
-              console.log("Method 4 failed:", e.message);
-            }
-
             return `[文本数据]`;
           case "EMR_EXTTEXTOUTA":
             // EMR_EXTTEXTOUTA 结构: 各种参数后跟ASCII文本

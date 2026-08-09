@@ -17,20 +17,11 @@
     "Visualization"
   ],
   "activationEvents": [
-    "onView:wmfViewer",
     "onCommand:wmfViewer.preview",
     "onFileSystem:file"
   ],
   "main": "./out/extension.js",
   "contributes": {
-    "views": {
-      "explorer": [
-        {
-          "id": "wmfViewer",
-          "name": "WMF Viewer"
-        }
-      ]
-    },
     "commands": [
       {
         "command": "wmfViewer.preview",

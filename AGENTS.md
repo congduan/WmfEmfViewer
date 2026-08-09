@@ -247,7 +247,7 @@ node test/test-all-formats.js
 ## VSCode Extension Specifics
 
 ### Extension Manifest (package.json)
-- **Activation Events**: `onView:wmfViewer`, `onCommand:wmfViewer.preview`, `onFileSystem:file`
+- **Activation Events**: `onCommand:wmfViewer.preview`, `onFileSystem:file`
 - **Main Entry**: `./out/extension.js`
 - **Custom Editor**: `wmfViewer.editor` for `.wmf` and `.emf` files
 - **Contributions**: 

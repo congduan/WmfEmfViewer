@@ -8,3 +8,23 @@ docs/**
 test/**
 test_files/**
 scripts/**
+
+# 源码无需打包：逻辑已编译到 out/，运行只需 webview.html 与图标
+src/**
+!src/resources/webview.html
+!src/resources/icon.png
+
+# 陈旧/试验构建产物与调试文件不进包
+out/wmfParser.js
+out/wmfParser.js.map
+out/svg-feasibility/**
+out/**/*.js.map
+
+# 市场截图使用 GitHub 绝对 URL，本地副本无需进包
+screenshots/**
+
+# 工程配置与开发文档无需进包
+tsconfig.json
+.eslintrc.js
+.gitignore
+AGENTS.md
