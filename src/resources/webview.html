@@ -33,51 +33,116 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 20px;
-        padding-bottom: 10px;
-        border-bottom: 1px solid #e0e0e0;
+        gap: 16px;
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #e8e8e8;
       }
       .title {
-        font-size: 18px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 17px;
         font-weight: 600;
         color: #1976d2;
+        white-space: nowrap;
+      }
+      .title::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #1976d2;
       }
       .toolbar {
         display: flex;
-        gap: 10px;
+        flex-wrap: wrap;
+        gap: 12px;
         align-items: center;
+        justify-content: flex-end;
+      }
+      .toolbar-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .toolbar-divider {
+        width: 1px;
+        height: 24px;
+        background: #e0e0e0;
+        flex-shrink: 0;
       }
       button {
-        padding: 8px 16px;
+        height: 32px;
+        padding: 0 14px;
         background-color: #1976d2;
-        color: white;
+        color: #fff;
         border: none;
-        border-radius: 4px;
+        border-radius: 6px;
         cursor: pointer;
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 500;
-        transition: all 0.2s ease;
+        transition:
+          background-color 0.15s ease,
+          transform 0.1s ease,
+          box-shadow 0.15s ease;
       }
       button:hover {
         background-color: #1565c0;
-        transform: translateY(-1px);
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        box-shadow: 0 2px 6px rgba(25, 118, 210, 0.25);
       }
       button:active {
-        transform: translateY(0);
+        transform: translateY(1px);
+      }
+      button:focus-visible,
+      select:focus-visible,
+      .debug-toggle:focus-within {
+        outline: 2px solid #90caf9;
+        outline-offset: 1px;
       }
       select {
-        padding: 8px 10px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-        background-color: white;
-        font-size: 14px;
+        height: 32px;
+        padding: 0 8px;
+        border: 1px solid #d0d0d0;
+        border-radius: 6px;
+        background-color: #fff;
+        font-size: 13px;
         color: #333;
         cursor: pointer;
+        transition: border-color 0.15s ease;
+      }
+      select:hover {
+        border-color: #1976d2;
       }
       select:focus {
         outline: none;
         border-color: #1976d2;
+      }
+      .debug-toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 10px;
+        border: 1px solid #d0d0d0;
+        border-radius: 6px;
+        background: #fafafa;
+        font-size: 13px;
+        color: #555;
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+        transition:
+          border-color 0.15s ease,
+          background-color 0.15s ease;
+      }
+      .debug-toggle:hover {
+        border-color: #1976d2;
+        background: #f0f7ff;
+      }
+      .debug-toggle input {
+        cursor: pointer;
+        accent-color: #1976d2;
       }
       .canvas-section {
         flex: 1;
@@ -226,13 +291,22 @@
         <div class="header">
           <div class="title">WMF/EMF Viewer</div>
           <div class="toolbar">
-            <select id="renderMode" title="选择渲染器">
-              <option value="canvas">Canvas 渲染</option>
-              <option value="svg">SVG 渲染</option>
-            </select>
-            <button id="exportPngBtn">导出为PNG</button>
-            <button id="exportPdfBtn">导出为PDF</button>
-            <button id="exportSvgBtn">导出为SVG</button>
+            <div class="toolbar-group">
+              <select id="renderMode" title="选择渲染器">
+                <option value="canvas">Canvas 渲染</option>
+                <option value="svg">SVG 渲染</option>
+              </select>
+              <label class="debug-toggle" title="显示/隐藏指令列表和调试日志">
+                <input type="checkbox" id="debugToggle" />
+                调试信息
+              </label>
+            </div>
+            <div class="toolbar-divider"></div>
+            <div class="toolbar-group">
+              <button id="exportPngBtn" title="导出为PNG">PNG</button>
+              <button id="exportPdfBtn" title="导出为PDF">PDF</button>
+              <button id="exportSvgBtn" title="导出为SVG">SVG</button>
+            </div>
           </div>
         </div>
         <div class="canvas-section">
@@ -261,11 +335,25 @@
     </div>
     <script src="metafileParser.browser.js"></script>
     <script>
+      // 调试信息是否可见（默认关闭：隐藏指令列表和日志，只显示渲染画面）
+      let debugInfoVisible = false;
+
+      // 根据开关状态控制指令列表与日志面板的显示
+      function updateDebugVisibility() {
+        const sidebar = document.querySelector(".sidebar");
+        const debugEl = document.getElementById("debug");
+        sidebar.style.display = debugInfoVisible ? "flex" : "none";
+        debugEl.style.display =
+          debugInfoVisible && debugEl.textContent ? "block" : "none";
+      }
+
       // 显示调试信息
       function showDebug(message) {
         const debugDiv = document.getElementById("debug");
         debugDiv.textContent += message + "\n";
-        debugDiv.style.display = "block";
+        if (debugInfoVisible) {
+          debugDiv.style.display = "block";
+        }
       }
 
       // 检查脚本是否加载
@@ -1386,6 +1474,12 @@
         .getElementById("renderMode")
         .addEventListener("change", renderPreview);
       document
+        .getElementById("debugToggle")
+        .addEventListener("change", function () {
+          debugInfoVisible = this.checked;
+          updateDebugVisibility();
+        });
+      document
         .getElementById("exportPngBtn")
         .addEventListener("click", exportToPNG);
       document
@@ -1394,6 +1488,9 @@
       document
         .getElementById("exportSvgBtn")
         .addEventListener("click", exportToSVG);
+
+      // 默认隐藏调试信息（开关默认关闭）
+      updateDebugVisibility();
 
       // 执行预览
       try {
