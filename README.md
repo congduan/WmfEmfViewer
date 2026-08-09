@@ -2,6 +2,8 @@
 
 A Visual Studio Code extension for previewing **WMF** (Windows Metafile), **EMF** (Enhanced Metafile) and **EMF+** images directly in the editor.
 
+[![Publish status](https://img.shields.io/github/actions/workflow/status/congduan/WmfEmfViewer/publish.yml)](https://github.com/congduan/WmfEmfViewer/actions)
+
 ![WMF/EMF Viewer preview](./screenshots/1.png)
 
 ## Features
