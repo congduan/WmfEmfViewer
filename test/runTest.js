@@ -77,6 +77,123 @@ function smokeTest(fileName, expectedType, minRecords) {
   }
 }
 
+// ---- 合成包含多个 MathType 公式的 WMF ----
+// MathType 公式以 AppsMFCC/MTEF 注释块（META_ESCAPE/MFCOMMENT 0x000F）嵌入 WMF，
+// 每个公式对应一个注释块 + 一组按 MTEF 字符流编码的 META_TEXTOUT 记录。
+// 用例：公式 1（Symbol 'a'->α + 正文 'b'），公式 2（Symbol 'G'->Γ + 正文 'd'）
+function u16(v) {
+  return [v & 0xFF, (v >> 8) & 0xFF];
+}
+function u32(v) {
+  return [v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF];
+}
+function i16(v) {
+  return u16(v < 0 ? v + 0x10000 : v);
+}
+
+// 构造 MTEF 字节：MTEF v3 头 + Symbol 字体定义 + CHAR 列表 + END
+function buildMtef(chars) {
+  const bytes = [3, 0, 0, 0, 0];
+  bytes.push(0x08, 6, 0); // FONT record: typefaceNum=6, style=0
+  'Symbol\0'.split('').forEach(c => bytes.push(c.charCodeAt(0)));
+  for (const c of chars) {
+    bytes.push(0x02); // CHAR record
+    bytes.push(c.symbol ? 6 + 128 : 128); // typeface: 6=Symbol, 0=正文
+    bytes.push(c.code & 0xFF, (c.code >> 8) & 0xFF);
+  }
+  bytes.push(0x00); // END record
+  return bytes;
+}
+
+// 构造 AppsMFCC 注释块：AppsMFCC + version(2) + totalLen(4) + dataLen(4) + "MTEF5\0" + MTEF 数据
+function buildAppsMfcc(mtefBytes) {
+  const head = [];
+  'AppsMFCC'.split('').forEach(c => head.push(c.charCodeAt(0)));
+  head.push(...u16(0x0003));          // version
+  head.push(...u32(mtefBytes.length + 6)); // totalLen
+  head.push(...u32(mtefBytes.length));     // dataLen
+  'MTEF5\0'.split('').forEach(c => head.push(c.charCodeAt(0)));
+  return head.concat(mtefBytes);
+}
+
+// META_ESCAPE 记录 data：escapeFunction(2) + byteCount(2) + commentData
+function buildMathTypeEscape(commentData) {
+  return u16(0x000F).concat(u16(commentData.length), commentData);
+}
+
+// META_TEXTOUT 记录 data：textLength(2) + text + y(2) + x(2)
+function buildTextOut(text) {
+  const t = text.split('').map(c => c.charCodeAt(0));
+  return u16(t.length).concat(t, i16(50), i16(50));
+}
+
+// 封装 WMF 记录：Size(DWORD, words) + Function(WORD) + data
+function buildWmfRecord(funcId, dataBytes) {
+  while (dataBytes.length % 2 !== 0) dataBytes.push(0);
+  return u32(3 + dataBytes.length / 2).concat(u16(funcId), dataBytes);
+}
+
+// 构建含 2 个 MathType 公式的标准 WMF
+function buildMathTypeWmf() {
+  const header = u16(0x0001).concat(u16(0x0009), u16(0x0300), u32(0), u16(0), u32(0), u16(0));
+
+  // CREATEFONTINDIRECT: height=20, faceName="Symbol"
+  const fontData = i16(20).concat(u16(0), u16(0), u16(0), u16(400), [0, 0, 0, 2, 0, 0, 0, 0]);
+  'Symbol\0'.split('').forEach(c => fontData.push(c.charCodeAt(0)));
+
+  const records = [
+    buildWmfRecord(0x020B, i16(0).concat(i16(0))),     // SETWINDOWORG: y, x
+    buildWmfRecord(0x020C, i16(100).concat(i16(500))), // SETWINDOWEXT: y=100, x=500
+    buildWmfRecord(0x02FB, fontData),                  // CREATEFONTINDIRECT (Symbol)
+    buildWmfRecord(0x012D, u16(0)),                    // SELECTOBJECT 0 -> Symbol 字体
+    buildWmfRecord(0x0626, buildMathTypeEscape(buildAppsMfcc(buildMtef([
+      { symbol: true, code: 0x61 },  // 'a' -> 'α'
+      { symbol: false, code: 0x62 }, // 'b'
+    ])))),                                              // 公式 1
+    buildWmfRecord(0x0521, buildTextOut('ab')),
+    buildWmfRecord(0x0626, buildMathTypeEscape(buildAppsMfcc(buildMtef([
+      { symbol: true, code: 0x47 },  // 'G' -> 'Γ'
+      { symbol: false, code: 0x64 }, // 'd'
+    ])))),                                              // 公式 2
+    buildWmfRecord(0x0521, buildTextOut('Gd')),
+    buildWmfRecord(0x0000, []),                          // EOF
+  ];
+
+  const bytes = header.concat(...records);
+  const sizeWords = bytes.length / 2;
+  bytes[6] = sizeWords & 0xFF;
+  bytes[7] = (sizeWords >> 8) & 0xFF;
+  return new Uint8Array(bytes);
+}
+
+// MathType 多公式测试：验证 bundle 修复（无崩溃）+ 多 MTEF 流按序映射
+function mathTypeTest() {
+  check('MathTypeMtefParser 已打入 bundle', !!window.MathTypeMtefParser,
+    '缺少则 webview 渲染 MathType WMF 会 ReferenceError');
+
+  const wmfBytes = buildMathTypeWmf();
+  const parser = new MetafileParser(wmfBytes);
+  const result = parser.parse();
+  check('MathType WMF 文件类型检测', parser.fileType === 'wmf', parser.fileType);
+  check('MathType WMF 解析无错误', !result.error, result.error || '');
+  check('MathType WMF 记录数', result.records.length >= 9, `实际 ${result.records.length}`);
+
+  if (!result.error) {
+    try {
+      const svgCtx = new SvgContext();
+      const drawer = new WmfDrawer(svgCtx);
+      drawer.draw(result, { viewWidth: 800, viewHeight: 600 });
+      const svg = svgCtx.getSvg();
+      const textNodes = (svg.match(/<text[^>]*>[^<]*<\/text>/g) || []).join(' | ');
+      check('MathType 公式 1 映射为 αb', svg.includes('>αb<'), textNodes);
+      check('MathType 公式 2 映射为 Γd', svg.includes('>Γd<'), textNodes);
+      check('MathType 未出现未映射的原始文本', !svg.includes('>ab<') && !svg.includes('>Gd<'), textNodes);
+    } catch (error) {
+      check('MathType WMF 渲染不抛错', false, error.message);
+    }
+  }
+}
+
 console.log('='.repeat(70));
 console.log('WMF/EMF/EMF+ 冒烟测试');
 console.log('='.repeat(70));
@@ -91,6 +208,9 @@ check('EmfDrawer 存在', !!EmfDrawer);
 smokeTest('sample.wmf', 'placeable-wmf', 200);
 smokeTest('media/image1.wmf', 'placeable-wmf', 5);
 smokeTest('example.emf', 'emf', 100);
+
+// 3. MathType 多公式测试
+mathTypeTest();
 
 console.log('\n' + '='.repeat(70));
 console.log(`结果: ${passed} 通过, ${failed} 失败`);

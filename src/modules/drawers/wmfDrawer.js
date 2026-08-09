@@ -29,24 +29,16 @@ class WmfDrawer extends BaseDrawer {
     // 初始化画布，传入view尺寸
     this.initCanvas(metafileData, options);
 
-    // 预扫描 MFCOMMENT，提前识别 MathType 私有编码并提取 MTEF
+    // 预扫描 MFCOMMENT，提前识别 MathType 私有编码（仅标记；字符流由渲染循环的 processEscape 按序收集）
     this.isMathType = false;
-    this.mathTypeMtefStream = null;
-    this.mathTypeMtefIndex = 0;
+    this.mathTypeMtefStreams = []; // 每个 MathType 公式的 MTEF 字符流队列
+    this.mathTypeMtefStreamIndex = 0; // 当前字符流索引
+    this.mathTypeMtefIndex = 0; // 当前字符流内索引
     for (let i = 0; i < metafileData.records.length; i++) {
       const record = metafileData.records[i];
       if (record.functionId === 0x0626) { // META_ESCAPE
         const mtefBytes = this.extractMathTypeMtef(record.data);
-        if (mtefBytes) {
-          this.isMathType = true;
-          const parsed = new MathTypeMtefParser(mtefBytes).parse();
-          if (parsed && Array.isArray(parsed.chars) && parsed.chars.length > 0) {
-            this.mathTypeMtefStream = parsed.chars;
-            this.mathTypeMtefIndex = 0;
-          }
-          console.log('MathType comment detected (pre-scan)');
-          break;
-        } else if (this.isMathTypeComment(record.data)) {
+        if (mtefBytes || this.isMathTypeComment(record.data)) {
           this.isMathType = true;
           console.log('MathType comment detected (pre-scan)');
           break;
@@ -1227,7 +1219,11 @@ class WmfDrawer extends BaseDrawer {
 
     let text = this.readStringFromData(data, 2, textLength);
     text = this.mapMathTypeString(text, textLength);
-    text = this.mapSymbolString(text);
+    // MathType 文本已在 mapMathTypeString 内按 fontKind 完成 Symbol 映射；
+    // 非 MathType（或 MTEF 流缺失的兜底）才在此按当前字体整体映射
+    if (!this.isMathType || this.mathTypeMtefStreams.length === 0) {
+      text = this.mapSymbolString(text);
+    }
     const y = this.readShortFromData(data, 2 + textLength);
     const x = this.readShortFromData(data, 4 + textLength);
 
@@ -1288,7 +1284,10 @@ class WmfDrawer extends BaseDrawer {
     if (data.length < offset + stringLength) return;
     let text = this.readStringFromData(data, offset, stringLength);
     text = this.mapMathTypeString(text, stringLength);
-    text = this.mapSymbolString(text);
+    // MathType 文本已在 mapMathTypeString 内按 fontKind 完成 Symbol 映射
+    if (!this.isMathType || this.mathTypeMtefStreams.length === 0) {
+      text = this.mapSymbolString(text);
+    }
 
     // ExtTextOut 的坐标可能是绝对坐标，也可能使用当前位置
     // 如果坐标为 (0, 0)，使用当前画笔位置
@@ -1385,15 +1384,15 @@ class WmfDrawer extends BaseDrawer {
     const escapeFunction = this.readWordFromData(data, 0);
     console.log('Escape function:', escapeFunction, '(0x' + escapeFunction.toString(16).padStart(4, '0') + ')');
 
-    // MFCOMMENT (0x000F) - 在标准 WMF 模式下跳过
+    // MFCOMMENT (0x000F) - 包含 MathType 私有编码（每个公式一个 AppsMFCC/MTEF 块）
     if (escapeFunction === 0x000F) {
       const mtefBytes = this.extractMathTypeMtef(data);
       if (mtefBytes) {
         this.isMathType = true;
         const parsed = new MathTypeMtefParser(mtefBytes).parse();
         if (parsed && Array.isArray(parsed.chars) && parsed.chars.length > 0) {
-          this.mathTypeMtefStream = parsed.chars;
-          this.mathTypeMtefIndex = 0;
+          // 收集为独立字符流：一个 WMF 可含多个公式（每个公式一个 AppsMFCC 注释）
+          this.mathTypeMtefStreams.push(parsed.chars);
         }
         console.log('MathType comment detected');
       } else if (this.isMathTypeComment(data)) {
@@ -1469,7 +1468,15 @@ class WmfDrawer extends BaseDrawer {
 
   mapMathTypeString(text, rawLength) {
     if (!this.isMathType || !text) return text;
-    if (!this.mathTypeMtefStream) {
+
+    // 跳过已耗尽的字符流，切换到下一个公式
+    while (this.mathTypeMtefStreamIndex < this.mathTypeMtefStreams.length &&
+      this.mathTypeMtefIndex >= this.mathTypeMtefStreams[this.mathTypeMtefStreamIndex].length) {
+      this.mathTypeMtefStreamIndex++;
+      this.mathTypeMtefIndex = 0;
+    }
+
+    if (this.mathTypeMtefStreamIndex >= this.mathTypeMtefStreams.length) {
       // Fallback: minimal MathType private mapping when MFCC payload has no MTEF stream
       const face = (this.currentFontFace || '').toLowerCase();
       if (face === 'times new roman') {
@@ -1483,8 +1490,13 @@ class WmfDrawer extends BaseDrawer {
     const out = [];
     const count = rawLength || text.length;
     for (let i = 0; i < count; i++) {
-      if (this.mathTypeMtefIndex >= this.mathTypeMtefStream.length) break;
-      const item = this.mathTypeMtefStream[this.mathTypeMtefIndex++];
+      // 当前流耗尽时自动切换到下一个公式的字符流
+      if (this.mathTypeMtefIndex >= this.mathTypeMtefStreams[this.mathTypeMtefStreamIndex].length) {
+        this.mathTypeMtefStreamIndex++;
+        this.mathTypeMtefIndex = 0;
+        if (this.mathTypeMtefStreamIndex >= this.mathTypeMtefStreams.length) break;
+      }
+      const item = this.mathTypeMtefStreams[this.mathTypeMtefStreamIndex][this.mathTypeMtefIndex++];
       if (!item || !item.char) break;
       if (item.fontKind === 'symbol') {
         out.push(this.mapSymbolString(item.char));

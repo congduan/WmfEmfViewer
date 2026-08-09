@@ -25,6 +25,11 @@ function buildBrowserBundle() {
   let coordinateTransformerContent = fs.readFileSync(coordinateTransformerPath, 'utf8');
   coordinateTransformerContent = removeNodeModuleSyntax(coordinateTransformerContent);
 
+  // 读取 MathType MTEF 解析模块（wmfDrawer 运行时依赖，必须打入 bundle）
+  const mathTypeMtefParserPath = path.join(__dirname, '..', 'utils', 'mathTypeMtefParser.js');
+  let mathTypeMtefParserContent = fs.readFileSync(mathTypeMtefParserPath, 'utf8');
+  mathTypeMtefParserContent = removeNodeModuleSyntax(mathTypeMtefParserContent);
+
   // 读取GDI对象管理器模块
   const gdiObjectManagerPath = path.join(__dirname, '..', 'utils', 'gdiObjectManager.js');
   let gdiObjectManagerContent = fs.readFileSync(gdiObjectManagerPath, 'utf8');
@@ -82,6 +87,8 @@ function buildBrowserBundle() {
 ${fileTypeDetectorContent}
 
 ${coordinateTransformerContent}
+
+${mathTypeMtefParserContent}
 
 ${gdiObjectManagerContent}
 
@@ -201,6 +208,7 @@ if (typeof window !== 'undefined') {
     window.MetafileParser = MetafileParser;
     window.FileTypeDetector = FileTypeDetector;
     window.CoordinateTransformer = CoordinateTransformer;
+    window.MathTypeMtefParser = MathTypeMtefParser;
     window.GdiObjectManager = GdiObjectManager;
     window.BaseParser = BaseParser;
     window.WmfParser = WmfParser;
