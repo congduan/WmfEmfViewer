@@ -2,7 +2,7 @@
 
 Preview **WMF** (Windows Metafile), **EMF** (Enhanced Metafile) and **EMF+** images directly in VS Code — no external tools needed.
 
-![WMF/EMF Viewer preview](./screenshots/1.png)
+![WMF/EMF Viewer preview](https://raw.githubusercontent.com/congduan/WmfEmfViewer/master/screenshots/1.png)
 
 ## Features
 
@@ -51,7 +51,7 @@ Simply click a `.wmf` or `.emf` file in the Explorer. It opens in the WMF/EMF Vi
 
 Right-click a `.wmf` or `.emf` file and choose **"Preview WMF/EMF Image"** to open it in a preview tab.
 
-![WMF/EMF Viewer preview](./screenshots/2.png)
+![WMF/EMF Viewer preview](https://raw.githubusercontent.com/congduan/WmfEmfViewer/master/screenshots/2.png)
 
 ## Requirements
 
