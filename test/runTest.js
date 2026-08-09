@@ -91,15 +91,18 @@ function i16(v) {
   return u16(v < 0 ? v + 0x10000 : v);
 }
 
-// 构造 MTEF 字节：MTEF v3 头 + Symbol 字体定义 + CHAR 列表 + END
+// 构造 MTEF 字节（真实 MathType 5/6 格式）：
+// 头部 = version+platform+product+productVersion+productSubVersion + applicationKey("DSMT6\0") + inline(1)
+// CHAR = type(2) + options(0) + typeface(6=Symbol / 1=Text) + MTCode(1)
 function buildMtef(chars) {
-  const bytes = [3, 0, 0, 0, 0];
-  bytes.push(0x08, 6, 0); // FONT record: typefaceNum=6, style=0
-  'Symbol\0'.split('').forEach(c => bytes.push(c.charCodeAt(0)));
+  const bytes = [5, 1, 0, 6, 8];
+  'DSMT6\0'.split('').forEach(c => bytes.push(c.charCodeAt(0)));
+  bytes.push(1); // inline
   for (const c of chars) {
     bytes.push(0x02); // CHAR record
-    bytes.push(c.symbol ? 6 + 128 : 128); // typeface: 6=Symbol, 0=正文
-    bytes.push(c.code & 0xFF, (c.code >> 8) & 0xFF);
+    bytes.push(0x00); // options（无 nudge、单字节 MTCode）
+    bytes.push(c.symbol ? 6 : 1); // typeface: 6=Symbol, 1=Text
+    bytes.push(c.code & 0xFF); // MTCode（1 字节）
   }
   bytes.push(0x00); // END record
   return bytes;
@@ -211,6 +214,42 @@ smokeTest('example.emf', 'emf', 100);
 
 // 3. MathType 多公式测试
 mathTypeTest();
+
+// 4. 真实 MathType WMF 测试（下载自 mathtype_wmf_appsmfcc_extractor 示例）
+function realMathTypeTest() {
+  const filePath = path.join(__dirname, '..', 'test_files', 'mathtype', 'example.wmf');
+  if (!fs.existsSync(filePath)) {
+    check('真实 MathType 示例文件存在', false, 'test_files/mathtype/example.wmf 缺失');
+    return;
+  }
+
+  const buffer = fs.readFileSync(filePath);
+  const data = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const parser = new MetafileParser(data);
+  const result = parser.parse();
+  check('真实 MathType WMF 解析无错误', !result.error, result.error || '');
+  check('真实 MathType WMF 文件类型', parser.fileType === 'placeable-wmf', parser.fileType);
+  if (result.error) return;
+
+  try {
+    const svgCtx = new SvgContext();
+    const drawer = new WmfDrawer(svgCtx);
+    drawer.draw(result, { viewWidth: 800, viewHeight: 600 });
+    check('真实 MathType WMF 渲染不抛错', true);
+    check('真实 MathType WMF 识别为 MathType', drawer.isMathType === true);
+    check('真实 MathType WMF 提取到 MTEF 流', drawer.mathTypeMtefStreams.length > 0,
+      `流数 ${drawer.mathTypeMtefStreams.length}`);
+    const stream = drawer.mathTypeMtefStreams[0] || [];
+    check('真实 MathType MTEF 流含字符', stream.length > 0,
+      `字符数 ${stream.length}`);
+    const svg = svgCtx.getSvg();
+    check('真实 MathType SVG 生成', svg.includes('<svg') && svg.length > 200,
+      `${svg.length} 字节`);
+  } catch (error) {
+    check('真实 MathType WMF 渲染不抛错', false, error.message);
+  }
+}
+realMathTypeTest();
 
 console.log('\n' + '='.repeat(70));
 console.log(`结果: ${passed} 通过, ${failed} 失败`);

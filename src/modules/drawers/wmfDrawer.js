@@ -29,21 +29,32 @@ class WmfDrawer extends BaseDrawer {
     // 初始化画布，传入view尺寸
     this.initCanvas(metafileData, options);
 
-    // 预扫描 MFCOMMENT，提前识别 MathType 私有编码（仅标记；字符流由渲染循环的 processEscape 按序收集）
+    // 预扫描 MFCOMMENT，识别 MathType 私有编码并收集全部 MTEF 字符流。
+    // 真实 MathType 文件将 AppsMFCC 注释放在 WMF 末尾（绘制命令之后），
+    // 因此必须在渲染前完成流收集，渲染时再按公式顺序消费。
     this.isMathType = false;
     this.mathTypeMtefStreams = []; // 每个 MathType 公式的 MTEF 字符流队列
     this.mathTypeMtefStreamIndex = 0; // 当前字符流索引
     this.mathTypeMtefIndex = 0; // 当前字符流内索引
+    this.appsMfccSkipping = 0; // 多块 MathML 注释剩余待跳过的数据字节数
     for (let i = 0; i < metafileData.records.length; i++) {
       const record = metafileData.records[i];
       if (record.functionId === 0x0626) { // META_ESCAPE
         const mtefBytes = this.extractMathTypeMtef(record.data);
-        if (mtefBytes || this.isMathTypeComment(record.data)) {
+        if (mtefBytes) {
           this.isMathType = true;
-          console.log('MathType comment detected (pre-scan)');
-          break;
+          const parsed = new MathTypeMtefParser(mtefBytes).parse();
+          if (parsed && Array.isArray(parsed.chars) && parsed.chars.length > 0) {
+            this.mathTypeMtefStreams.push(parsed.chars);
+          }
+        }
+        if (this.isMathTypeComment(record.data)) {
+          this.isMathType = true;
         }
       }
+    }
+    if (this.isMathType) {
+      console.log('MathType 注释检测到，收集 MTEF 流数:', this.mathTypeMtefStreams.length);
     }
 
     // 启用 EMF+ Dual 检测，某些文件包含EMF+数据
@@ -1384,18 +1395,10 @@ class WmfDrawer extends BaseDrawer {
     const escapeFunction = this.readWordFromData(data, 0);
     console.log('Escape function:', escapeFunction, '(0x' + escapeFunction.toString(16).padStart(4, '0') + ')');
 
-    // MFCOMMENT (0x000F) - 包含 MathType 私有编码（每个公式一个 AppsMFCC/MTEF 块）
+    // MFCOMMENT (0x000F) - MathType 私有编码。
+    // AppsMFCC/MTEF 流已在 draw() 预扫描阶段收集，这里仅标记类型。
     if (escapeFunction === 0x000F) {
-      const mtefBytes = this.extractMathTypeMtef(data);
-      if (mtefBytes) {
-        this.isMathType = true;
-        const parsed = new MathTypeMtefParser(mtefBytes).parse();
-        if (parsed && Array.isArray(parsed.chars) && parsed.chars.length > 0) {
-          // 收集为独立字符流：一个 WMF 可含多个公式（每个公式一个 AppsMFCC 注释）
-          this.mathTypeMtefStreams.push(parsed.chars);
-        }
-        console.log('MathType comment detected');
-      } else if (this.isMathTypeComment(data)) {
+      if (this.isMathTypeComment(data)) {
         this.isMathType = true;
         console.log('MathType comment detected');
       } else {
@@ -1424,30 +1427,48 @@ class WmfDrawer extends BaseDrawer {
 
     if (!startsWithApps) return null;
 
-    let offset = idBytes.length;
-    if (offset + 2 + 4 + 4 > commentData.length) return null;
+    return this._consumeAppsMfcc(commentData);
+  }
 
-    const version = commentData[offset] | (commentData[offset + 1] << 8);
-    offset += 2;
-    const totalLen = this.readDwordFromData(commentData, offset);
-    offset += 4;
-    const dataLen = this.readDwordFromData(commentData, offset);
-    offset += 4;
+  // 解析 AppsMFCC 注释并返回 MTEF 字节：
+  // - 注释内容为 MathML（以 "<?xml" 开头）或分块 MathML 时返回 null
+  // - MTEF 数据可能分为多块（totalLen > dataLen），本例按需处理单块
+  // 真实 MathType 文件（6.0b+）的 signature 通常为 "Design Science, Inc."，
+  // 而非 "Wiris/MTEF"，因此按内容而非签名判定类型。
+  _consumeAppsMfcc(commentData) {
+    // AppsMFCC 头：id(8) + version(2) + totalLen(4) + dataLen(4) + signature(null 结尾) + data
+    let offset = 8;
+    if (offset + 10 > commentData.length) return null;
+    const totalLen = this.readDwordFromData(commentData, offset + 2);
+    const dataLen = this.readDwordFromData(commentData, offset + 6);
+    offset += 10;
+    // 跳过 null 结尾的 signature
+    while (offset < commentData.length && commentData[offset] !== 0) offset++;
+    offset++;
+    if (offset + dataLen > commentData.length) return null;
+    const payload = commentData.slice(offset, offset + dataLen);
 
-    // Signature is null-terminated string
-    let signature = '';
-    while (offset < commentData.length) {
-      const b = commentData[offset++];
-      if (b === 0) break;
-      if (b >= 32 && b <= 126) signature += String.fromCharCode(b);
+    // 正处于未完成的多块 MathML 注释中：跳过剩余块
+    if (this.appsMfccSkipping > 0) {
+      this.appsMfccSkipping -= dataLen;
+      if (this.appsMfccSkipping < 0) this.appsMfccSkipping = 0;
+      return null;
     }
 
-    if (!signature.includes('MTEF')) return null;
-    if (offset + dataLen > commentData.length) return null;
+    const isXml = payload.length >= 5 &&
+      payload[0] === 0x3C && payload[1] === 0x3F && payload[2] === 0x78 &&
+      payload[3] === 0x6D && payload[4] === 0x6C; // "<?xml"
 
-    const mtefBytes = commentData.slice(offset, offset + dataLen);
-    console.log('MathType AppsMFCC detected:', { version, totalLen, dataLen, signature });
-    return mtefBytes;
+    if (isXml) {
+      if (dataLen < totalLen) {
+        // 多块 MathML 注释：剩余块直接跳过
+        this.appsMfccSkipping = totalLen - dataLen;
+      }
+      return null;
+    }
+
+    // 非 XML 内容视为 MTEF（支持 totalLen == dataLen 的单块注释）
+    return payload;
   }
 
   isMathTypeComment(data) {
