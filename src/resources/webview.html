@@ -66,6 +66,19 @@
       button:active {
         transform: translateY(0);
       }
+      select {
+        padding: 8px 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background-color: white;
+        font-size: 14px;
+        color: #333;
+        cursor: pointer;
+      }
+      select:focus {
+        outline: none;
+        border-color: #1976d2;
+      }
       .canvas-section {
         flex: 1;
         background-color: white;
@@ -96,6 +109,24 @@
         width: auto;
         height: auto;
         object-fit: contain;
+      }
+      #svgContainer {
+        display: none;
+        width: 100%;
+        height: 100%;
+        align-items: center;
+        justify-content: center;
+        overflow: auto;
+        background-color: white;
+        border: 1px solid #e0e0e0;
+        border-radius: 2px;
+      }
+      #svgContainer svg {
+        display: block;
+        width: auto;
+        height: auto;
+        max-width: 100%;
+        max-height: 100%;
       }
       .canvas-info {
         margin-top: 15px;
@@ -195,6 +226,10 @@
         <div class="header">
           <div class="title">WMF/EMF Viewer</div>
           <div class="toolbar">
+            <select id="renderMode" title="选择渲染器">
+              <option value="canvas">Canvas 渲染</option>
+              <option value="svg">SVG 渲染</option>
+            </select>
             <button id="exportPngBtn">导出为PNG</button>
             <button id="exportPdfBtn">导出为PDF</button>
             <button id="exportSvgBtn">导出为SVG</button>
@@ -203,6 +238,7 @@
         <div class="canvas-section">
           <div class="canvas-wrapper">
             <canvas id="wmfCanvas"></canvas>
+            <div id="svgContainer"></div>
           </div>
           <div class="canvas-info">
             <div class="status-bar">
@@ -250,6 +286,10 @@
       function exportToPNG() {
         const canvas = document.getElementById("wmfCanvas");
         try {
+          // 若当前为SVG渲染模式且Canvas尚未绘制，先补绘Canvas
+          if (!canvasRendered && currentRenderResult) {
+            renderCanvas();
+          }
           // 创建下载链接
           const link = document.createElement("a");
           link.download = "metafile-export.png";
@@ -262,6 +302,96 @@
       }
 
       let currentBase64Data = null;
+
+      // 渲染器切换相关状态
+      let currentRenderResult = null; // 解析结果（两种渲染器共用）
+      let currentRenderFileType = null;
+      let canvasRendered = false;
+
+      // 根据文件类型创建对应的绘制器
+      function createDrawer(context, fileType) {
+        if (fileType === "wmf" || fileType === "placeable-wmf") {
+          return new WmfDrawer(context);
+        } else if (fileType === "emf") {
+          return new EmfDrawer(context);
+        } else if (fileType === "emf+") {
+          return new EmfPlusDrawer(context);
+        }
+        throw new Error("Unknown file type: " + fileType);
+      }
+
+      // 使用 Canvas 2D 渲染
+      function renderCanvas() {
+        const canvas = document.getElementById("wmfCanvas");
+        const ctx = canvas.getContext("2d");
+        const canvasWrapper = document.querySelector(".canvas-wrapper");
+        const viewWidth = canvasWrapper.clientWidth;
+        const viewHeight = canvasWrapper.clientHeight;
+
+        const drawer = createDrawer(ctx, currentRenderFileType);
+        drawer.draw(currentRenderResult, { viewWidth, viewHeight });
+        canvasRendered = true;
+
+        // 检查是否有实际内容
+        try {
+          const imageData = ctx.getImageData(
+            0,
+            0,
+            Math.min(canvas.width, 100),
+            Math.min(canvas.height, 100),
+          );
+          const data = imageData.data;
+          let nonWhitePixels = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            if (data[i] !== 255 || data[i + 1] !== 255 || data[i + 2] !== 255) {
+              nonWhitePixels++;
+            }
+          }
+          showDebug("Non-white pixels in sample area: " + nonWhitePixels);
+        } catch (error) {
+          showDebug("内容检查失败: " + error.message);
+        }
+
+        document.getElementById("canvasInfo").textContent =
+          `尺寸: ${canvas.width} x ${canvas.height}`;
+      }
+
+      // 使用 SVG 渲染
+      function renderSVG() {
+        const svgCtx = new SvgContext();
+        const canvasWrapper = document.querySelector(".canvas-wrapper");
+        const viewWidth = canvasWrapper.clientWidth;
+        const viewHeight = canvasWrapper.clientHeight;
+
+        const drawer = createDrawer(svgCtx, currentRenderFileType);
+        drawer.draw(currentRenderResult, { viewWidth, viewHeight });
+
+        // innerHTML 无法解析 XML 声明，注入前移除首行
+        const svgText = svgCtx.getSvg().replace(/^<\?xml[^>]*>\s*/, "");
+        document.getElementById("svgContainer").innerHTML = svgText;
+
+        document.getElementById("canvasInfo").textContent =
+          `尺寸: ${svgCtx.canvas.width} x ${svgCtx.canvas.height}` +
+          ` (SVG, ${svgCtx._nodes.length} 个元素)`;
+      }
+
+      // 按当前选择的渲染器渲染
+      function renderPreview() {
+        if (!currentRenderResult) return;
+        const mode = document.getElementById("renderMode").value;
+        const canvas = document.getElementById("wmfCanvas");
+        const svgContainer = document.getElementById("svgContainer");
+
+        if (mode === "svg") {
+          renderSVG();
+          canvas.style.display = "none";
+          svgContainer.style.display = "flex";
+        } else {
+          renderCanvas();
+          canvas.style.display = "block";
+          svgContainer.style.display = "none";
+        }
+      }
 
       // 导出为PDF（矢量，使用绘制指令生成）
       function exportToPDF() {
@@ -1223,44 +1353,12 @@
             throw new Error(result.error);
           }
 
-          // 获取Canvas上下文
-          const canvas = document.getElementById("wmfCanvas");
-          const ctx = canvas.getContext("2d");
+          // 存储解析结果，两种渲染器共用
+          currentRenderResult = result;
+          currentRenderFileType = parser.fileType;
+          canvasRendered = false;
 
-          // 获取canvas-wrapper的可用尺寸
-          const canvasWrapper = document.querySelector(".canvas-wrapper");
-          const viewWidth = canvasWrapper.clientWidth;
-          const viewHeight = canvasWrapper.clientHeight;
-          showDebug("View size: " + viewWidth + " x " + viewHeight);
-
-          // 根据文件类型选择绘制器
-          let drawer;
-          if (
-            parser.fileType === "wmf" ||
-            parser.fileType === "placeable-wmf"
-          ) {
-            drawer = new WmfDrawer(ctx);
-          } else if (parser.fileType === "emf") {
-            drawer = new EmfDrawer(ctx);
-          } else if (parser.fileType === "emf+") {
-            drawer = new EmfPlusDrawer(ctx);
-          } else {
-            throw new Error("Unknown file type: " + parser.fileType);
-          }
-
-          showDebug(
-            "Drawer created (" + parser.fileType + "), starting drawing...",
-          );
-
-          // 绘制WMF文件，传入view尺寸
-          drawer.draw(result, { viewWidth, viewHeight });
-
-          showDebug("Drawing completed.");
-          showDebug("Canvas size: " + canvas.width + " x " + canvas.height);
-
-          // 更新Canvas信息
-          document.getElementById("canvasInfo").textContent =
-            `尺寸: ${canvas.width} x ${canvas.height}`;
+          // 更新文件信息
           document.getElementById("fileTypeInfo").textContent =
             `文件类型: ${parser.fileType}`;
           document.getElementById("recordsCountInfo").textContent =
@@ -1273,21 +1371,10 @@
           // 显示指令列表
           showRecordsList(result.records);
 
-          // 检查是否有实际内容
-          const imageData = ctx.getImageData(
-            0,
-            0,
-            Math.min(canvas.width, 100),
-            Math.min(canvas.height, 100),
-          );
-          const data = imageData.data;
-          let nonWhitePixels = 0;
-          for (let i = 0; i < data.length; i += 4) {
-            if (data[i] !== 255 || data[i + 1] !== 255 || data[i + 2] !== 255) {
-              nonWhitePixels++;
-            }
-          }
-          showDebug("Non-white pixels in sample area: " + nonWhitePixels);
+          // 按当前选择的渲染器渲染
+          renderPreview();
+
+          showDebug("Rendering completed.");
         } catch (error) {
           console.error("Error in preview:", error);
           showDebug("Error: " + error.message + "\nStack: " + error.stack);
@@ -1295,6 +1382,9 @@
       }
 
       // 绑定事件
+      document
+        .getElementById("renderMode")
+        .addEventListener("change", renderPreview);
       document
         .getElementById("exportPngBtn")
         .addEventListener("click", exportToPNG);
