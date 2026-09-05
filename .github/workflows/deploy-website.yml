@@ -37,11 +37,9 @@ jobs:
       - name: Build browser bundle
         run: node src/build/build-browser-bundle.js
 
+      # One-time manual setup required: Settings → Pages → Source: "GitHub Actions"
       - name: Setup Pages
         uses: actions/configure-pages@v5
-        with:
-          # Auto-enable Pages with "GitHub Actions" as the source
-          enablement: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
