@@ -4,6 +4,8 @@ A Visual Studio Code extension for previewing **WMF** (Windows Metafile), **EMF*
 
 **Try it online (no install):** <https://congduan.github.io/WmfEmfViewer/> — drag & drop a `.wmf` / `.emf` file, everything runs locally in your browser.
 
+**Use the engine in your code:** `npm install wmf-emf-renderer` — the same parser/renderer as a zero-dependency library for Node.js and browsers ([details](#npm-library-wmf-emf-renderer)).
+
 [![Publish status](https://img.shields.io/github/actions/workflow/status/congduan/WmfEmfViewer/publish.yml)](https://github.com/congduan/WmfEmfViewer/actions)
 
 ![WMF/EMF Viewer preview](./screenshots/1.png)
@@ -47,6 +49,82 @@ Then open `http://localhost:3000` (or the port shown). Features:
 
 The [deploy-website.yml](.github/workflows/deploy-website.yml) workflow builds and publishes `website/` automatically on every push to `master`. One-time setup: **Settings → Pages → Source: GitHub Actions**.
 
+## npm Library (`wmf-emf-renderer`)
+
+The core parsing/rendering engine is extracted into a standalone module, published as a zero-dependency npm package. It shares the same source code as the extension (`packages/wmf-emf-renderer` is built from `src/modules` + `src/utils`) and can be used in any Node.js or browser project.
+
+> Full API documentation: [packages/wmf-emf-renderer/README.md](packages/wmf-emf-renderer/README.md)
+
+### Install
+
+```bash
+npm install wmf-emf-renderer
+```
+
+### Usage
+
+**Render to SVG** (headless, works in Node.js without any DOM):
+
+```js
+import { renderToSvg } from 'wmf-emf-renderer';
+import { readFileSync, writeFileSync } from 'fs';
+
+const svg = renderToSvg(readFileSync('drawing.wmf'), { viewWidth: 1024 });
+writeFileSync('drawing.svg', svg);
+```
+
+**Render to a browser canvas:**
+
+```js
+import { renderToContext } from 'wmf-emf-renderer';
+
+const data = new Uint8Array(await file.arrayBuffer());
+const ctx = document.querySelector('canvas').getContext('2d');
+const info = renderToContext(data, ctx, { viewWidth: 800, viewHeight: 600 });
+console.log(`Rendered ${info.fileType} at ${info.width}x${info.height}`);
+```
+
+**Render with `node-canvas`** (server-side PNG export):
+
+```js
+const { createCanvas } = require('canvas');
+const { renderToContext } = require('wmf-emf-renderer');
+
+const canvas = createCanvas(800, 600);
+renderToContext(fs.readFileSync('chart.emf'), canvas.getContext('2d'));
+fs.writeFileSync('chart.png', canvas.toBuffer('image/png'));
+```
+
+**Parse only** (inspect records without rendering):
+
+```js
+import { parseMetafile } from 'wmf-emf-renderer';
+
+const { fileType, records, error } = parseMetafile(bytes);
+console.log(fileType, records.length, 'records');
+```
+
+### API Overview
+
+| Function | Description |
+|---|---|
+| `detectFileType(data)` | Returns `'wmf' \| 'placeable-wmf' \| 'emf' \| 'emf+' \| 'unknown'`. |
+| `parseMetafile(data)` | Parses binary data into `{ fileType, header, records, error? }`. Never throws. |
+| `renderToSvg(data, options?)` | Renders to a complete SVG document string. |
+| `renderToContext(data, ctx, options?)` | Renders onto any Canvas 2D context; returns `{ width, height, fileType }`. |
+| `createDrawer(ctx, fileType)` | Creates the format-appropriate drawer for custom rendering flows. |
+| `setDebugEnabled(true)` | Enables verbose parser/drawer logging (off by default). |
+
+`data` accepts `Uint8Array`, `ArrayBuffer`, or `number[]`; `options`: `{ viewWidth = 800, viewHeight = 600 }` (image is fit inside while preserving aspect ratio). Low-level classes (`WmfParser`, `EmfParser`, `EmfPlusParser`, `SvgContext`, etc.) are also exported — see the package README.
+
+### Module Development
+
+```bash
+cd packages/wmf-emf-renderer
+npm run build      # rebuild index.js / index.mjs / index.d.ts from ../../src
+npm test           # smoke test: parse + render sample files
+```
+
 ## Development Commands
 
 | Command | Description |
@@ -62,6 +140,8 @@ The [deploy-website.yml](.github/workflows/deploy-website.yml) workflow builds a
 ## Project Structure
 
 ```
+packages/
+└── wmf-emf-renderer/    # Standalone npm library extracted from src/
 src/
 ├── build/               # Browser bundling script
 ├── commands/            # VSCode command implementations
