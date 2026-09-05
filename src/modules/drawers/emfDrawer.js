@@ -1748,11 +1748,14 @@ class EmfDrawer {
       }
 
       // 创建临时canvas
+      // 注意：SvgContext 的 mock canvas 是普通对象，constructor 为 Object，不可用于创建画布
+      const canvasCtor = (typeof document === 'undefined' && this.ctx.canvas)
+        ? this.ctx.canvas.constructor
+        : null;
+      const isRealCanvasCtor = typeof canvasCtor === 'function' && canvasCtor.name !== 'Object';
       const tempCanvas = typeof document !== 'undefined'
         ? document.createElement('canvas')
-        : this.ctx.canvas.constructor !== undefined
-          ? new this.ctx.canvas.constructor(biWidth, absHeight)
-          : null;
+        : (isRealCanvasCtor ? new canvasCtor(biWidth, absHeight) : null);
 
       if (tempCanvas) {
         tempCanvas.width = biWidth;

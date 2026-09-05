@@ -55,6 +55,8 @@
     "vscode:prepublish": "npm run build",
     "build": "npm run build:bundle && npm run compile",
     "build:bundle": "node src/build/build-browser-bundle.js",
+    "build:lib": "node scripts/build-npm-lib.js",
+    "test:lib": "npm run build:lib && node packages/wmf-emf-renderer/test/smoke-test.js",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run build && (if [ -f '.eslintrc.js' ] || [ -f '.eslintrc.json' ]; then npm run lint; else echo 'No ESLint configuration found, skipping linting'; fi)",

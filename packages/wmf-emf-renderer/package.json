@@ -1,0 +1,56 @@
+{
+  "name": "wmf-emf-renderer",
+  "version": "0.1.0",
+  "description": "Parse and render WMF / EMF / EMF+ Windows metafiles to SVG or Canvas 2D, in Node.js and browsers. Zero dependencies.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./index.js",
+      "import": "./index.mjs",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.mjs",
+    "index.d.ts",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/build-npm-lib.js",
+    "prepublishOnly": "npm run build",
+    "test": "node test/smoke-test.js"
+  },
+  "keywords": [
+    "wmf",
+    "emf",
+    "emf+",
+    "emfplus",
+    "metafile",
+    "windows",
+    "vector",
+    "svg",
+    "canvas",
+    "renderer",
+    "converter"
+  ],
+  "author": "congduan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/congduan/WmfEmfViewer.git",
+    "directory": "packages/wmf-emf-renderer"
+  },
+  "homepage": "https://github.com/congduan/WmfEmfViewer/tree/master/packages/wmf-emf-renderer",
+  "bugs": {
+    "url": "https://github.com/congduan/WmfEmfViewer/issues"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
