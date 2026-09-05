@@ -27,6 +27,7 @@ coverage/
 
 # Generated files
 src/metafileParser.browser.js
+website/metafileParser.browser.js
 
 # Editor directories and files
 .vscode/*

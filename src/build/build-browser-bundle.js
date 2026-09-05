@@ -234,6 +234,14 @@ if (typeof window !== 'undefined') {
   fs.writeFileSync(outputPath, browserBundle);
 
   console.log('构建完成！打包文件已生成：', outputPath);
+
+  // 同步一份到 website 目录（静态网站部署用）
+  const websiteDir = path.join(__dirname, '..', '..', 'website');
+  if (fs.existsSync(websiteDir)) {
+    const websiteOutputPath = path.join(websiteDir, 'metafileParser.browser.js');
+    fs.writeFileSync(websiteOutputPath, browserBundle);
+    console.log('静态网站 bundle 已生成：', websiteOutputPath);
+  }
 }
 
 // 执行构建

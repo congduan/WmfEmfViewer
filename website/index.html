@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Online WMF / EMF / EMF+ viewer — drop a file to preview it right in your browser. Nothing is uploaded to a server."
+    />
+    <title>WMF / EMF Viewer — Online Preview</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        background-color: #f5f6f8;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+          Ubuntu, Cantarell, "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: #333;
+      }
+
+      /* ---------- Header ---------- */
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        padding: 12px 20px;
+        background: #fff;
+        border-bottom: 1px solid #e8e8e8;
+        flex-wrap: wrap;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 16px;
+        font-weight: 600;
+        color: #1976d2;
+        white-space: nowrap;
+      }
+      .brand::before {
+        content: "";
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #1976d2;
+      }
+      .brand small {
+        font-weight: 400;
+        color: #999;
+        font-size: 12px;
+      }
+      .gh-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        color: #555;
+        transition: all 0.15s ease;
+      }
+      .gh-link:hover {
+        background: #f0f0f0;
+        color: #333;
+      }
+      .gh-link svg {
+        width: 20px;
+        height: 20px;
+        fill: currentColor;
+      }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .toolbar-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .toolbar-divider {
+        width: 1px;
+        height: 24px;
+        background: #e0e0e0;
+        flex-shrink: 0;
+      }
+      button,
+      select {
+        height: 32px;
+        padding: 0 12px;
+        background-color: #1976d2;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        transition:
+          background-color 0.15s ease,
+          transform 0.1s ease,
+          box-shadow 0.15s ease;
+      }
+      button:hover:not(:disabled) {
+        background-color: #1565c0;
+        box-shadow: 0 2px 6px rgba(25, 118, 210, 0.25);
+      }
+      button:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+      button:disabled {
+        background-color: #bdbdbd;
+        cursor: not-allowed;
+      }
+      button:focus-visible,
+      select:focus-visible {
+        outline: 2px solid #90caf9;
+        outline-offset: 1px;
+      }
+      select {
+        background-color: #fff;
+        color: #333;
+        border: 1px solid #d0d0d0;
+      }
+      select:hover {
+        border-color: #1976d2;
+      }
+      #zoomLabel {
+        min-width: 52px;
+        text-align: center;
+        font-size: 13px;
+        color: #555;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ---------- Main area ---------- */
+      main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 16px 20px;
+        overflow: hidden;
+        min-height: 0;
+      }
+
+      /* Drop zone (empty state) */
+      #dropzone {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        border: 2px dashed #c5cdd8;
+        border-radius: 12px;
+        background: #fff;
+        cursor: pointer;
+        transition:
+          border-color 0.2s ease,
+          background-color 0.2s ease;
+        padding: 40px 20px;
+        text-align: center;
+      }
+      #dropzone:hover,
+      body.dragging #dropzone {
+        border-color: #1976d2;
+        background: #f0f7ff;
+      }
+      #dropzone .dz-icon {
+        width: 72px;
+        height: 72px;
+        border-radius: 16px;
+        background: #e3f2fd;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #dropzone .dz-icon svg {
+        width: 36px;
+        height: 36px;
+        stroke: #1976d2;
+      }
+      #dropzone h2 {
+        margin: 0;
+        font-size: 19px;
+        font-weight: 600;
+        color: #333;
+      }
+      #dropzone p {
+        margin: 0;
+        font-size: 14px;
+        color: #888;
+      }
+      #dropzone .dz-formats {
+        display: flex;
+        gap: 8px;
+        margin-top: 4px;
+      }
+      #dropzone .dz-formats span {
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 12px;
+        border-radius: 999px;
+        background: #eef1f5;
+        color: #666;
+      }
+      #dropzone .dz-samples {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      #dropzone .dz-samples .dz-samples-label {
+        font-size: 13px;
+        color: #999;
+      }
+      #dropzone .dz-samples button {
+        height: 30px;
+        padding: 0 14px;
+        background: #fff;
+        color: #1976d2;
+        border: 1px solid #cfe0f5;
+        border-radius: 999px;
+        font-weight: 500;
+      }
+      #dropzone .dz-samples button:hover {
+        background: #e3f2fd;
+        border-color: #1976d2;
+        box-shadow: none;
+      }
+
+      /* Viewer area (once a file is loaded) */
+      #viewer {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        min-height: 0;
+      }
+      #canvasWrapper {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: auto;
+        background: repeating-conic-gradient(#f0f0f0 0% 25%, #fff 0% 50%)
+          50% / 24px 24px;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 24px;
+      }
+      canvas {
+        background: #fff;
+        border: 1px solid #d8d8d8;
+        border-radius: 2px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+        flex-shrink: 0;
+      }
+      #svgContainer {
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      #svgContainer svg {
+        background: #fff;
+        border: 1px solid #d8d8d8;
+        border-radius: 2px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+      }
+
+      /* ---------- Status bar ---------- */
+      footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 20px;
+        background: #fff;
+        border-top: 1px solid #e8e8e8;
+        font-size: 12px;
+        color: #666;
+        min-height: 44px;
+      }
+      .status-item {
+        padding: 5px 12px;
+        background: #f5f5f5;
+        border-radius: 999px;
+        font-weight: 500;
+        white-space: nowrap;
+      }
+      #statusMessage {
+        margin-left: auto;
+      }
+      #statusMessage.error {
+        color: #c62828;
+        font-weight: 500;
+      }
+      #statusMessage.success {
+        color: #2e7d32;
+        font-weight: 500;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        WMF / EMF Viewer
+        <small>Rendered locally in your browser — files are never uploaded</small>
+      </div>
+      <div class="toolbar">
+        <a
+          class="gh-link"
+          href="https://github.com/congduan/WmfEmfViewer"
+          target="_blank"
+          rel="noopener"
+          title="GitHub repository"
+          aria-label="GitHub repository"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+            />
+          </svg>
+        </a>
+        <div class="toolbar-group">
+          <select id="renderMode" title="Choose renderer">
+            <option value="canvas">Canvas renderer</option>
+            <option value="svg">SVG renderer</option>
+          </select>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group" title="Zoom (relative to fit-to-window)">
+          <button id="zoomOutBtn" title="Zoom out">−</button>
+          <span id="zoomLabel">100%</span>
+          <button id="zoomInBtn" title="Zoom in">＋</button>
+          <button id="zoomFitBtn" title="Fit to window">Fit</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+          <button id="exportPngBtn" title="Export as PNG">PNG</button>
+          <button id="exportSvgBtn" title="Export as SVG">SVG</button>
+          <button id="exportPdfBtn" title="Export as PDF">PDF</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+          <select id="sampleSelect" title="Load a built-in sample file">
+            <option value="" selected>Sample…</option>
+            <option value="sample.wmf">Shape demo</option>
+            <option value="mathtype.wmf">MathType formula</option>
+            <option value="icon.wmf">Small icon</option>
+          </select>
+          <button id="openBtn" title="Open another file">Open file</button>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div id="dropzone" role="button" tabindex="0" aria-label="Drop or choose a file">
+        <div class="dz-icon">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+        </div>
+        <h2>Drop a WMF / EMF file here</h2>
+        <p>or click to browse · parsing &amp; rendering happen entirely in your browser</p>
+        <div class="dz-formats">
+          <span>.wmf</span><span>.emf</span><span>EMF+</span>
+        </div>
+        <div class="dz-samples">
+          <span class="dz-samples-label">No file at hand? Try a sample:</span>
+          <button type="button" data-sample="sample.wmf">Shape demo</button>
+          <button type="button" data-sample="mathtype.wmf">
+            MathType formula
+          </button>
+          <button type="button" data-sample="icon.wmf">Small icon</button>
+        </div>
+      </div>
+
+      <div id="viewer" hidden>
+        <div id="canvasWrapper">
+          <canvas id="wmfCanvas"></canvas>
+          <div id="svgContainer"></div>
+        </div>
+      </div>
+    </main>
+
+    <footer>
+      <span id="fileNameInfo" class="status-item">No file opened</span>
+      <span id="fileTypeInfo" class="status-item"></span>
+      <span id="canvasInfo" class="status-item"></span>
+      <span id="recordsCountInfo" class="status-item"></span>
+      <span id="fileSizeInfo" class="status-item"></span>
+      <span id="parseTimeInfo" class="status-item"></span>
+      <span id="statusMessage"></span>
+    </footer>
+
+    <input type="file" id="fileInput" hidden accept=".wmf,.emf" />
+
+    <script src="metafileParser.browser.js"></script>
+    <script src="pdfContext.js"></script>
+    <script>
+      "use strict";
+
+      /* ==================== State ==================== */
+      let currentBytes = null; // binary data of the current file (Uint8Array)
+      let currentFileName = ""; // current file name
+      let currentRenderResult = null; // parse result (shared by Canvas / SVG rendering)
+      let currentRenderFileType = null; // detected file type
+      let canvasRendered = false; // whether the canvas has been drawn (PNG export fallback)
+      let currentZoom = 1; // zoom factor relative to fit-to-window
+
+      const ZOOM_MIN = 0.25;
+      const ZOOM_MAX = 8;
+      const ZOOM_STEP = 1.5;
+
+      /* ==================== DOM ==================== */
+      const dropzone = document.getElementById("dropzone");
+      const viewer = document.getElementById("viewer");
+      const fileInput = document.getElementById("fileInput");
+      const canvas = document.getElementById("wmfCanvas");
+      const svgContainer = document.getElementById("svgContainer");
+      const canvasWrapper = document.getElementById("canvasWrapper");
+      const renderModeSelect = document.getElementById("renderMode");
+      const zoomLabel = document.getElementById("zoomLabel");
+      const statusMessage = document.getElementById("statusMessage");
+
+      const exportButtons = [
+        "exportPngBtn",
+        "exportSvgBtn",
+        "exportPdfBtn",
+        "zoomInBtn",
+        "zoomOutBtn",
+        "zoomFitBtn",
+      ].map((id) => document.getElementById(id));
+
+      /* ==================== Helpers ==================== */
+      function setStatus(message, type) {
+        statusMessage.textContent = message || "";
+        statusMessage.className = type || "";
+      }
+
+      function hasFile() {
+        return !!currentRenderResult;
+      }
+
+      function updateToolbarState() {
+        const enabled = hasFile();
+        exportButtons.forEach((btn) => (btn.disabled = !enabled));
+      }
+
+      function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + " KB";
+        return (bytes / 1024 / 1024).toFixed(2) + " MB";
+      }
+
+      function baseName(name) {
+        const i = name.lastIndexOf(".");
+        return i > 0 ? name.slice(0, i) : name;
+      }
+
+      // Create the drawer matching the detected file type
+      function createDrawer(context, fileType) {
+        if (fileType === "wmf" || fileType === "placeable-wmf") {
+          return new WmfDrawer(context);
+        } else if (fileType === "emf") {
+          return new EmfDrawer(context);
+        } else if (fileType === "emf+") {
+          return new EmfPlusDrawer(context);
+        }
+        throw new Error("Unknown file type: " + fileType);
+      }
+
+      /* ==================== Rendering ==================== */
+      // Viewport size passed to the drawer (zoom is relative to fit-to-window)
+      function effectiveViewSize() {
+        const width = Math.max(
+          100,
+          Math.round(canvasWrapper.clientWidth - 48) * currentZoom
+        );
+        const height = Math.max(
+          100,
+          Math.round(canvasWrapper.clientHeight - 48) * currentZoom
+        );
+        return { viewWidth: width, viewHeight: height };
+      }
+
+      function renderCanvas() {
+        const ctx = canvas.getContext("2d");
+        const drawer = createDrawer(ctx, currentRenderFileType);
+        drawer.draw(currentRenderResult, effectiveViewSize());
+        canvasRendered = true;
+        document.getElementById("canvasInfo").textContent =
+          "Size: " + canvas.width + " x " + canvas.height;
+      }
+
+      function renderSVG() {
+        const svgCtx = new SvgContext();
+        const drawer = createDrawer(svgCtx, currentRenderFileType);
+        drawer.draw(currentRenderResult, effectiveViewSize());
+
+        // innerHTML cannot parse the XML declaration — strip it before injecting
+        const svgText = svgCtx.getSvg().replace(/^<\?xml[^>]*>\s*/, "");
+        svgContainer.innerHTML = svgText;
+        document.getElementById("canvasInfo").textContent =
+          "Size: " +
+          svgCtx.canvas.width +
+          " x " +
+          svgCtx.canvas.height +
+          " (SVG)";
+      }
+
+      function renderPreview() {
+        if (!currentRenderResult) return;
+        const mode = renderModeSelect.value;
+        if (mode === "svg") {
+          renderSVG();
+          canvas.style.display = "none";
+          svgContainer.style.display = "flex";
+        } else {
+          renderCanvas();
+          canvas.style.display = "block";
+          svgContainer.style.display = "none";
+        }
+      }
+
+      /* ==================== File handling ==================== */
+      function handleFile(file) {
+        if (!file) return;
+        currentFileName = file.name;
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            previewBytes(new Uint8Array(reader.result), file.name);
+          } catch (error) {
+            console.error("Error in preview:", error);
+            setStatus("Render failed: " + error.message, "error");
+          }
+        };
+        reader.onerror = () => {
+          setStatus(
+            "Failed to read file: " + (reader.error || "unknown error"),
+            "error"
+          );
+        };
+        reader.readAsArrayBuffer(file);
+      }
+
+      // Load a built-in sample file from the site's examples/ directory
+      async function loadExample(fileName) {
+        try {
+          setStatus("Loading sample " + fileName + " …");
+          const resp = await fetch("examples/" + fileName);
+          if (!resp.ok) {
+            throw new Error("HTTP " + resp.status);
+          }
+          const buf = await resp.arrayBuffer();
+          previewBytes(new Uint8Array(buf), fileName);
+        } catch (error) {
+          console.error("Error loading example:", error);
+          setStatus("Failed to load sample: " + error.message, "error");
+        }
+      }
+
+      function previewBytes(bytes, fileName) {
+        currentBytes = bytes;
+        const startTime = performance.now();
+
+        if (typeof MetafileParser === "undefined") {
+          throw new Error(
+            "MetafileParser is not defined — the browser bundle (metafileParser.browser.js) may have failed to load"
+          );
+        }
+
+        const parser = new MetafileParser(bytes);
+        const result = parser.parse();
+        const parseTime = (performance.now() - startTime).toFixed(2);
+
+        if (result.error) {
+          throw new Error(result.error);
+        }
+
+        // Save state and switch to the viewer
+        currentRenderResult = result;
+        currentRenderFileType = parser.fileType;
+        canvasRendered = false;
+        currentZoom = 1;
+        zoomLabel.textContent = "100%";
+
+        dropzone.hidden = true;
+        viewer.hidden = false;
+        updateToolbarState();
+
+        document.getElementById("fileNameInfo").textContent = fileName;
+        document.getElementById("fileTypeInfo").textContent =
+          "Type: " + parser.fileType;
+        document.getElementById("recordsCountInfo").textContent =
+          "Records: " + result.records.length;
+        document.getElementById("fileSizeInfo").textContent =
+          "File size: " + formatFileSize(bytes.length);
+        document.getElementById("parseTimeInfo").textContent =
+          "Parsed in " + parseTime + " ms";
+
+        renderPreview();
+        setStatus("Rendered locally — nothing was uploaded", "success");
+      }
+
+      /* ==================== Export ==================== */
+      function downloadBlob(blob, filename) {
+        const link = document.createElement("a");
+        link.download = filename;
+        link.href = URL.createObjectURL(blob);
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }
+
+      function exportToPNG() {
+        try {
+          // In SVG mode the canvas may not be drawn yet — draw it first
+          if (!canvasRendered && currentRenderResult) {
+            renderCanvas();
+          }
+          const link = document.createElement("a");
+          link.download = baseName(currentFileName) + ".png";
+          link.href = canvas.toDataURL("image/png");
+          link.click();
+          setStatus("PNG exported", "success");
+        } catch (error) {
+          console.error("Error exporting PNG:", error);
+          setStatus("PNG export failed: " + error.message, "error");
+        }
+      }
+
+      function exportToSVG() {
+        try {
+          if (typeof SvgContext === "undefined") {
+            throw new Error("SvgContext is not defined");
+          }
+          const svgCtx = new SvgContext();
+          const drawer = createDrawer(svgCtx, currentRenderFileType);
+          drawer.draw(currentRenderResult);
+          const svgText = svgCtx.getSvg();
+          downloadBlob(
+            new Blob([svgText], { type: "image/svg+xml" }),
+            baseName(currentFileName) + ".svg"
+          );
+          setStatus("SVG exported", "success");
+        } catch (error) {
+          console.error("Error exporting SVG:", error);
+          setStatus("SVG export failed: " + error.message, "error");
+        }
+      }
+
+      function exportToPDF() {
+        try {
+          if (typeof PdfContext === "undefined") {
+            throw new Error("PdfContext is not defined (pdfContext.js not loaded)");
+          }
+          const pdfCtx = new PdfContext();
+          const drawer = createDrawer(pdfCtx, currentRenderFileType);
+          drawer.draw(currentRenderResult);
+          const pdfBytes = pdfCtx.buildPdf();
+          downloadBlob(
+            new Blob([pdfBytes], { type: "application/pdf" }),
+            baseName(currentFileName) + ".pdf"
+          );
+          setStatus("PDF exported", "success");
+        } catch (error) {
+          console.error("Error exporting PDF:", error);
+          setStatus("PDF export failed: " + error.message, "error");
+        }
+      }
+
+      /* ==================== Zoom ==================== */
+      function setZoom(zoom) {
+        currentZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom));
+        zoomLabel.textContent = Math.round(currentZoom * 100) + "%";
+        renderPreview();
+      }
+
+      /* ==================== Event bindings ==================== */
+      // Drop zone click / keyboard opens the file picker
+      dropzone.addEventListener("click", () => fileInput.click());
+      dropzone.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          fileInput.click();
+        }
+      });
+      document.getElementById("openBtn").addEventListener("click", () =>
+        fileInput.click()
+      );
+      // Sample buttons (stop propagation so the dropzone picker doesn't open)
+      document.querySelectorAll("#dropzone .dz-samples button").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          loadExample(btn.dataset.sample);
+        });
+      });
+      fileInput.addEventListener("change", () => {
+        handleFile(fileInput.files[0]);
+        fileInput.value = ""; // allow picking the same file again
+      });
+
+      // Whole-page drag & drop (a new file can replace the current one)
+      ["dragenter", "dragover"].forEach((evt) => {
+        window.addEventListener(evt, (e) => {
+          e.preventDefault();
+          document.body.classList.add("dragging");
+        });
+      });
+      ["dragleave", "drop"].forEach((evt) => {
+        window.addEventListener(evt, (e) => {
+          e.preventDefault();
+          if (
+            evt === "dragleave" &&
+            e.relatedTarget &&
+            e.relatedTarget !== document.documentElement
+          ) {
+            return;
+          }
+          document.body.classList.remove("dragging");
+        });
+      });
+      window.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer && e.dataTransfer.files[0];
+        if (file) {
+          setStatus("");
+          handleFile(file);
+        }
+      });
+
+      // Toolbar sample switcher (resets to the placeholder so items can repeat)
+      document
+        .getElementById("sampleSelect")
+        .addEventListener("change", (e) => {
+          const name = e.target.value;
+          e.target.value = "";
+          if (name) loadExample(name);
+        });
+
+      // Render mode / zoom / export
+      renderModeSelect.addEventListener("change", renderPreview);
+      document
+        .getElementById("zoomInBtn")
+        .addEventListener("click", () => setZoom(currentZoom * ZOOM_STEP));
+      document
+        .getElementById("zoomOutBtn")
+        .addEventListener("click", () => setZoom(currentZoom / ZOOM_STEP));
+      document
+        .getElementById("zoomFitBtn")
+        .addEventListener("click", () => setZoom(1));
+      document
+        .getElementById("exportPngBtn")
+        .addEventListener("click", exportToPNG);
+      document
+        .getElementById("exportSvgBtn")
+        .addEventListener("click", exportToSVG);
+      document
+        .getElementById("exportPdfBtn")
+        .addEventListener("click", exportToPDF);
+
+      // Ctrl/Cmd + wheel zoom
+      canvasWrapper.addEventListener(
+        "wheel",
+        (e) => {
+          if (!hasFile() || !(e.ctrlKey || e.metaKey)) return;
+          e.preventDefault();
+          setZoom(e.deltaY < 0 ? currentZoom * ZOOM_STEP : currentZoom / ZOOM_STEP);
+        },
+        { passive: false }
+      );
+
+      // Re-render on window resize while in fit-to-window mode
+      let resizeTimer = null;
+      window.addEventListener("resize", () => {
+        if (!hasFile() || currentZoom !== 1) return;
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(renderPreview, 150);
+      });
+
+      // Initial state: disable export and zoom buttons
+      updateToolbarState();
+
+      // Check whether the rendering bundle loaded successfully
+      if (typeof MetafileParser === "undefined") {
+        setStatus(
+          "Failed to load the rendering engine — run npm run build:bundle to generate metafileParser.browser.js",
+          "error"
+        );
+      }
+    </script>
+  </body>
+</html>

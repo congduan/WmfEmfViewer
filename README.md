@@ -2,6 +2,8 @@
 
 A Visual Studio Code extension for previewing **WMF** (Windows Metafile), **EMF** (Enhanced Metafile) and **EMF+** images directly in the editor.
 
+**Try it online (no install):** <https://congduan.github.io/WmfEmfViewer/> — drag & drop a `.wmf` / `.emf` file, everything runs locally in your browser.
+
 [![Publish status](https://img.shields.io/github/actions/workflow/status/congduan/WmfEmfViewer/publish.yml)](https://github.com/congduan/WmfEmfViewer/actions)
 
 ![WMF/EMF Viewer preview](./screenshots/1.png)
@@ -22,6 +24,28 @@ npm run build      # build browser bundle + compile TypeScript
 ```
 
 Press `F5` in VS Code to launch the Extension Development Host, then open a `.wmf` or `.emf` file from `test_files/`.
+
+## Static Website (Online Viewer)
+
+The same rendering engine also ships as a standalone static website — drag & drop a `.wmf` / `.emf` file and preview it directly in the browser. All parsing and rendering happen locally; files are never uploaded.
+
+**Online:** <https://congduan.github.io/WmfEmfViewer/> (GitHub Pages)
+
+```bash
+npm run build:bundle          # generates website/metafileParser.browser.js
+npx serve website             # or: python3 -m http.server 8000 --directory website
+```
+
+Then open `http://localhost:3000` (or the port shown). Features:
+
+- Drag & drop or click to open WMF / Placeable WMF / EMF / EMF+
+- Built-in sample files (shape demo, MathType formula, small icon) — try it without any file at hand
+- Canvas / SVG rendering modes, zoom controls (buttons or `Ctrl` + wheel)
+- Export to PNG / SVG / PDF
+
+### Deploy to GitHub Pages
+
+The [deploy-website.yml](.github/workflows/deploy-website.yml) workflow builds and publishes `website/` automatically on every push to `master`. One-time setup: **Settings → Pages → Source: GitHub Actions**.
 
 ## Development Commands
 

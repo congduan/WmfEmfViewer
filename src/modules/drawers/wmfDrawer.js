@@ -107,9 +107,9 @@ class WmfDrawer extends BaseDrawer {
 
             console.log('EMF 解析完成，记录数:', emfParsedData.records.length);
 
-            // 使用 EMF 绘制器渲染
+            // 使用 EMF 绘制器渲染（透传视口尺寸，保持自适应与缩放一致）
             const emfDrawer = new EmfDrawer(this.ctx);
-            emfDrawer.draw(emfParsedData);
+            emfDrawer.draw(emfParsedData, options);
 
             // 设置标志
             this.emfPlusDetected = true;
