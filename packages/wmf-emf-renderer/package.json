@@ -1,6 +1,6 @@
 {
   "name": "wmf-emf-renderer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Parse and render WMF / EMF / EMF+ Windows metafiles to SVG or Canvas 2D, in Node.js and browsers. Zero dependencies.",
   "main": "index.js",
   "types": "index.d.ts",
