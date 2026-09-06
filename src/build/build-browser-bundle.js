@@ -8,6 +8,9 @@ function removeNodeModuleSyntax(content) {
   content = content.replace(/^const\s+\w+\s*=\s*require\([^)]+\);?\s*$/gm, '');
   // 移除 module.exports 语句
   content = content.replace(/^module\.exports\s*=\s*\w+;?\s*$/gm, '');
+  // 性能：bundle 内所有 console.log 改写为内部 __wlog（默认静默，
+  // 设置 globalThis.__WMF_DEBUG__ = true 恢复），不影响宿主环境的 console
+  content = content.replace(/\bconsole\.log\(/g, '__wlog(');
   return content;
 }
 
@@ -84,17 +87,17 @@ function buildBrowserBundle() {
   const browserBundle = `// WMF/EMF/EMF+解析器和绘制器 - 浏览器兼容版本
 // 自动生成的打包文件，包含所有模块化组件
 
-// 性能门控：解析/绘制热循环中的 console.log 数量巨大（每条记录多条），
-// 在 WebView 中每条日志都有 IPC 开销。默认静默，设置 globalThis.__WMF_DEBUG__ = true 可恢复输出。
-(function () {
-  if (typeof globalThis.__WMF_DEBUG__ === 'undefined') {
-    globalThis.__WMF_DEBUG__ = false;
+// 性能门控：解析/绘制热循环中的日志数量巨大（每条记录多条），WebView 中
+// 每条日志都有 IPC/序列化开销。默认静默，设置 globalThis.__WMF_DEBUG__ = true 恢复。
+// 注意：不覆盖全局 console，仅 bundle 内部调用走 __wlog，避免影响宿主环境。
+if (typeof globalThis.__WMF_DEBUG__ === 'undefined') {
+  globalThis.__WMF_DEBUG__ = false;
+}
+function __wlog() {
+  if (globalThis.__WMF_DEBUG__ === true) {
+    console.log.apply(console, arguments);
   }
-  globalThis.__consoleLog = console.log.bind(console);
-  if (!globalThis.__WMF_DEBUG__) {
-    console.log = function () {};
-  }
-})();
+}
 
 ${fileTypeDetectorContent}
 
@@ -128,11 +131,11 @@ class MetafileParser {
         this.data = new Uint8Array(data);
         this.fileTypeDetector = new FileTypeDetector(data);
         this.fileType = this.fileTypeDetector.detect();
-        console.log('Metafile Parser initialized with data length:', data.length, 'type:', this.fileType);
+        __wlog('Metafile Parser initialized with data length:', data.length, 'type:', this.fileType);
     }
 
     parse() {
-        console.log('Starting', this.fileType.toUpperCase(), 'parsing...');
+        __wlog('Starting', this.fileType.toUpperCase(), 'parsing...');
 
         try {
             switch (this.fileType) {
@@ -144,7 +147,7 @@ class MetafileParser {
                 case 'placeable-wmf':
                     return this.parseWmf();
                 default:
-                    console.log('Unknown file type, trying all methods...');
+                    __wlog('Unknown file type, trying all methods...');
                     const emfPlusResult = this.tryParseEmfPlus();
                     if (emfPlusResult && emfPlusResult.records.length > 0) {
                         return emfPlusResult;
@@ -189,7 +192,7 @@ class MetafileParser {
             const wmfParser = new WmfParser(this.data);
             return wmfParser.parse('wmf');
         } catch (error) {
-            console.log('WMF parsing failed:', error.message);
+            __wlog('WMF parsing failed:', error.message);
             return null;
         }
     }
@@ -199,7 +202,7 @@ class MetafileParser {
             const emfParser = new EmfParser(this.data);
             return emfParser.parse();
         } catch (error) {
-            console.log('EMF parsing failed:', error.message);
+            __wlog('EMF parsing failed:', error.message);
             return null;
         }
     }
@@ -209,7 +212,7 @@ class MetafileParser {
             const emfPlusParser = new EmfPlusParser(this.data);
             return emfPlusParser.parse();
         } catch (error) {
-            console.log('EMF+ parsing failed:', error.message);
+            __wlog('EMF+ parsing failed:', error.message);
             return null;
         }
     }

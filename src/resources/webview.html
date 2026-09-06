@@ -1536,9 +1536,6 @@
           debugInfoVisible = this.checked;
           // 联动解析器/绘制器的日志门控（bundle 默认静默以提升性能）
           globalThis.__WMF_DEBUG__ = debugInfoVisible;
-          if (debugInfoVisible && globalThis.__consoleLog) {
-            console.log = globalThis.__consoleLog;
-          }
           updateDebugVisibility();
         });
       document
