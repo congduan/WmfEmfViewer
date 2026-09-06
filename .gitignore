@@ -30,6 +30,9 @@ src/metafileParser.browser.js
 website/metafileParser.browser.js
 packages/wmf-emf-renderer/src/
 
+# Local reference sources (LibreOffice emfio etc.)
+.reference/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

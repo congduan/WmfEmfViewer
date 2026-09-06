@@ -170,11 +170,11 @@ class EmfDrawer {
       case 0x00000016: // EMR_SETTEXTALIGN
         this.processEmfSetTextAlign(data);
         break;
-      case 0x00000017: // EMR_SETTEXTCOLOR
-        this.processEmfSetTextColor(data);
-        break;
-      case 0x00000018: // EMR_SETCOLORADJUSTMENT
+      case 0x00000017: // EMR_SETCOLORADJUSTMENT
         this.processEmfSetColorAdjustment(data);
+        break;
+      case 0x00000018: // EMR_SETTEXTCOLOR
+        this.processEmfSetTextColor(data);
         break;
       case 0x00000019: // EMR_SETBKCOLOR
         this.processEmfSetBkColor(data);
@@ -308,7 +308,12 @@ class EmfDrawer {
       case 0x00000044: // EMR_ABORTPATH
         this.processEmfAbortPath(data);
         break;
-      case 0x00000046: // EMR_COMMENT（含 EMF+ 内嵌数据，跳过）
+      case 0x00000046: // EMR_GDICOMMENT（含 EMF+ 内嵌数据，EMF 模式跳过）
+        break;
+      case 0x00000047: // EMR_FILLRGN（区域绘制依赖 region 对象，暂跳过）
+      case 0x00000048: // EMR_FRAMERGN
+      case 0x00000049: // EMR_INVERTRGN
+      case 0x0000004A: // EMR_PAINTRGN
         break;
       case 0x0000004B: // EMR_EXTSELECTCLIPRGN
         break;
@@ -335,11 +340,51 @@ class EmfDrawer {
       case 0x00000054: // EMR_EXTTEXTOUTW
         this.processEmfExtTextOutW(data);
         break;
+      case 0x00000055: // EMR_POLYBEZIER16
+        this.processEmfPolyBezier16(data);
+        break;
+      case 0x00000056: // EMR_POLYGON16
+        this.processEmfPolygon16(data);
+        break;
+      case 0x00000057: // EMR_POLYLINE16
+        this.processEmfPolyline16(data);
+        break;
+      case 0x00000058: // EMR_POLYBEZIERTO16
+        this.processEmfPolyBezierTo16(data);
+        break;
+      case 0x00000059: // EMR_POLYLINETO16
+        this.processEmfPolyLineTo16(data);
+        break;
+      case 0x0000005A: // EMR_POLYPOLYLINE16
+        this.processEmfPolyPolyline16(data);
+        break;
+      case 0x0000005B: // EMR_POLYPOLYGON16
+        this.processEmfPolyPolygon16(data);
+        break;
+      case 0x0000005C: // EMR_POLYDRAW16
+        this.processEmfPolyDraw16(data);
+        break;
+      case 0x0000005F: // EMR_EXTCREATEPEN
+        this.processEmfExtCreatePen(data);
+        break;
       case 0x0000005D: // EMR_CREATEMONOBRUSH
         this.processEmfCreateMonoBrush(data);
         break;
       case 0x00000063: // EMR_CREATECOLORSPACE
         this.processEmfCreateColorSpaceW(data);
+        break;
+      case 0x0000006C: // EMR_SMALLTEXTOUT
+        this.processEmfSmallTextOut(data);
+        break;
+      case 0x0000006D: // EMR_FORCEUFIMAPPING（仅影响字体匹配，跳过）
+      case 0x0000006E: // EMR_NAMEDESCAPE
+      case 0x00000076: // EMR_GRADIENTFILL
+        break;
+      case 0x00000072: // EMR_ALPHABLEND（布局与 BITBLT 相同，dwRop 位置为 BLENDFUNCTION）
+        this.processEmfBitBlt(data);
+        break;
+      case 0x00000074: // EMR_TRANSPARENTBLT（布局与 STRETCHBLT 相似，透明色参数暂忽略）
+        this.processEmfStretchBlt(data);
         break;
       default:
         console.log('Unknown EMF record type:', recordType, '(0x' + recordType.toString(16).padStart(8, '0') + ')');
@@ -613,6 +658,210 @@ class EmfDrawer {
       this.ctx.fill();
       this.ctx.stroke();
     }
+  }
+
+  // ============ EMR_*16 系列（16 位坐标变体，MS-EMF 2.3.5）============
+  // 与 32 位版本结构相同，区别仅在于 aPoints 每点 4 字节（x/y 为 16 位有符号整数）
+
+  readInt16FromData(data, offset) {
+    if (offset + 2 > data.length) return 0;
+    const value = data[offset] | (data[offset + 1] << 8);
+    return value > 0x7FFF ? value - 0x10000 : value;
+  }
+
+  readPoints16(data, offset, count) {
+    const points = [];
+    for (let i = 0; i < count; i++) {
+      const x = this.readInt16FromData(data, offset + i * 4);
+      const y = this.readInt16FromData(data, offset + i * 4 + 2);
+      points.push(this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height));
+    }
+    return points;
+  }
+
+  processEmfPolyBezier16(data) {
+    // EMR_POLYBEZIER16: Bounds(16) + Count(4) + aPoints[](每点4字节)
+    if (data.length < 20) return;
+    const count = this.readDwordFromData(data, 16);
+    if (count < 4 || count % 3 !== 1 || data.length < 20 + count * 4) return;
+    const points = this.readPoints16(data, 20, count);
+    this.ctx.beginPath();
+    this.ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i += 3) {
+      if (i + 2 < points.length) {
+        this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
+      }
+    }
+    this.ctx.stroke();
+  }
+
+  processEmfPolygon16(data) {
+    // EMR_POLYGON16: Bounds(16) + Count(4) + aPoints[](每点4字节)
+    if (data.length < 20) return;
+    const count = this.readDwordFromData(data, 16);
+    if (count < 3 || data.length < 20 + count * 4) return;
+    const points = this.readPoints16(data, 20, count);
+    this.ctx.beginPath();
+    points.forEach((p, i) => (i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+  }
+
+  processEmfPolyline16(data) {
+    // EMR_POLYLINE16: Bounds(16) + Count(4) + aPoints[](每点4字节)
+    if (data.length < 20) return;
+    const count = this.readDwordFromData(data, 16);
+    if (count < 2 || data.length < 20 + count * 4) return;
+    const points = this.readPoints16(data, 20, count);
+    this.ctx.beginPath();
+    points.forEach((p, i) => (i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
+    this.ctx.stroke();
+  }
+
+  processEmfPolyBezierTo16(data) {
+    // EMR_POLYBEZIERTO16: 从当前位置起画贝塞尔，Count 为 3 的倍数
+    if (data.length < 20) return;
+    const count = this.readDwordFromData(data, 16);
+    if (count < 3 || count % 3 !== 0 || data.length < 20 + count * 4) return;
+    const points = this.readPoints16(data, 20, count);
+    for (let i = 0; i + 2 < points.length; i += 3) {
+      this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
+    }
+    this.ctx.stroke();
+  }
+
+  processEmfPolyLineTo16(data) {
+    // EMR_POLYLINETO16: 从当前位置连线
+    if (data.length < 20) return;
+    const count = this.readDwordFromData(data, 16);
+    if (count < 1 || data.length < 20 + count * 4) return;
+    const points = this.readPoints16(data, 20, count);
+    points.forEach(p => this.ctx.lineTo(p.x, p.y));
+    this.ctx.stroke();
+  }
+
+  processEmfPolyPolyline16(data) {
+    // EMR_POLYPOLYLINE16: Bounds(16) + nPolys(4) + cTotal(4) + aPolyCounts[] + aPoints[]
+    if (data.length < 24) return;
+    const nPolys = this.readDwordFromData(data, 16);
+    const cTotal = this.readDwordFromData(data, 20);
+    if (data.length < 24 + nPolys * 4 + cTotal * 4) return;
+    let pointOffset = 24 + nPolys * 4;
+    for (let i = 0; i < nPolys; i++) {
+      const count = this.readDwordFromData(data, 24 + i * 4);
+      const points = this.readPoints16(data, pointOffset, count);
+      pointOffset += count * 4;
+      this.ctx.beginPath();
+      points.forEach((p, j) => (j === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
+      this.ctx.stroke();
+    }
+  }
+
+  processEmfPolyPolygon16(data) {
+    // EMR_POLYPOLYGON16: Bounds(16) + nPolys(4) + cTotal(4) + aPolyCounts[] + aPoints[]
+    if (data.length < 24) return;
+    const nPolys = this.readDwordFromData(data, 16);
+    const cTotal = this.readDwordFromData(data, 20);
+    if (data.length < 24 + nPolys * 4 + cTotal * 4) return;
+    let pointOffset = 24 + nPolys * 4;
+    for (let i = 0; i < nPolys; i++) {
+      const count = this.readDwordFromData(data, 24 + i * 4);
+      const points = this.readPoints16(data, pointOffset, count);
+      pointOffset += count * 4;
+      this.ctx.beginPath();
+      points.forEach((p, j) => (j === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+    }
+  }
+
+  processEmfPolyDraw16(data) {
+    // EMR_POLYDRAW16: Bounds(16) + cTotal(4) + aPoints[](4字节/点) + aTypes[](1字节/点)
+    if (data.length < 20) return;
+    const count = this.readDwordFromData(data, 16);
+    if (data.length < 20 + count * 5) return;
+    for (let i = 0; i < count; i++) {
+      const p = this.readPoints16(data, 20 + i * 4, 1)[0];
+      const type = data[20 + count * 4 + i];
+      // type: 1=MOVETO, 2=LINETO, 4=BEZIERTO, 128=CLOSEFIGURE（BEZIERTO 此处按 LINETO 近似）
+      if (type & 1) {
+        this.ctx.moveTo(p.x, p.y);
+      } else if (type & 6) {
+        this.ctx.lineTo(p.x, p.y);
+      }
+      if (type & 128) {
+        this.ctx.closePath();
+      }
+    }
+    this.ctx.stroke();
+  }
+
+  processEmfExtCreatePen(data) {
+    // EMR_EXTCREATEPEN (MS-EMF 2.3.7.4):
+    // ihPen(0) offBmi(4) cbBmi(8) offBits(12) cbBits(16)
+    // elpPenStyle(20) elpWidth(24) elpBrushStyle(28) elpColor(32) elpHatch(36) ...
+    if (data.length < 40) return;
+    const ihPen = this.readDwordFromData(data, 0);
+    const style = this.readDwordFromData(data, 20);
+    const width = this.readDwordFromData(data, 24);
+    const brushStyle = this.readDwordFromData(data, 28);
+    if (brushStyle === 0) { // BS_SOLID
+      const color = '#' + [data[32], data[33], data[34]].reverse().map(b => b.toString(16).padStart(2, '0')).join('');
+      this.emfObjects.set(ihPen, { type: 'pen', style, width, color });
+      console.log('EMR_EXTCREATEPEN:', ihPen, 'style:', style, 'width:', width, 'color:', color);
+    } else {
+      this.emfObjects.set(ihPen, { type: 'pen', style, width, color: '#000000' });
+    }
+  }
+
+  processEmfSmallTextOut(data) {
+    // EMR_SMALLTEXTOUT (MS-EMF 2.3.5.9，参照 LibreOffice emfio ReadEMFSmallTextOut):
+    // 无 Bounds 字段！布局（record.data 已剥离 8 字节 EMR 头）：
+    // x(0) y(4) cChars(8) fuOptions(12) iGraphicsMode(16) exScale(20) eyScale(24)
+    // [rclRectangle(28..43) 若无 ETO_NO_RECT] 字符串紧随其后
+    // 字符宽度：ETO_SMALL_CHARS(0x200)=2字节，否则 1 字节
+    if (data.length < 28) return;
+    const x = this.readLongFromData(data, 0);
+    const y = this.readLongFromData(data, 4);
+    const cChars = this.readDwordFromData(data, 8);
+    const options = this.readDwordFromData(data, 12);
+    const ETO_NO_RECT = 0x0100;
+    const ETO_SMALL_CHARS = 0x0200;
+    const charWidth = (options & ETO_SMALL_CHARS) ? 2 : 1;
+    let stringOffset = (options & ETO_NO_RECT) ? 28 : 44;
+    if (cChars === 0 || stringOffset + cChars * charWidth > data.length) return;
+
+    let text = '';
+    for (let i = 0; i < cChars; i++) {
+      if (charWidth === 2) {
+        text += String.fromCharCode(data[stringOffset + i * 2] | (data[stringOffset + i * 2 + 1] << 8));
+      } else {
+        text += String.fromCharCode(data[stringOffset + i]);
+      }
+    }
+
+    // ETO_OPAQUE：先用背景色填充矩形
+    if (options & 0x0002 && !(options & ETO_NO_RECT) && data.length >= 44) {
+      const bg1 = this.coordinateTransformer.transform(this.readLongFromData(data, 28), this.readLongFromData(data, 32), this.ctx.canvas.width, this.ctx.canvas.height);
+      const bg2 = this.coordinateTransformer.transform(this.readLongFromData(data, 36), this.readLongFromData(data, 40), this.ctx.canvas.width, this.ctx.canvas.height);
+      const bgW = Math.abs(bg2.x - bg1.x);
+      const bgH = Math.abs(bg2.y - bg1.y);
+      if (bgW > 0 && bgH > 0) {
+        const savedFillStyle = this.ctx.fillStyle;
+        this.ctx.fillStyle = this.fillColor;
+        this.ctx.fillRect(Math.min(bg1.x, bg2.x), Math.min(bg1.y, bg2.y), bgW, bgH);
+        this.ctx.fillStyle = savedFillStyle;
+      }
+    }
+
+    const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+    const savedFillStyle = this.ctx.fillStyle;
+    this.ctx.fillStyle = this.textColor;
+    this.ctx.fillText(text, transformed.x, transformed.y);
+    this.ctx.fillStyle = savedFillStyle;
+    console.log('EMR_SMALLTEXTOUT:', x, y, 'text:', text.substring(0, 50));
   }
 
   processEmfSetWindowExtEx(data) {

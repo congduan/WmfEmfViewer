@@ -261,9 +261,6 @@ class WmfDrawer extends BaseDrawer {
       case 0x0107: // META_SETSTRETCHBLTMODE
         this.processSetStretchBltMode(record.data);
         break;
-      case 0x0302: // META_SETTEXTALIGN
-        this.processSetTextAlign(record.data);
-        break;
 
       // ========== 对象创建记录 (Object Creation Records) ==========
       case 0x02FA: // META_CREATEPENINDIRECT
@@ -281,13 +278,16 @@ class WmfDrawer extends BaseDrawer {
       case 0x012E: // META_SETTEXTALIGN
         this.processSetTextAlign(record.data);
         break;
-      case 0x00F8: // META_CREATEPALETTE
+      case 0x00F7: // META_CREATEPALETTE
         this.processCreatePalette(record.data);
         break;
       case 0x01F9: // META_CREATEPATTERNBRUSH
         this.processCreatePatternBrush(record.data);
         break;
-      case 0x00F7: // META_CREATEREGION
+      case 0x00F8: // META_CREATEBRUSH (已废弃，极少出现；占位创建画刷)
+        this.processCreateBrush(record.data);
+        break;
+      case 0x01FF: // META_CREATEREGION
         this.processCreateRegion(record.data);
         break;
 
@@ -356,15 +356,17 @@ class WmfDrawer extends BaseDrawer {
         this.processStretchDib(record.data);
         break;
 
-      // ========== 填充记录 ==========
-      case 0x0419: // META_FILLREGION
+      // ========== 填充/裁剪记录 ==========
+      case 0x0228: // META_FILLREGION
         this.processFillRgn(record.data);
         break;
-      case 0x0416: // META_FLOODFILL
-        this.processFloodFill(record.data);
+      case 0x0415: // META_EXCLUDECLIPRECT
+        // Canvas 不支持区域差集，跳过
         break;
-      case 0x0228: // META_FILLPOLYGON (非标准)
-        this.processPolygon(record.data);
+      case 0x0416: // META_INTERSECTCLIPRECT
+        // Canvas 不支持区域交集裁剪，跳过
+        break;
+      case 0x0419: // META_FLOODFILL (Canvas 无泛洪填充，跳过)
         break;
 
       // ========== 状态管理 ==========
@@ -615,6 +617,14 @@ class WmfDrawer extends BaseDrawer {
     console.log('CreateBrushIndirect:', style, color);
     const brushColor = this.rgbToHex(color);
     this.gdiObjectManager.createBrush(style, brushColor);
+  }
+
+  // META_CREATEBRUSH (0x00F8, 已废弃)：仅含 ColorRef (4 字节)，按实心画刷处理
+  processCreateBrush(data) {
+    if (data.length < 4) return;
+    const color = this.readDwordFromData(data, 0);
+    console.log('CreateBrush (obsolete):', color);
+    this.gdiObjectManager.createBrush(0 /* BS_SOLID */, this.rgbToHex(color));
   }
 
   processCreateFontIndirect(data) {
