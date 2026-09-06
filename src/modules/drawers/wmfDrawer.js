@@ -16,6 +16,7 @@ class WmfDrawer extends BaseDrawer {
     this.textAlignFlags = 0; // 文本对齐标志
     this.textUpdateCp = false; // TA_UPDATECP
     this.currentFontFace = 'Arial';
+    this.currentCharset = 0; // 当前字体的 CharSet（DBCS 判定用）
     this.arcDirection = 0x01; // 弧方向：默认 AD_COUNTERCLOCKWISE (1)
   }
 
@@ -657,21 +658,35 @@ class WmfDrawer extends BaseDrawer {
     const underline = data[11];
     const strikeOut = data[12];
 
+    // CharSet (1 byte at offset 13)：128=SHIFTJIS, 129=HANGUL, 134=GB2312, 136=CHINESEBIG5
+    const charset = data[13];
+
     // 读取字体名称,直到遇到 null 或最多 32 个字符
-    let faceName = '';
+    const faceBytes = [];
     for (let i = 18; i < Math.min(data.length, 18 + 32); i++) {
       if (data[i] === 0) break;
-      // 只接受可打印 ASCII 字符
-      if (data[i] >= 32 && data[i] <= 126) {
-        faceName += String.fromCharCode(data[i]);
+      faceBytes.push(data[i]);
+    }
+    // DBCS 字符集（如 Big5"新細明體"）的字体名是双字节本地编码，需按字符集解码；
+    // 其余情况仅接受可打印 ASCII，避免把控制字节/局部字节拼进字体名。
+    let faceName = '';
+    const charsetLabel = this.getDbcsCharsetLabel(charset);
+    if (charsetLabel && faceBytes.some(b => b > 126)) {
+      try {
+        faceName = new TextDecoder(charsetLabel).decode(Uint8Array.from(faceBytes));
+      } catch (e) { /* TextDecoder 不支持时回退 */ }
+    }
+    if (!faceName) {
+      for (const b of faceBytes) {
+        if (b >= 32 && b <= 126) faceName += String.fromCharCode(b);
       }
     }
     if (faceName === '') faceName = 'Arial'; // 默认字体
 
-    console.log('CreateFontIndirect: height=', height, 'width=', width, 'weight=', weight, 'faceName=', faceName);
+    console.log('CreateFontIndirect: height=', height, 'width=', width, 'weight=', weight, 'charset=', charset, 'faceName=', faceName);
 
     // 创建字体对象
-    this.gdiObjectManager.createFont(height, width, weight, italic, underline, strikeOut, faceName);
+    this.gdiObjectManager.createFont(height, width, weight, italic, underline, strikeOut, faceName, charset);
   }
 
   processSelectClipRgn(data) {
@@ -713,10 +728,15 @@ class WmfDrawer extends BaseDrawer {
 
       const fontWeight = obj.weight >= 700 ? 'bold' : 'normal';
       const fontStyle = obj.italic ? 'italic' : 'normal';
-      const fontFamily = obj.faceName || 'Arial';
+      let fontFamily = obj.faceName || 'Arial';
+      this.currentCharset = obj.charset || 0;
+      // 本地编码的 CJK 字体名在非中文环境通常缺失，追加 serif 兜底以获得中文字形
+      if (/[\u1100-\u9fff\uf900-\ufaff\uff00-\uffef]/.test(fontFamily)) {
+        fontFamily = `${fontFamily}, serif`;
+      }
       this.ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
       console.log('Applied font:', this.ctx.font);
-      this.currentFontFace = fontFamily;
+      this.currentFontFace = obj.faceName || 'Arial';
     }
   }
 
@@ -1300,6 +1320,17 @@ class WmfDrawer extends BaseDrawer {
     }
   }
 
+  // DBCS CharSet -> TextDecoder 编码标签（非 DBCS 返回 null）
+  getDbcsCharsetLabel(charset) {
+    switch (charset) {
+      case 128: return 'shift_jis';
+      case 129: return 'euc-kr';
+      case 134: return 'gbk';
+      case 136: return 'big5';
+      default: return null;
+    }
+  }
+
   processExtTextOut(data) {
     if (data.length < 8) return;
 
@@ -1330,7 +1361,50 @@ class WmfDrawer extends BaseDrawer {
 
     // 读取文本字符串
     if (data.length < offset + stringLength) return;
+    const rawBytes = data.slice(offset, offset + stringLength);
+
+    // 检查是否有 Dx 数组
+    // 根据 MS-WMF 2.3.3.5：
+    // StringLength 为字节长度；如果为奇数，需填充 1 字节使 Dx 在 16-bit 边界对齐
+    let dxList = null;
+    let dxStart = offset + stringLength;
+    if (stringLength % 2 !== 0) {
+      dxStart += 1;
+    }
+    if (data.length >= dxStart + stringLength * 2) {
+      const dxSigned = [];
+      for (let i = 0; i < stringLength; i++) {
+        dxSigned.push(this.readShortFromData(data, dxStart + i * 2));
+      }
+      dxList = dxSigned;
+    }
+
+    // DBCS 字符集（Big5/GBK/Shift-JIS/EUC-KR）：一个显示字符由两个字节组成，
+    // GDI 约定其尾字节在 Dx 数组中对应 0（如 image10.wmf "a1 5d" Dx=[704,0]
+    // 是 Big5 全角"（"）。按 Dx==0 边界合并字节并用对应编码解码。
+    let chars = null;
+    let charDx = null;
     let text = this.readStringFromData(data, offset, stringLength);
+    const charsetLabel = this.getDbcsCharsetLabel(this.currentCharset);
+    if (charsetLabel && dxList && dxList.some(v => v === 0)) {
+      try {
+        const runs = [];
+        for (let i = 0; i < stringLength; i++) {
+          if (dxList[i] === 0 && runs.length > 0) {
+            runs[runs.length - 1].bytes.push(rawBytes[i]);
+          } else {
+            runs.push({ bytes: [rawBytes[i]], dx: dxList[i] });
+          }
+        }
+        const decoder = new TextDecoder(charsetLabel);
+        const decoded = runs.map(r => decoder.decode(Uint8Array.from(r.bytes)));
+        if (decoded.join('').length > 0) {
+          chars = decoded;
+          charDx = runs.map(r => r.dx);
+          text = chars.join('');
+        }
+      } catch (e) { /* 解码失败时按单字节路径 */ }
+    }
     text = this.mapMathTypeString(text, stringLength);
     // 按当前字体映射 Symbol 字体字符（含 MathType 的括号/积分拼装片段）
     text = this.mapSymbolString(text);
@@ -1354,26 +1428,13 @@ class WmfDrawer extends BaseDrawer {
       console.log('ExtTextOut:', text, 'at', x, y, 'options:', fwOpts);
     }
 
-    // 检查是否有 Dx 数组
-    // 根据 MS-WMF 2.3.3.5：
-    // StringLength 为字节长度；如果为奇数，需填充 1 字节使 Dx 在 16-bit 边界对齐
-    let dxList = null;
-    let dxStart = offset + stringLength;
-    if (stringLength % 2 !== 0) {
-      dxStart += 1;
-    }
-    if (data.length >= dxStart + stringLength * 2) {
-      const dxSigned = [];
-      for (let i = 0; i < stringLength; i++) {
-        dxSigned.push(this.readShortFromData(data, dxStart + i * 2));
-      }
-      dxList = dxSigned;
-    }
-
     if (dxList) {
+      // DBCS 合并后的字符序列优先（此时 text.length 与 dxList 不再一一对应）
+      const drawChars = chars || Array.from(text);
+      const drawDx = charDx || dxList;
       let advance = 0;
-      for (let i = 0; i < text.length; i++) {
-        const ch = text[i];
+      for (let i = 0; i < drawChars.length; i++) {
+        const ch = drawChars[i];
         const transformed = this.coordinateTransformer.transform(
           logicalX + advance,
           logicalY,
@@ -1381,7 +1442,7 @@ class WmfDrawer extends BaseDrawer {
           this.ctx.canvas.height
         );
         this.ctx.fillText(ch, transformed.x, transformed.y);
-        advance += dxList[i] || 0;
+        advance += drawDx[i] || 0;
       }
 
       if (this.textUpdateCp) {
@@ -1528,8 +1589,12 @@ class WmfDrawer extends BaseDrawer {
     // 公式文本由 TEXTOUT 字节 + Symbol/正文 字体编码直接渲染。
     const face = (this.currentFontFace || '').toLowerCase();
     if (face === 'times new roman') {
-      // Fallback: minimal MathType private mapping when MFCC payload has no MTEF stream
-      if (text === 'xxx' || text === 'xxJ') {
+      // Fallback: minimal MathType private mapping when MFCC payload has no MTEF stream。
+      // 必须限定 mathTypeMtefStreams 为空：带 MTEF 流的文件中 "xxx" 是真实的
+      // 三个变量字符（如 image207.wmf 的 μ_X = (1/n)(x₁+x₂+⋯+xₙ)，省略号已由
+      // Symbol 字体 0xD7×3 渲染），且有 Dx 数组将三个 x 定位到公式不同位置；
+      // 此时替换为 "⋯" 会丢失全部变量字符。
+      if (this.mathTypeMtefStreams.length === 0 && (text === 'xxx' || text === 'xxJ')) {
         return '⋯';
       }
     }

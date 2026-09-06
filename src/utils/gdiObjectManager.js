@@ -22,7 +22,7 @@ class GdiObjectManager {
         });
     }
 
-    createFont(height, width, weight, italic, underline, strikeOut, faceName) {
+    createFont(height, width, weight, italic, underline, strikeOut, faceName, charset = 0) {
         return this.createObject({
             type: 'font',
             height,
@@ -31,7 +31,8 @@ class GdiObjectManager {
             italic,
             underline,
             strikeOut,
-            faceName
+            faceName,
+            charset
         });
     }
 
