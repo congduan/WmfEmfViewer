@@ -1,6 +1,82 @@
 // EMF+绘制模块
-const CoordinateTransformer = require('../coordinateTransformer');
-const GdiObjectManager = require('../gdiObjectManager');
+const CoordinateTransformer = require('../../utils/coordinateTransformer');
+const GdiObjectManager = require('../../utils/gdiObjectManager');
+
+// EMF+ 记录分派表：记录类型 -> 处理方法名（processEmfPlusRecordType 中调用 this[方法名](flags, data)）。
+// 值为 null 表示已识别但无需处理（与原 switch 的空分支等价）。
+// 记录编号依据 MS-EMFPLUS 规范 2.1.1.1 节 EmfPlusRecordType 枚举。
+const EMF_PLUS_RECORD_HANDLERS = {
+  // ========== 全局/控制记录 ==========
+  0x4001: 'processEmfPlusHeader',            // EmfPlusHeader
+  0x4002: null,                              // EmfPlusEndOfFile
+  0x4003: 'processEmfPlusComment',           // EmfPlusComment
+  0x4004: 'processEmfPlusGetDC',             // EmfPlusGetDC
+
+  // ========== 对象管理 ==========
+  0x4008: 'processEmfPlusObject',            // EmfPlusObject
+
+  // ========== 绘图记录 ==========
+  0x4009: 'processEmfPlusClear',             // EmfPlusClear
+  0x400A: 'processEmfPlusFillRectangles',    // EmfPlusFillRects
+  0x400B: 'processEmfPlusDrawRectangles',    // EmfPlusDrawRects
+  0x400C: 'processEmfPlusFillPolygon',       // EmfPlusFillPolygon
+  0x400D: 'processEmfPlusDrawLines',         // EmfPlusDrawLines
+  0x400E: 'processEmfPlusFillEllipse',       // EmfPlusFillEllipse
+  0x400F: 'processEmfPlusDrawEllipse',       // EmfPlusDrawEllipse
+  0x4010: 'processEmfPlusFillPie',           // EmfPlusFillPie
+  0x4011: 'processEmfPlusDrawPie',           // EmfPlusDrawPie
+  0x4012: 'processEmfPlusDrawArc',           // EmfPlusDrawArc
+  0x4013: 'processEmfPlusFillRegion',        // EmfPlusFillRegion
+  0x4014: 'processEmfPlusFillPath',          // EmfPlusFillPath
+  0x4015: 'processEmfPlusDrawPath',          // EmfPlusDrawPath
+  0x4016: 'processEmfPlusFillClosedCurve',   // EmfPlusFillClosedCurve
+  0x4017: 'processEmfPlusDrawClosedCurve',   // EmfPlusDrawClosedCurve
+  0x4018: 'processEmfPlusDrawCurve',         // EmfPlusDrawCurve
+  0x4019: 'processEmfPlusDrawBeziers',       // EmfPlusDrawBeziers
+
+  // ========== 图像/文本绘制 ==========
+  0x401A: 'processEmfPlusDrawImage',         // EmfPlusDrawImage
+  0x401B: 'processEmfPlusDrawImagePoints',   // EmfPlusDrawImagePoints
+  0x401C: 'processEmfPlusDrawString',        // EmfPlusDrawString
+  0x4036: 'processEmfPlusDrawDriverString',  // EmfPlusDrawDriverString
+
+  // ========== 状态/渲染参数记录 ==========
+  0x401D: 'processEmfPlusSetRenderingOrigin',   // EmfPlusSetRenderingOrigin
+  0x401E: 'processEmfPlusSetAntiAliasMode',     // EmfPlusSetAntiAliasMode
+  0x401F: 'processEmfPlusSetTextRenderingHint', // EmfPlusSetTextRenderingHint
+  0x4020: 'processEmfPlusSetTextContrast',      // EmfPlusSetTextContrast
+  0x4021: 'processEmfPlusSetInterpolationMode', // EmfPlusSetInterpolationMode
+  0x4022: 'processEmfPlusSetPixelOffsetMode',   // EmfPlusSetPixelOffsetMode
+  0x4023: 'processEmfPlusSetCompositingMode',   // EmfPlusSetCompositingMode
+  0x4024: 'processEmfPlusSetCompositingQuality', // EmfPlusSetCompositingQuality
+
+  // ========== 图形状态容器/变换 ==========
+  0x4025: 'processEmfPlusSave',                  // EmfPlusSave
+  0x4026: 'processEmfPlusRestore',               // EmfPlusRestore
+  0x4027: 'processEmfPlusBeginContainer',        // EmfPlusBeginContainer
+  0x4028: 'processEmfPlusBeginContainerNoParams', // EmfPlusBeginContainerNoParams
+  0x4029: 'processEmfPlusEndContainer',          // EmfPlusEndContainer
+  0x402A: 'processEmfPlusSetWorldTransform',     // EmfPlusSetWorldTransform
+  0x402B: 'processEmfPlusResetWorldTransform',   // EmfPlusResetWorldTransform
+  0x402C: 'processEmfPlusMultiplyWorldTransform', // EmfPlusMultiplyWorldTransform
+  0x402D: 'processEmfPlusTranslateWorldTransform', // EmfPlusTranslateWorldTransform
+  0x402E: 'processEmfPlusScaleWorldTransform',   // EmfPlusScaleWorldTransform
+  0x402F: 'processEmfPlusRotateWorldTransform',  // EmfPlusRotateWorldTransform
+  0x4030: 'processEmfPlusSetPageTransform',      // EmfPlusSetPageTransform
+
+  // ========== 裁剪 ==========
+  0x4031: 'processEmfPlusResetClip',          // EmfPlusResetClip
+  0x4032: 'processEmfPlusSetClipRect',        // EmfPlusSetClipRect
+  0x4033: 'processEmfPlusSetClipPath',        // EmfPlusSetClipPath
+  0x4034: 'processEmfPlusSetClipRegion',      // EmfPlusSetClipRegion
+  0x4035: 'processEmfPlusOffsetClip',         // EmfPlusOffsetClip
+
+  // ========== 其他 ==========
+  0x4037: 'processEmfPlusStrokeFillPath',       // EmfPlusStrokeFillPath (非标准)
+  0x4038: 'processEmfPlusSerializableObject',   // EmfPlusSerializableObject
+  0x4039: 'processEmfPlusSetTSGraphics',        // EmfPlusSetTSGraphics
+  0x403A: 'processEmfPlusSetTSClip'             // EmfPlusSetTSClip
+};
 
 class EmfPlusDrawer {
   constructor(ctx) {
@@ -152,178 +228,15 @@ class EmfPlusDrawer {
   }
 
   processEmfPlusRecordType(recordType, flags, data) {
-    // EMF+记录类型处理
-    // 根据MS-EMFPLUS规范 2.1.1.1 EmfPlusRecordType Enumeration
-    switch (recordType) {
-      case 0x4001: // EmfPlusHeader
-        this.processEmfPlusHeader(flags, data);
-        break;
-      case 0x4002: // EmfPlusEndOfFile
-        console.log('EMF+ End of File record');
-        break;
-      case 0x4003: // EmfPlusComment
-        this.processEmfPlusComment(flags, data);
-        break;
-      case 0x4004: // EmfPlusGetDC
-        this.processEmfPlusGetDC(flags, data);
-        break;
-      case 0x4008: // EmfPlusObject (对象定义)
-        this.processEmfPlusObject(flags, data);
-        break;
-      case 0x4009: // EmfPlusClear
-        this.processEmfPlusClear(flags, data);
-        break;
-      case 0x400A: // EmfPlusFillRects
-        this.processEmfPlusFillRectangles(flags, data);
-        break;
-      case 0x400B: // EmfPlusDrawRects
-        this.processEmfPlusDrawRectangles(flags, data);
-        break;
-      case 0x400C: // EmfPlusFillPolygon
-        this.processEmfPlusFillPolygon(flags, data);
-        break;
-      case 0x400D: // EmfPlusDrawLines
-        this.processEmfPlusDrawLines(flags, data);
-        break;
-      case 0x400E: // EmfPlusFillEllipse
-        this.processEmfPlusFillEllipse(flags, data);
-        break;
-      case 0x400F: // EmfPlusDrawEllipse
-        this.processEmfPlusDrawEllipse(flags, data);
-        break;
-      case 0x4010: // EmfPlusFillPie
-        this.processEmfPlusFillPie(flags, data);
-        break;
-      case 0x4011: // EmfPlusDrawPie
-        this.processEmfPlusDrawPie(flags, data);
-        break;
-      case 0x4012: // EmfPlusDrawArc
-        this.processEmfPlusDrawArc(flags, data);
-        break;
-      case 0x4013: // EmfPlusFillRegion
-        this.processEmfPlusFillRegion(flags, data);
-        break;
-      case 0x4014: // EmfPlusFillPath
-        this.processEmfPlusFillPath(flags, data);
-        break;
-      case 0x4015: // EmfPlusDrawPath
-        this.processEmfPlusDrawPath(flags, data);
-        break;
-      case 0x4016: // EmfPlusFillClosedCurve
-        this.processEmfPlusFillClosedCurve(flags, data);
-        break;
-      case 0x4017: // EmfPlusDrawClosedCurve
-        this.processEmfPlusDrawClosedCurve(flags, data);
-        break;
-      case 0x4018: // EmfPlusDrawCurve
-        this.processEmfPlusDrawCurve(flags, data);
-        break;
-      case 0x4019: // EmfPlusDrawBeziers
-        this.processEmfPlusDrawBeziers(flags, data);
-        break;
-      case 0x401A: // EmfPlusDrawImage
-        this.processEmfPlusDrawImage(flags, data);
-        break;
-      case 0x401B: // EmfPlusDrawImagePoints
-        this.processEmfPlusDrawImagePoints(flags, data);
-        break;
-      case 0x401C: // EmfPlusDrawString
-        this.processEmfPlusDrawString(flags, data);
-        break;
-      case 0x401D: // EmfPlusSetRenderingOrigin
-        this.processEmfPlusSetRenderingOrigin(flags, data);
-        break;
-      case 0x401E: // EmfPlusSetAntiAliasMode
-        this.processEmfPlusSetAntiAliasMode(flags, data);
-        break;
-      case 0x401F: // EmfPlusSetTextRenderingHint
-        this.processEmfPlusSetTextRenderingHint(flags, data);
-        break;
-      case 0x4020: // EmfPlusSetTextContrast
-        this.processEmfPlusSetTextContrast(flags, data);
-        break;
-      case 0x4021: // EmfPlusSetInterpolationMode
-        this.processEmfPlusSetInterpolationMode(flags, data);
-        break;
-      case 0x4022: // EmfPlusSetPixelOffsetMode
-        this.processEmfPlusSetPixelOffsetMode(flags, data);
-        break;
-      case 0x4023: // EmfPlusSetCompositingMode
-        this.processEmfPlusSetCompositingMode(flags, data);
-        break;
-      case 0x4024: // EmfPlusSetCompositingQuality
-        this.processEmfPlusSetCompositingQuality(flags, data);
-        break;
-      case 0x4025: // EmfPlusSave
-        this.processEmfPlusSave(flags, data);
-        break;
-      case 0x4026: // EmfPlusRestore
-        this.processEmfPlusRestore(flags, data);
-        break;
-      case 0x4027: // EmfPlusBeginContainer
-        this.processEmfPlusBeginContainer(flags, data);
-        break;
-      case 0x4028: // EmfPlusBeginContainerNoParams
-        this.processEmfPlusBeginContainerNoParams(flags, data);
-        break;
-      case 0x4029: // EmfPlusEndContainer
-        this.processEmfPlusEndContainer(flags, data);
-        break;
-      case 0x402A: // EmfPlusSetWorldTransform
-        this.processEmfPlusSetWorldTransform(flags, data);
-        break;
-      case 0x402B: // EmfPlusResetWorldTransform
-        this.processEmfPlusResetWorldTransform(flags, data);
-        break;
-      case 0x402C: // EmfPlusMultiplyWorldTransform
-        this.processEmfPlusMultiplyWorldTransform(flags, data);
-        break;
-      case 0x402D: // EmfPlusTranslateWorldTransform
-        this.processEmfPlusTranslateWorldTransform(flags, data);
-        break;
-      case 0x402E: // EmfPlusScaleWorldTransform
-        this.processEmfPlusScaleWorldTransform(flags, data);
-        break;
-      case 0x402F: // EmfPlusRotateWorldTransform
-        this.processEmfPlusRotateWorldTransform(flags, data);
-        break;
-      case 0x4030: // EmfPlusSetPageTransform
-        this.processEmfPlusSetPageTransform(flags, data);
-        break;
-      case 0x4031: // EmfPlusResetClip
-        this.processEmfPlusResetClip(flags, data);
-        break;
-      case 0x4032: // EmfPlusSetClipRect
-        this.processEmfPlusSetClipRect(flags, data);
-        break;
-      case 0x4033: // EmfPlusSetClipPath
-        this.processEmfPlusSetClipPath(flags, data);
-        break;
-      case 0x4034: // EmfPlusSetClipRegion
-        this.processEmfPlusSetClipRegion(flags, data);
-        break;
-      case 0x4035: // EmfPlusOffsetClip
-        this.processEmfPlusOffsetClip(flags, data);
-        break;
-      case 0x4036: // EmfPlusDrawDriverString
-        this.processEmfPlusDrawDriverString(flags, data);
-        break;
-      case 0x4037: // EmfPlusStrokeFillPath (非标准)
-        this.processEmfPlusStrokeFillPath(flags, data);
-        break;
-      case 0x4038: // EmfPlusSerializableObject
-        this.processEmfPlusSerializableObject(flags, data);
-        break;
-      case 0x4039: // EmfPlusSetTSGraphics
-        this.processEmfPlusSetTSGraphics(flags, data);
-        break;
-      case 0x403A: // EmfPlusSetTSClip
-        this.processEmfPlusSetTSClip(flags, data);
-        break;
-      default:
-        console.log('Unknown/Unimplemented EMF+ record type:', recordType.toString(16));
-        break;
+    // 查表分派：记录类型 -> 处理方法名，映射见文件顶部 EMF_PLUS_RECORD_HANDLERS
+    const handlerName = EMF_PLUS_RECORD_HANDLERS[recordType];
+    if (handlerName !== undefined) {
+      if (handlerName !== null) {
+        this[handlerName](flags, data);
+      }
+      return;
     }
+    console.log('Unknown/Unimplemented EMF+ record type:', recordType.toString(16));
   }
 
   // 解析EMF头
@@ -336,7 +249,6 @@ class EmfPlusDrawer {
       nRecords: 0,
       nHandles: 0,
       nReserved: 0,
-      nSize: 88,
       nWidth: 0,
       nHeight: 0,
       nNumberOfPages: 1,

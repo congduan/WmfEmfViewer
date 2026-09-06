@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Lint, Typecheck, Build & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (TS + JS)
+        run: npm run lint
+
+      - name: Typecheck (@ts-check modules)
+        run: npm run typecheck
+
+      # 全量样例快照测试（214 个 WMF/EMF/EMF+ 回归基线）
+      - name: Test (smoke + snapshot)
+        run: npm run test
+
+      # npm 包（wmf-emf-renderer）单文件产物的 smoke test
+      - name: Test npm package
+        run: npm run test:lib
+
+      # 确认扩展可打包（不发布）
+      - name: Package VSIX (dry run)
+        run: npx vsce package --readme-path MARKETPLACE.md -o /tmp/wmf-viewer-ci.vsix

@@ -32,10 +32,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
-      # The build script only uses Node built-ins (fs/path) — no npm install needed
+      - name: Install dependencies
+        run: npm ci
+
       - name: Build browser bundle
-        run: node src/build/build-browser-bundle.js
+        run: node scripts/build-bundles.js browser
 
       # One-time manual setup required: Settings → Pages → Source: "GitHub Actions"
       - name: Setup Pages

@@ -1,6 +1,133 @@
 // EMF绘制模块
-const CoordinateTransformer = require('../coordinateTransformer');
-const GdiObjectManager = require('../gdiObjectManager');
+const CoordinateTransformer = require('../../utils/coordinateTransformer');
+const GdiObjectManager = require('../../utils/gdiObjectManager');
+
+// EMF 记录分派表：记录类型 -> 处理方法名（processEmfRecordType 中调用 this[方法名](data)）。
+// 值为 null 表示已识别但无需处理/暂不支持（与原 switch 的空分支等价，不打未知记录日志）。
+// 记录编号依据 MS-EMF 规范 2.1.1 节 EMR_RECORD_TYPE 枚举。
+const EMF_RECORD_HANDLERS = {
+  // ========== 基础记录 ==========
+  0x00000001: 'processEmfHeader',           // EMR_HEADER
+  0x0000000E: null,                         // EMR_EOF
+
+  // ========== 绘图记录 (Drawing Records) ==========
+  0x00000002: 'processEmfPolyBezier',       // EMR_POLYBEZIER
+  0x00000003: 'processEmfPolygon',          // EMR_POLYGON
+  0x00000004: 'processEmfPolyline',         // EMR_POLYLINE
+  0x00000005: 'processEmfPolyBezierTo',     // EMR_POLYBEZIERTO
+  0x00000006: 'processEmfPolylineTo',       // EMR_POLYLINETO
+  0x00000007: 'processEmfPolyPolyline',     // EMR_POLYPOLYLINE
+  0x00000008: 'processEmfPolyPolygon',      // EMR_POLYPOLYGON
+  0x0000001B: 'processEmfMoveToEx',         // EMR_MOVETOEX
+  0x00000036: 'processEmfLineTo',           // EMR_LINETO
+  0x00000029: 'processEmfAngleArc',         // EMR_ANGLEARC
+  0x0000002A: 'processEmfEllipse',          // EMR_ELLIPSE
+  0x0000002B: 'processEmfRectangle',        // EMR_RECTANGLE
+  0x0000002C: 'processEmfRoundRect',        // EMR_ROUNDRECT
+  0x0000002D: 'processEmfArc',              // EMR_ARC
+  0x00000037: 'processEmfArcTo',            // EMR_ARCTO
+  0x0000002E: 'processEmfChord',            // EMR_CHORD
+  0x0000002F: 'processEmfPie',              // EMR_PIE
+  0x00000038: 'processEmfPolyDraw',         // EMR_POLYDRAW
+
+  // ========== 路径记录 (Path Records) ==========
+  0x0000003B: 'processEmfBeginPath',        // EMR_BEGINPATH
+  0x0000003C: 'processEmfEndPath',          // EMR_ENDPATH
+  0x0000003D: 'processEmfCloseFigure',      // EMR_CLOSEFIGURE
+  0x0000003E: 'processEmfFillPath',         // EMR_FILLPATH
+  0x0000003F: 'processEmfStrokeAndFillPath', // EMR_STROKEANDFILLPATH
+  0x00000040: 'processEmfStrokePath',       // EMR_STROKEPATH
+  0x00000041: 'processEmfFlattenPath',      // EMR_FLATTENPATH
+  0x00000042: 'processEmfWidenPath',        // EMR_WIDENPATH
+  0x00000044: 'processEmfAbortPath',        // EMR_ABORTPATH
+
+  // ========== 状态记录 (State Records) ==========
+  0x00000009: 'processEmfSetWindowExtEx',   // EMR_SETWINDOWEXTEX
+  0x0000000A: 'processEmfSetWindowOrgEx',   // EMR_SETWINDOWORGEX
+  0x0000000B: 'processEmfSetViewportExtEx', // EMR_SETVIEWPORTEXTEX
+  0x0000000C: 'processEmfSetViewportOrgEx', // EMR_SETVIEWPORTORGEX
+  0x0000000D: 'processEmfSetBrushOrgEx',    // EMR_SETBRUSHORGEX
+  0x0000000F: 'processEmfSetPixelV',        // EMR_SETPIXELV
+  0x00000010: 'processEmfSetMapperFlags',   // EMR_SETMAPPERFLAGS
+  0x00000011: 'processEmfSetMapMode',       // EMR_SETMAPMODE
+  0x00000012: 'processEmfSetBkMode',        // EMR_SETBKMODE
+  0x00000013: 'processEmfSetPolyFillMode',  // EMR_SETPOLYFILLMODE
+  0x00000014: 'processEmfSetRop2',          // EMR_SETROP2
+  0x00000015: 'processEmfSetStretchBltMode', // EMR_SETSTRETCHBLTMODE
+  0x00000016: 'processEmfSetTextAlign',     // EMR_SETTEXTALIGN
+  0x00000017: 'processEmfSetColorAdjustment', // EMR_SETCOLORADJUSTMENT
+  0x00000018: 'processEmfSetTextColor',     // EMR_SETTEXTCOLOR
+  0x00000019: 'processEmfSetBkColor',       // EMR_SETBKCOLOR
+  0x0000001A: 'processEmfOffsetClipRgn',    // EMR_OFFSETCLIPRGN
+  0x0000001C: 'processEmfSetMetaRgn',       // EMR_SETMETARGN
+  0x0000001D: 'processEmfExcludeClipRect',  // EMR_EXCLUDECLIPRECT
+  0x0000001E: 'processEmfIntersectClipRect', // EMR_INTERSECTCLIPRECT
+  0x0000001F: 'processEmfScaleViewportExtEx', // EMR_SCALEVIEWPORTEXTEX
+  0x00000020: 'processEmfScaleWindowExtEx', // EMR_SCALEWINDOWEXTEX
+  0x00000021: 'processEmfSaveDC',           // EMR_SAVEDC
+  0x00000022: 'processEmfRestoreDC',        // EMR_RESTOREDC
+  0x00000023: 'processEmfSetWorldTransform', // EMR_SETWORLDTRANSFORM
+  0x00000024: 'processEmfModifyWorldTransform', // EMR_MODIFYWORLDTRANSFORM
+  0x00000039: 'processEmfSetArcDirection',  // EMR_SETARCDIRECTION
+  0x0000003A: 'processEmfSetMiterLimit',    // EMR_SETMITERLIMIT
+
+  // ========== 对象记录 (Object Records) ==========
+  0x00000025: 'processEmfSelectObject',     // EMR_SELECTOBJECT
+  0x00000026: 'processEmfCreatePen',        // EMR_CREATEPEN
+  0x00000027: 'processEmfCreateBrushIndirect', // EMR_CREATEBRUSHINDIRECT
+  0x00000028: 'processEmfDeleteObject',     // EMR_DELETEOBJECT
+  0x0000005D: 'processEmfCreateMonoBrush',  // EMR_CREATEMONOBRUSH
+  0x0000005F: 'processEmfExtCreatePen',     // EMR_EXTCREATEPEN
+  0x00000052: 'processEmfExtCreateFontIndirectW', // EMR_EXTCREATEFONTINDIRECTW
+  0x00000063: 'processEmfCreateColorSpaceW', // EMR_CREATECOLORSPACE
+
+  // ========== 调色板记录 (Palette Records) ==========
+  0x00000030: 'processEmfSelectPalette',    // EMR_SELECTPALETTE
+  0x00000031: 'processEmfCreatePalette',    // EMR_CREATEPALETTE
+  0x00000032: 'processEmfSetPaletteEntries', // EMR_SETPALETTEENTRIES
+  0x00000033: 'processEmfResizePalette',    // EMR_RESIZEPALETTE
+  0x00000034: 'processEmfRealizePalette',   // EMR_REALIZEPALETTE
+  0x00000035: 'processEmfExtFloodFill',     // EMR_EXTFLOODFILL
+
+  // ========== 位图记录 (Bitmap Records) ==========
+  0x0000004C: 'processEmfBitBlt',           // EMR_BITBLT
+  0x0000004D: 'processEmfStretchBlt',       // EMR_STRETCHBLT
+  0x00000051: 'processEmfBitBlt',           // EMR_STRETCHDIBITS（布局与 BITBLT 兼容）
+  0x00000072: 'processEmfBitBlt',           // EMR_ALPHABLEND（dwRop 位置为 BLENDFUNCTION）
+  0x00000074: 'processEmfStretchBlt',       // EMR_TRANSPARENTBLT（透明色参数暂忽略）
+
+  // ========== 文本记录 (Text Records) ==========
+  0x00000053: 'processEmfExtTextOutA',      // EMR_EXTTEXTOUTA
+  0x00000054: 'processEmfExtTextOutW',      // EMR_EXTTEXTOUTW
+  0x0000006C: 'processEmfSmallTextOut',     // EMR_SMALLTEXTOUT
+
+  // ========== 16 位绘图记录 ==========
+  0x00000055: 'processEmfPolyBezier16',     // EMR_POLYBEZIER16
+  0x00000056: 'processEmfPolygon16',        // EMR_POLYGON16
+  0x00000057: 'processEmfPolyline16',       // EMR_POLYLINE16
+  0x00000058: 'processEmfPolyBezierTo16',   // EMR_POLYBEZIERTO16
+  0x00000059: 'processEmfPolyLineTo16',     // EMR_POLYLINETO16
+  0x0000005A: 'processEmfPolyPolyline16',   // EMR_POLYPOLYLINE16
+  0x0000005B: 'processEmfPolyPolygon16',    // EMR_POLYPOLYGON16
+  0x0000005C: 'processEmfPolyDraw16',       // EMR_POLYDRAW16
+
+  // ========== 裁剪记录 ==========
+  0x00000043: 'processEmfSelectClipPath',   // EMR_SELECTCLIPPATH
+  0x0000004B: null,                         // EMR_EXTSELECTCLIPRGN（暂跳过）
+
+  // ========== 已识别但无需处理 ==========
+  0x00000046: null, // EMR_GDICOMMENT（含 EMF+ 内嵌数据，EMF 模式跳过）
+  0x00000047: null, // EMR_FILLRGN（区域绘制依赖 region 对象，暂跳过）
+  0x00000048: null, // EMR_FRAMERGN
+  0x00000049: null, // EMR_INVERTRGN
+  0x0000004A: null, // EMR_PAINTRGN
+  0x0000004E: null, // EMR_MASKBLT
+  0x0000004F: null, // EMR_PLGBLT
+  0x00000050: null, // EMR_SETDIBITSTODEVICE
+  0x0000006D: null, // EMR_FORCEUFIMAPPING（仅影响字体匹配）
+  0x0000006E: null, // EMR_NAMEDESCAPE
+  0x00000076: null  // EMR_GRADIENTFILL
+};
 
 class EmfDrawer {
   constructor(ctx) {
@@ -105,295 +232,16 @@ class EmfDrawer {
   }
 
   processEmfRecordType(recordType, data) {
-    // EMF记录类型处理 - 根据标准EMR常量
-    switch (recordType) {
-      case 0x00000001: // EMR_HEADER
-        this.processEmfHeader(data);
-        break;
-      case 0x00000002: // EMR_POLYBEZIER
-        this.processEmfPolyBezier(data);
-        break;
-      case 0x00000003: // EMR_POLYGON
-        this.processEmfPolygon(data);
-        break;
-      case 0x00000004: // EMR_POLYLINE
-        this.processEmfPolyline(data);
-        break;
-      case 0x00000005: // EMR_POLYBEZIERTO
-        this.processEmfPolyBezierTo(data);
-        break;
-      case 0x00000006: // EMR_POLYLINETO
-        this.processEmfPolylineTo(data);
-        break;
-      case 0x00000007: // EMR_POLYPOLYLINE
-        this.processEmfPolyPolyline(data);
-        break;
-      case 0x00000008: // EMR_POLYPOLYGON
-        this.processEmfPolyPolygon(data);
-        break;
-      case 0x00000009: // EMR_SETWINDOWEXTEX
-        this.processEmfSetWindowExtEx(data);
-        break;
-      case 0x0000000A: // EMR_SETWINDOWORGEX
-        this.processEmfSetWindowOrgEx(data);
-        break;
-      case 0x0000000B: // EMR_SETVIEWPORTEXTEX
-        this.processEmfSetViewportExtEx(data);
-        break;
-      case 0x0000000C: // EMR_SETVIEWPORTORGEX
-        this.processEmfSetViewportOrgEx(data);
-        break;
-      case 0x0000000D: // EMR_SETBRUSHORGEX
-        this.processEmfSetBrushOrgEx(data);
-        break;
-      case 0x0000000E: // EMR_EOF
-        console.log('EMF EOF record');
-        break;
-      case 0x0000000F: // EMR_SETPIXELV
-        this.processEmfSetPixelV(data);
-        break;
-      case 0x00000010: // EMR_SETMAPPERFLAGS
-        this.processEmfSetMapperFlags(data);
-        break;
-      case 0x00000011: // EMR_SETMAPMODE
-        this.processEmfSetMapMode(data);
-        break;
-      case 0x00000012: // EMR_SETBKMODE
-        this.processEmfSetBkMode(data);
-        break;
-      case 0x00000013: // EMR_SETPOLYFILLMODE
-        this.processEmfSetPolyFillMode(data);
-        break;
-      case 0x00000014: // EMR_SETROP2
-        this.processEmfSetRop2(data);
-        break;
-      case 0x00000015: // EMR_SETSTRETCHBLTMODE
-        this.processEmfSetStretchBltMode(data);
-        break;
-      case 0x00000016: // EMR_SETTEXTALIGN
-        this.processEmfSetTextAlign(data);
-        break;
-      case 0x00000017: // EMR_SETCOLORADJUSTMENT
-        this.processEmfSetColorAdjustment(data);
-        break;
-      case 0x00000018: // EMR_SETTEXTCOLOR
-        this.processEmfSetTextColor(data);
-        break;
-      case 0x00000019: // EMR_SETBKCOLOR
-        this.processEmfSetBkColor(data);
-        break;
-      case 0x0000001A: // EMR_OFFSETCLIPRGN
-        this.processEmfOffsetClipRgn(data);
-        break;
-      case 0x0000001B: // EMR_MOVETOEX
-        this.processEmfMoveToEx(data);
-        break;
-      case 0x0000001C: // EMR_SETMETARGN
-        this.processEmfSetMetaRgn(data);
-        break;
-      case 0x0000001D: // EMR_EXCLUDECLIPRECT
-        this.processEmfExcludeClipRect(data);
-        break;
-      case 0x0000001E: // EMR_INTERSECTCLIPRECT
-        this.processEmfIntersectClipRect(data);
-        break;
-      case 0x0000001F: // EMR_SCALEVIEWPORTEXTEX
-        this.processEmfScaleViewportExtEx(data);
-        break;
-      case 0x00000020: // EMR_SCALEWINDOWEXTEX
-        this.processEmfScaleWindowExtEx(data);
-        break;
-      case 0x00000021: // EMR_SAVEDC
-        this.processEmfSaveDC(data);
-        break;
-      case 0x00000022: // EMR_RESTOREDC
-        this.processEmfRestoreDC(data);
-        break;
-      case 0x00000023: // EMR_SETWORLDTRANSFORM
-        this.processEmfSetWorldTransform(data);
-        break;
-      case 0x00000024: // EMR_MODIFYWORLDTRANSFORM
-        this.processEmfModifyWorldTransform(data);
-        break;
-      case 0x00000025: // EMR_SELECTOBJECT
-        this.processEmfSelectObject(data);
-        break;
-      case 0x00000026: // EMR_CREATEPEN
-        this.processEmfCreatePen(data);
-        break;
-      case 0x00000027: // EMR_CREATEBRUSHINDIRECT
-        this.processEmfCreateBrushIndirect(data);
-        break;
-      case 0x00000028: // EMR_DELETEOBJECT
-        this.processEmfDeleteObject(data);
-        break;
-      case 0x00000029: // EMR_ANGLEARC
-        this.processEmfAngleArc(data);
-        break;
-      case 0x0000002A: // EMR_ELLIPSE
-        this.processEmfEllipse(data);
-        break;
-      case 0x0000002B: // EMR_RECTANGLE
-        this.processEmfRectangle(data);
-        break;
-      case 0x0000002C: // EMR_ROUNDRECT
-        this.processEmfRoundRect(data);
-        break;
-      case 0x0000002D: // EMR_ARC
-        this.processEmfArc(data);
-        break;
-      case 0x0000002E: // EMR_CHORD
-        this.processEmfChord(data);
-        break;
-      case 0x0000002F: // EMR_PIE
-        this.processEmfPie(data);
-        break;
-      case 0x00000030: // EMR_SELECTPALETTE
-        this.processEmfSelectPalette(data);
-        break;
-      case 0x00000031: // EMR_CREATEPALETTE
-        this.processEmfCreatePalette(data);
-        break;
-      case 0x00000032: // EMR_SETPALETTEENTRIES
-        this.processEmfSetPaletteEntries(data);
-        break;
-      case 0x00000033: // EMR_RESIZEPALETTE
-        this.processEmfResizePalette(data);
-        break;
-      case 0x00000034: // EMR_REALIZEPALETTE
-        this.processEmfRealizePalette(data);
-        break;
-      case 0x00000035: // EMR_EXTFLOODFILL
-        this.processEmfExtFloodFill(data);
-        break;
-      case 0x00000036: // EMR_LINETO
-        this.processEmfLineTo(data);
-        break;
-      case 0x00000037: // EMR_ARCTO
-        this.processEmfArcTo(data);
-        break;
-      case 0x00000038: // EMR_POLYDRAW
-        this.processEmfPolyDraw(data);
-        break;
-      case 0x00000039: // EMR_SETARCDIRECTION
-        this.processEmfSetArcDirection(data);
-        break;
-      case 0x0000003A: // EMR_SETMITERLIMIT
-        this.processEmfSetMiterLimit(data);
-        break;
-      case 0x0000003B: // EMR_BEGINPATH
-        this.processEmfBeginPath(data);
-        break;
-      case 0x0000003C: // EMR_ENDPATH
-        this.processEmfEndPath(data);
-        break;
-      case 0x0000003D: // EMR_CLOSEFIGURE
-        this.processEmfCloseFigure(data);
-        break;
-      case 0x0000003E: // EMR_FILLPATH
-        this.processEmfFillPath(data);
-        break;
-      case 0x0000003F: // EMR_STROKEANDFILLPATH
-        this.processEmfStrokeAndFillPath(data);
-        break;
-      case 0x00000040: // EMR_STROKEPATH
-        this.processEmfStrokePath(data);
-        break;
-      case 0x00000041: // EMR_FLATTENPATH
-        this.processEmfFlattenPath(data);
-        break;
-      case 0x00000042: // EMR_WIDENPATH
-        this.processEmfWidenPath(data);
-        break;
-      case 0x00000043: // EMR_SELECTCLIPPATH
-        this.processEmfSelectClipPath(data);
-        break;
-      case 0x00000044: // EMR_ABORTPATH
-        this.processEmfAbortPath(data);
-        break;
-      case 0x00000046: // EMR_GDICOMMENT（含 EMF+ 内嵌数据，EMF 模式跳过）
-        break;
-      case 0x00000047: // EMR_FILLRGN（区域绘制依赖 region 对象，暂跳过）
-      case 0x00000048: // EMR_FRAMERGN
-      case 0x00000049: // EMR_INVERTRGN
-      case 0x0000004A: // EMR_PAINTRGN
-        break;
-      case 0x0000004B: // EMR_EXTSELECTCLIPRGN
-        break;
-      case 0x0000004C: // EMR_BITBLT
-        this.processEmfBitBlt(data);
-        break;
-      case 0x0000004D: // EMR_STRETCHBLT
-        this.processEmfStretchBlt(data);
-        break;
-      case 0x0000004E: // EMR_MASKBLT
-      case 0x0000004F: // EMR_PLGBLT
-        break;
-      case 0x00000050: // EMR_SETDIBITSTODEVICE
-        break;
-      case 0x00000051: // EMR_STRETCHDIBITS
-        this.processEmfBitBlt(data);
-        break;
-      case 0x00000052: // EMR_EXTCREATEFONTINDIRECTW
-        this.processEmfExtCreateFontIndirectW(data);
-        break;
-      case 0x00000053: // EMR_EXTTEXTOUTA
-        this.processEmfExtTextOutA(data);
-        break;
-      case 0x00000054: // EMR_EXTTEXTOUTW
-        this.processEmfExtTextOutW(data);
-        break;
-      case 0x00000055: // EMR_POLYBEZIER16
-        this.processEmfPolyBezier16(data);
-        break;
-      case 0x00000056: // EMR_POLYGON16
-        this.processEmfPolygon16(data);
-        break;
-      case 0x00000057: // EMR_POLYLINE16
-        this.processEmfPolyline16(data);
-        break;
-      case 0x00000058: // EMR_POLYBEZIERTO16
-        this.processEmfPolyBezierTo16(data);
-        break;
-      case 0x00000059: // EMR_POLYLINETO16
-        this.processEmfPolyLineTo16(data);
-        break;
-      case 0x0000005A: // EMR_POLYPOLYLINE16
-        this.processEmfPolyPolyline16(data);
-        break;
-      case 0x0000005B: // EMR_POLYPOLYGON16
-        this.processEmfPolyPolygon16(data);
-        break;
-      case 0x0000005C: // EMR_POLYDRAW16
-        this.processEmfPolyDraw16(data);
-        break;
-      case 0x0000005F: // EMR_EXTCREATEPEN
-        this.processEmfExtCreatePen(data);
-        break;
-      case 0x0000005D: // EMR_CREATEMONOBRUSH
-        this.processEmfCreateMonoBrush(data);
-        break;
-      case 0x00000063: // EMR_CREATECOLORSPACE
-        this.processEmfCreateColorSpaceW(data);
-        break;
-      case 0x0000006C: // EMR_SMALLTEXTOUT
-        this.processEmfSmallTextOut(data);
-        break;
-      case 0x0000006D: // EMR_FORCEUFIMAPPING（仅影响字体匹配，跳过）
-      case 0x0000006E: // EMR_NAMEDESCAPE
-      case 0x00000076: // EMR_GRADIENTFILL
-        break;
-      case 0x00000072: // EMR_ALPHABLEND（布局与 BITBLT 相同，dwRop 位置为 BLENDFUNCTION）
-        this.processEmfBitBlt(data);
-        break;
-      case 0x00000074: // EMR_TRANSPARENTBLT（布局与 STRETCHBLT 相似，透明色参数暂忽略）
-        this.processEmfStretchBlt(data);
-        break;
-      default:
-        console.log('Unknown EMF record type:', recordType, '(0x' + recordType.toString(16).padStart(8, '0') + ')');
-        this.tryProcessAsCoordinates(data);
-        break;
+    // 查表分派：记录类型 -> 处理方法名，映射见文件顶部 EMF_RECORD_HANDLERS
+    const handlerName = EMF_RECORD_HANDLERS[recordType];
+    if (handlerName !== undefined) {
+      if (handlerName !== null) {
+        this[handlerName](data);
+      }
+      return;
     }
+    console.log('Unknown EMF record type:', recordType, '(0x' + recordType.toString(16).padStart(8, '0') + ')');
+    this.tryProcessAsCoordinates(data);
   }
 
   // 辅助方法：从数据中读取DWORD（4字节无符号整数）

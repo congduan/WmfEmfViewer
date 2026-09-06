@@ -17,12 +17,11 @@
     "index.js",
     "index.mjs",
     "index.d.ts",
-    "src",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "node ../../scripts/build-npm-lib.js",
+    "build": "node ../../scripts/build-bundles.js npm",
     "prepublishOnly": "npm run build",
     "test": "node test/smoke-test.js"
   },

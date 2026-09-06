@@ -28,7 +28,7 @@ coverage/
 # Generated files
 src/metafileParser.browser.js
 website/metafileParser.browser.js
-packages/wmf-emf-renderer/src/
+packages/wmf-emf-renderer/index.js
 
 # Local reference sources (LibreOffice emfio etc.)
 .reference/

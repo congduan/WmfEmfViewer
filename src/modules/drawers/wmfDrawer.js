@@ -1,7 +1,76 @@
 // WMF绘制模块
 const BaseDrawer = require('./baseDrawer');
 const EmfPlusDrawer = require('./emfPlusDrawer');
-const MathTypeMtefParser = require('../utils/mathTypeMtefParser');
+const MathTypeMtefParser = require('../../utils/mathTypeMtefParser');
+
+// WMF 记录分派表：functionId -> 处理方法名（processRecord 中调用 this[方法名](record.data)）。
+// 值为 null 表示已识别但无需处理/Canvas 不支持（与原 switch 的空分支等价，不打未知记录日志）。
+// 记录编号依据 MS-WMF 规范 2.3 节。
+const WMF_RECORD_HANDLERS = {
+  // ========== 状态记录 (State Records) ==========
+  0x0103: 'processSetMapMode',        // META_SETMAPMODE
+  0x020B: 'processSetWindowOrg',      // META_SETWINDOWORG
+  0x020C: 'processSetWindowExt',      // META_SETWINDOWEXT
+  0x020D: 'processSetViewportOrg',    // META_SETVIEWPORTORG
+  0x020E: 'processSetViewportExt',    // META_SETVIEWPORTEXT
+  0x0201: 'processSetBkColor',        // META_SETBKCOLOR
+  0x0102: 'processSetBkMode',         // META_SETBKMODE
+  0x0209: 'processSetTextColor',      // META_SETTEXTCOLOR
+  0x0104: 'processSetROP2',           // META_SETROP2
+  0x0106: 'processSetPolyFillMode',   // META_SETPOLYFILLMODE
+  0x0107: 'processSetStretchBltMode', // META_SETSTRETCHBLTMODE
+  0x012E: 'processSetTextAlign',      // META_SETTEXTALIGN
+
+  // ========== 对象创建记录 (Object Creation Records) ==========
+  0x02FA: 'processCreatePenIndirect',   // META_CREATEPENINDIRECT
+  0x02FC: 'processCreateBrushIndirect', // META_CREATEBRUSHINDIRECT
+  0x02FB: 'processCreateFontIndirect',  // META_CREATEFONTINDIRECT
+  0x012C: 'processSelectClipRgn',       // META_SELECTCLIPREGION
+  0x00F7: 'processCreatePalette',       // META_CREATEPALETTE
+  0x01F9: 'processCreatePatternBrush',  // META_CREATEPATTERNBRUSH
+  0x00F8: 'processCreateBrush',         // META_CREATEBRUSH（已废弃，占位创建画刷）
+  0x01FF: 'processCreateRegion',        // META_CREATEREGION
+
+  // ========== 对象选择/删除记录 ==========
+  0x012D: 'processSelectObject', // META_SELECTOBJECT
+  0x01F0: 'processDeleteObject', // META_DELETEOBJECT
+
+  // ========== 绘图记录 (Drawing Records) ==========
+  0x0213: 'processLineTo',       // META_LINETO
+  0x0214: 'processMoveTo',       // META_MOVETO
+  0x041B: 'processRectangle',    // META_RECTANGLE
+  0x061C: 'processRoundRect',    // META_ROUNDRECT
+  0x0418: 'processEllipse',      // META_ELLIPSE
+  0x0817: 'processArc',          // META_ARC
+  0x081A: 'processPie',          // META_PIE
+  0x0830: 'processChord',        // META_CHORD
+  0x0325: 'processPolyline',     // META_POLYLINE
+  0x0324: 'processPolygon',      // META_POLYGON
+  0x0538: 'processPolyPolygon',  // META_POLYPOLYGON
+
+  // ========== 文本记录 ==========
+  0x0521: 'processTextOut',    // META_TEXTOUT
+  0x0A32: 'processExtTextOut', // META_EXTTEXTOUT
+  0x0626: 'processEscape',     // META_ESCAPE
+
+  // ========== 位图操作记录 ==========
+  0x0940: 'processDibBitBlt',      // META_DIBBITBLT
+  0x0B41: 'processDibStretchBlt',  // META_DIBSTRETCHBLT
+  0x0F43: 'processStretchDib',     // META_STRETCHDIB
+
+  // ========== 填充/裁剪记录 ==========
+  0x0228: 'processFillRgn',           // META_FILLREGION
+  0x0415: null,                       // META_EXCLUDECLIPRECT（Canvas 不支持区域差集，跳过）
+  0x0416: null,                       // META_INTERSECTCLIPRECT（Canvas 不支持区域交集裁剪，跳过）
+  0x0419: null,                       // META_FLOODFILL（Canvas 无泛洪填充，跳过）
+
+  // ========== 状态管理 ==========
+  0x001E: 'processSaveDC',    // META_SAVEDC
+  0x0127: 'processRestoreDC', // META_RESTOREDC
+
+  // ========== 已识别但无需处理 ==========
+  0x0000: null // META_EOF
+};
 
 class WmfDrawer extends BaseDrawer {
   constructor(ctx) {
@@ -217,167 +286,15 @@ class WmfDrawer extends BaseDrawer {
   }
 
   processRecord(record) {
-    // 根据MS-WMF规范2.3.1的函数ID处理不同的WMF命令
-    // 函数ID格式: 高字节为类别，低字节为功能
-    switch (record.functionId) {
-      case 0x0000: // META_EOF - End of File
-        console.log('WMF End of File record');
-        break;
-
-      // ========== 状态记录 (State Records) ==========
-      case 0x0103: // META_SETMAPMODE
-        this.processSetMapMode(record.data);
-        break;
-      case 0x020B: // META_SETWINDOWORG
-        this.processSetWindowOrg(record.data);
-        break;
-      case 0x020C: // META_SETWINDOWEXT
-        this.processSetWindowExt(record.data);
-        break;
-      case 0x020D: // META_SETVIEWPORTORG
-        this.processSetViewportOrg(record.data);
-        break;
-      case 0x020E: // META_SETVIEWPORTEXT
-        this.processSetViewportExt(record.data);
-        break;
-      case 0x0201: // META_SETBKCOLOR
-        this.processSetBkColor(record.data);
-        break;
-      case 0x0102: // META_SETBKMODE
-        this.processSetBkMode(record.data);
-        break;
-      case 0x0209: // META_SETTEXTCOLOR
-        this.processSetTextColor(record.data);
-        break;
-      case 0x0104: // META_SETROP2
-        this.processSetROP2(record.data);
-        break;
-      case 0x0106: // META_SETPOLYFILLMODE
-        this.processSetPolyFillMode(record.data);
-        break;
-      case 0x0107: // META_SETSTRETCHBLTMODE
-        this.processSetStretchBltMode(record.data);
-        break;
-
-      // ========== 对象创建记录 (Object Creation Records) ==========
-      case 0x02FA: // META_CREATEPENINDIRECT
-        this.processCreatePenIndirect(record.data);
-        break;
-      case 0x02FC: // META_CREATEBRUSHINDIRECT
-        this.processCreateBrushIndirect(record.data);
-        break;
-      case 0x02FB: // META_CREATEFONTINDIRECT
-        this.processCreateFontIndirect(record.data);
-        break;
-      case 0x012C: // META_SELECTCLIPREGION
-        this.processSelectClipRgn(record.data);
-        break;
-      case 0x012E: // META_SETTEXTALIGN
-        this.processSetTextAlign(record.data);
-        break;
-      case 0x00F7: // META_CREATEPALETTE
-        this.processCreatePalette(record.data);
-        break;
-      case 0x01F9: // META_CREATEPATTERNBRUSH
-        this.processCreatePatternBrush(record.data);
-        break;
-      case 0x00F8: // META_CREATEBRUSH (已废弃，极少出现；占位创建画刷)
-        this.processCreateBrush(record.data);
-        break;
-      case 0x01FF: // META_CREATEREGION
-        this.processCreateRegion(record.data);
-        break;
-
-      // ========== 对象选择/删除记录 ==========
-      case 0x012D: // META_SELECTOBJECT
-        this.processSelectObject(record.data);
-        break;
-      case 0x01F0: // META_DELETEOBJECT
-        this.processDeleteObject(record.data);
-        break;
-
-      // ========== 绘图记录 (Drawing Records) ==========
-      case 0x0213: // META_LINETO
-        this.processLineTo(record.data);
-        break;
-      case 0x0214: // META_MOVETO
-        this.processMoveTo(record.data);
-        break;
-      case 0x041B: // META_RECTANGLE
-        this.processRectangle(record.data);
-        break;
-      case 0x061C: // META_ROUNDRECT
-        this.processRoundRect(record.data);
-        break;
-      case 0x0418: // META_ELLIPSE
-        this.processEllipse(record.data);
-        break;
-      case 0x0817: // META_ARC
-        this.processArc(record.data);
-        break;
-      case 0x081A: // META_PIE
-        this.processPie(record.data);
-        break;
-      case 0x0830: // META_CHORD
-        this.processChord(record.data);
-        break;
-      case 0x0325: // META_POLYLINE
-        this.processPolyline(record.data);
-        break;
-      case 0x0324: // META_POLYGON
-        this.processPolygon(record.data);
-        break;
-      case 0x0538: // META_POLYPOLYGON
-        this.processPolyPolygon(record.data);
-        break;
-
-      // ========== 文本记录 ==========
-      case 0x0521: // META_TEXTOUT
-        this.processTextOut(record.data);
-        break;
-      case 0x0A32: // META_EXTTEXTOUT
-        this.processExtTextOut(record.data);
-        break;
-      case 0x0626: // META_ESCAPE
-        this.processEscape(record.data);
-        break;
-
-      // ========== 位图操作记录 ==========
-      case 0x0940: // META_DIBBITBLT
-        this.processDibBitBlt(record.data);
-        break;
-      case 0x0B41: // META_DIBSTRETCHBLT
-        this.processDibStretchBlt(record.data);
-        break;
-      case 0x0F43: // META_STRETCHDIB
-        this.processStretchDib(record.data);
-        break;
-
-      // ========== 填充/裁剪记录 ==========
-      case 0x0228: // META_FILLREGION
-        this.processFillRgn(record.data);
-        break;
-      case 0x0415: // META_EXCLUDECLIPRECT
-        // Canvas 不支持区域差集，跳过
-        break;
-      case 0x0416: // META_INTERSECTCLIPRECT
-        // Canvas 不支持区域交集裁剪，跳过
-        break;
-      case 0x0419: // META_FLOODFILL (Canvas 无泛洪填充，跳过)
-        break;
-
-      // ========== 状态管理 ==========
-      case 0x001E: // META_SAVEDC
-        this.processSaveDC(record.data);
-        break;
-      case 0x0127: // META_RESTOREDC
-        this.processRestoreDC(record.data);
-        break;
-
-      default:
-        console.log('Unknown/Unimplemented WMF function:', record.functionId, '(0x' + record.functionId.toString(16).padStart(4, '0') + ')');
-        break;
+    // 查表分派：functionId -> 处理方法名，映射见文件顶部 WMF_RECORD_HANDLERS
+    const handlerName = WMF_RECORD_HANDLERS[record.functionId];
+    if (handlerName !== undefined) {
+      if (handlerName !== null) {
+        this[handlerName](record.data);
+      }
+      return;
     }
+    console.log('Unknown/Unimplemented WMF function:', record.functionId, '(0x' + record.functionId.toString(16).padStart(4, '0') + ')');
   }
 
   // ========== 辅助方法 ==========

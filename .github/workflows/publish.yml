@@ -25,6 +25,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # 发布前先跑全量测试（冒烟 + 214 样例快照回归）
+      - name: Test
+        run: npm run test
+
       - name: Build extension
         run: npm run build
 

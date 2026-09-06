@@ -1,6 +1,6 @@
 // 基础绘制器类 - 提供共享的绘制方法
-const CoordinateTransformer = require('../coordinateTransformer');
-const GdiObjectManager = require('../gdiObjectManager');
+const CoordinateTransformer = require('../../utils/coordinateTransformer');
+const GdiObjectManager = require('../../utils/gdiObjectManager');
 
 class BaseDrawer {
     constructor(ctx) {

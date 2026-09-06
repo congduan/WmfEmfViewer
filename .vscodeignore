@@ -1,33 +1,23 @@
-# 排除根 README，市场详情页使用 MARKETPLACE.md（通过 --readme-path 指定）
-README.md
-
-# 开发/测试资源无需打包进 VSIX
-.vscode/**
-.github/**
-docs/**
-test/**
-test_files/**
-scripts/**
-
-# 源码无需打包：逻辑已编译到 out/，运行只需 webview.html 与图标
-src/**
-!src/resources/webview.html
-!src/resources/icon.png
-
-# 陈旧/试验构建产物与调试文件不进包
-out/wmfParser.js
-out/wmfParser.js.map
-out/svg-feasibility/**
-out/**/*.js.map
-
-# 市场截图使用 GitHub 绝对 URL，本地副本无需进包
-screenshots/**
-
-# 工程配置与开发文档无需进包
-tsconfig.json
-.eslintrc.js
-.gitignore
+# VSIX 打包排除：扩展运行只需要 out/ 与 src/resources/（webview 模板）
+# 测试样例、npm 子包、网站、文档等不进入发布产物
+test/
+test_files/
+packages/
+website/
+docs/
+scripts/
+.github/
+.vscode/
+.vscode-test/
+screenshots/
+.reference/
+coverage/
+src/modules/
+src/utils/
+src/build/
+src/browser.js
+node_modules/
+out/**/*.map
+*.vsix
 AGENTS.md
-
-# 本地参考不进包
-.reference/**
+README.md
