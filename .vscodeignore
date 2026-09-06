@@ -28,3 +28,6 @@ tsconfig.json
 .eslintrc.js
 .gitignore
 AGENTS.md
+
+# 本地参考不进包
+.reference/**
