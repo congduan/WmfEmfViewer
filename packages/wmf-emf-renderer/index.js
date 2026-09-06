@@ -8,9 +8,9 @@ var __commonJS = (cb, mod) => function __require() {
   }
 };
 
-// src/utils/fileTypeDetector.js
+// ../../src/utils/fileTypeDetector.js
 var require_fileTypeDetector = __commonJS({
-  "src/utils/fileTypeDetector.js"(exports2, module2) {
+  "../../src/utils/fileTypeDetector.js"(exports2, module2) {
     "use strict";
     var FileTypeDetector2 = class {
       /**
@@ -93,9 +93,9 @@ var require_fileTypeDetector = __commonJS({
   }
 });
 
-// src/utils/coordinateTransformer.js
+// ../../src/utils/coordinateTransformer.js
 var require_coordinateTransformer = __commonJS({
-  "src/utils/coordinateTransformer.js"(exports2, module2) {
+  "../../src/utils/coordinateTransformer.js"(exports2, module2) {
     "use strict";
     var MAP_MODE = {
       /** 逻辑单位 = 设备像素（默认） */
@@ -223,9 +223,9 @@ var require_coordinateTransformer = __commonJS({
   }
 });
 
-// src/utils/mathTypeMtefParser.js
+// ../../src/utils/mathTypeMtefParser.js
 var require_mathTypeMtefParser = __commonJS({
-  "src/utils/mathTypeMtefParser.js"(exports2, module2) {
+  "../../src/utils/mathTypeMtefParser.js"(exports2, module2) {
     "use strict";
     var MTEF_END = 0;
     var MTEF_LINE = 1;
@@ -477,9 +477,9 @@ var require_mathTypeMtefParser = __commonJS({
   }
 });
 
-// src/utils/gdiObjectManager.js
+// ../../src/utils/gdiObjectManager.js
 var require_gdiObjectManager = __commonJS({
-  "src/utils/gdiObjectManager.js"(exports2, module2) {
+  "../../src/utils/gdiObjectManager.js"(exports2, module2) {
     "use strict";
     var GdiObjectManager2 = class {
       constructor() {
@@ -559,9 +559,9 @@ var require_gdiObjectManager = __commonJS({
   }
 });
 
-// src/modules/parsers/baseParser.js
+// ../../src/modules/parsers/baseParser.js
 var require_baseParser = __commonJS({
-  "src/modules/parsers/baseParser.js"(exports2, module2) {
+  "../../src/modules/parsers/baseParser.js"(exports2, module2) {
     "use strict";
     var BaseParser2 = class {
       constructor(data) {
@@ -656,9 +656,9 @@ var require_baseParser = __commonJS({
   }
 });
 
-// src/modules/parsers/wmfParser.js
+// ../../src/modules/parsers/wmfParser.js
 var require_wmfParser = __commonJS({
-  "src/modules/parsers/wmfParser.js"(exports2, module2) {
+  "../../src/modules/parsers/wmfParser.js"(exports2, module2) {
     "use strict";
     var BaseParser2 = require_baseParser();
     var WMF_FUNCTIONS = {
@@ -858,9 +858,9 @@ var require_wmfParser = __commonJS({
   }
 });
 
-// src/modules/parsers/emfParser.js
+// ../../src/modules/parsers/emfParser.js
 var require_emfParser = __commonJS({
-  "src/modules/parsers/emfParser.js"(exports2, module2) {
+  "../../src/modules/parsers/emfParser.js"(exports2, module2) {
     "use strict";
     var BaseParser2 = require_baseParser();
     var EMF_FUNCTIONS = {
@@ -1138,9 +1138,9 @@ var require_emfParser = __commonJS({
   }
 });
 
-// src/modules/parsers/emfPlusParser.js
+// ../../src/modules/parsers/emfPlusParser.js
 var require_emfPlusParser = __commonJS({
-  "src/modules/parsers/emfPlusParser.js"(exports2, module2) {
+  "../../src/modules/parsers/emfPlusParser.js"(exports2, module2) {
     "use strict";
     var BaseParser2 = require_baseParser();
     var EMFPLUS_FUNCTIONS = {
@@ -1406,9 +1406,9 @@ var require_emfPlusParser = __commonJS({
   }
 });
 
-// src/modules/drawers/baseDrawer.js
+// ../../src/modules/drawers/baseDrawer.js
 var require_baseDrawer = __commonJS({
-  "src/modules/drawers/baseDrawer.js"(exports2, module2) {
+  "../../src/modules/drawers/baseDrawer.js"(exports2, module2) {
     "use strict";
     var CoordinateTransformer2 = require_coordinateTransformer();
     var GdiObjectManager2 = require_gdiObjectManager();
@@ -1676,9 +1676,9 @@ var require_baseDrawer = __commonJS({
   }
 });
 
-// src/modules/drawers/emfPlusDrawer.js
+// ../../src/modules/drawers/emfPlusDrawer.js
 var require_emfPlusDrawer = __commonJS({
-  "src/modules/drawers/emfPlusDrawer.js"(exports2, module2) {
+  "../../src/modules/drawers/emfPlusDrawer.js"(exports2, module2) {
     "use strict";
     var CoordinateTransformer2 = require_coordinateTransformer();
     var GdiObjectManager2 = require_gdiObjectManager();
@@ -2291,9 +2291,9 @@ var require_emfPlusDrawer = __commonJS({
   }
 });
 
-// src/modules/drawers/emfDrawer.js
+// ../../src/modules/drawers/emfDrawer.js
 var require_emfDrawer = __commonJS({
-  "src/modules/drawers/emfDrawer.js"(exports2, module2) {
+  "../../src/modules/drawers/emfDrawer.js"(exports2, module2) {
     "use strict";
     var CoordinateTransformer2 = require_coordinateTransformer();
     var GdiObjectManager2 = require_gdiObjectManager();
@@ -3939,9 +3939,9 @@ var require_emfDrawer = __commonJS({
   }
 });
 
-// src/modules/drawers/wmfDrawer.js
+// ../../src/modules/drawers/wmfDrawer.js
 var require_wmfDrawer = __commonJS({
-  "src/modules/drawers/wmfDrawer.js"(exports2, module2) {
+  "../../src/modules/drawers/wmfDrawer.js"(exports2, module2) {
     "use strict";
     var BaseDrawer2 = require_baseDrawer();
     var EmfPlusDrawer2 = require_emfPlusDrawer();
@@ -5309,9 +5309,9 @@ var require_wmfDrawer = __commonJS({
   }
 });
 
-// src/modules/svgContext.js
+// ../../src/modules/svgContext.js
 var require_svgContext = __commonJS({
-  "src/modules/svgContext.js"(exports2, module2) {
+  "../../src/modules/svgContext.js"(exports2, module2) {
     "use strict";
     var SvgContext2 = class _SvgContext {
       constructor() {
@@ -5603,9 +5603,9 @@ var require_svgContext = __commonJS({
   }
 });
 
-// src/utils/metafileParser.js
+// ../../src/utils/metafileParser.js
 var require_metafileParser = __commonJS({
-  "src/utils/metafileParser.js"(exports2, module2) {
+  "../../src/utils/metafileParser.js"(exports2, module2) {
     "use strict";
     var FileTypeDetector2 = require_fileTypeDetector();
     var WmfParser2 = require_wmfParser();
@@ -5698,7 +5698,7 @@ var require_metafileParser = __commonJS({
   }
 });
 
-// packages/wmf-emf-renderer/entry.js
+// entry.js
 globalThis.__wmfEmfRendererLog = globalThis.__wmfEmfRendererLog || function() {
 };
 var FileTypeDetector = require_fileTypeDetector();
