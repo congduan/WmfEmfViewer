@@ -183,7 +183,10 @@ class WmfParser extends BaseParser {
           const record = this.parseWmfRecord();
           if (record) {
             records.push(record);
-            console.log('Parsed WMF record:', record.functionId, '(0x' + record.functionId.toString(16).padStart(4, '0') + ')', 'new offset:', this.getOffset());
+            // 性能：每条记录一次日志会拖慢大文件解析，仅在调试模式输出
+            if (globalThis.__WMF_DEBUG__) {
+              console.log('Parsed WMF record:', record.functionId, '(0x' + record.functionId.toString(16).padStart(4, '0') + ')', 'new offset:', this.getOffset());
+            }
           } else {
             console.log('No valid record at offset:', this.getOffset(), 'stopping');
             break;

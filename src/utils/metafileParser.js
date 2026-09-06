@@ -1,8 +1,8 @@
 // 元文件解析器模块 - 整合所有模块化组件
 const FileTypeDetector = require('./fileTypeDetector');
-const WmfParser = require('./parsers/wmfParser');
-const EmfParser = require('./parsers/emfParser');
-const EmfPlusParser = require('./parsers/emfPlusParser');
+const WmfParser = require('../modules/parsers/wmfParser');
+const EmfParser = require('../modules/parsers/emfParser');
+const EmfPlusParser = require('../modules/parsers/emfPlusParser');
 
 class MetafileParser {
     constructor(data) {

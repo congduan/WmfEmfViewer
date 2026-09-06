@@ -274,7 +274,10 @@ class EmfParser extends BaseParser {
                     const record = this.parseEmfRecord();
                     if (record) {
                         records.push(record);
-                        console.log('Parsed EMF record:', record.type, '(0x' + record.type.toString(16).padStart(8, '0') + ')');
+                        // 性能：每条记录一次日志会拖慢大文件解析，仅在调试模式输出
+                        if (globalThis.__WMF_DEBUG__) {
+                            console.log('Parsed EMF record:', record.type, '(0x' + record.type.toString(16).padStart(8, '0') + ')');
+                        }
                         recordCount++;
                     } else {
                         console.warn('Failed to parse EMF record at offset:', this.getOffset());

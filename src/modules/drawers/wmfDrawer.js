@@ -30,20 +30,20 @@ class WmfDrawer extends BaseDrawer {
     // 初始化画布，传入view尺寸
     this.initCanvas(metafileData, options);
 
-    // 预扫描 MFCOMMENT，识别 MathType 私有编码（仅标记）。
-    // 注意：WMF 中的公式文本由 TEXTOUT 记录 + Symbol/正文 字体编码直接绘制，
-    // AppsMFCC/MTEF 只是描述公式语义的辅助数据，其字符流并不总是与 TEXTOUT
-    // 文本一一对应（例如 image213.wmf 含旧式 "MathType" 注释与 AppsMFCC 混排），
-    // 因此不能用来替换 WMF 文本，仅保留提取能力供诊断/未来使用。
+    // 预扫描与 WMFC 收集合并为单次遍历（性能：两遍循环对大文件翻倍扫描 ESCAPE 记录）。
+    // - MathType MTEF：仅标记，公式文本仍由 TEXTOUT + 字体编码绘制（详见下方注释）
+    // - WMFC 数据块：用于 EMF+ Dual 重组
     this.isMathType = false;
     this.mathTypeMtefStreams = []; // 仅用于提取验证，不参与文本替换
     this.mathTypeMtefStreamIndex = 0;
     this.mathTypeMtefIndex = 0;
     this.appsMfccSkipping = 0; // 多块 MathML 注释剩余待跳过的数据字节数
+    const wmfcBlocks = [];
     for (let i = 0; i < metafileData.records.length; i++) {
       const record = metafileData.records[i];
       if (record.functionId === 0x0626) { // META_ESCAPE
-        const mtefBytes = this.extractMathTypeMtef(record.data);
+        const data = record.data;
+        const mtefBytes = this.extractMathTypeMtef(data);
         if (mtefBytes) {
           this.isMathType = true;
           const parsed = new MathTypeMtefParser(mtefBytes).parse();
@@ -51,8 +51,12 @@ class WmfDrawer extends BaseDrawer {
             this.mathTypeMtefStreams.push(parsed.chars);
           }
         }
-        if (this.isMathTypeComment(record.data)) {
+        if (this.isMathTypeComment(data)) {
           this.isMathType = true;
+        }
+        const wmfcData = this.extractWmfcData(record);
+        if (wmfcData) {
+          wmfcBlocks.push(wmfcData);
         }
       }
     }
@@ -64,18 +68,6 @@ class WmfDrawer extends BaseDrawer {
     const enableEmfPlusDual = true;
 
     if (enableEmfPlusDual) {
-      // 第一遍：扫描并收集所有 WMFC 数据块
-      const wmfcBlocks = [];
-      for (let i = 0; i < metafileData.records.length; i++) {
-        const record = metafileData.records[i];
-        if (record.functionId === 0x0626) { // META_ESCAPE
-          const wmfcData = this.extractWmfcData(record);
-          if (wmfcData) {
-            wmfcBlocks.push(wmfcData);
-          }
-        }
-      }
-
       // 如果找到 WMFC 数据，尝试重组为完整的 EMF 文件
       if (wmfcBlocks.length > 0) {
         console.log('检测到 EMF+ Dual 格式');
@@ -128,9 +120,12 @@ class WmfDrawer extends BaseDrawer {
 
     // 使用标准 WMF 绘制
     console.log('使用标准 WMF 渲染');
+    const debugLogs = globalThis.__WMF_DEBUG__;
     for (let i = 0; i < metafileData.records.length; i++) {
       const record = metafileData.records[i];
-      console.log('Processing WMF record', i, ':', record.functionId, '(0x' + record.functionId.toString(16).padStart(4, '0') + ')');
+      if (debugLogs) {
+        console.log('Processing WMF record', i, ':', record.functionId, '(0x' + record.functionId.toString(16).padStart(4, '0') + ')');
+      }
       this.processRecord(record);
     }
 
@@ -176,14 +171,15 @@ class WmfDrawer extends BaseDrawer {
 
       if (emfHeaderOffset >= 0) {
         console.log('找到 EMF Header at offset', emfHeaderOffset);
-        return data.slice(emfHeaderOffset);
+        // subarray 零拷贝视图，由 reconstructEmfData 统一拷贝，避免大块中间拷贝
+        return data.subarray(emfHeaderOffset);
       }
 
       // 后续块：无法定位 EMF 头时，跳过 WMFC 头部数据
       // 经验上 EMF 数据从偏移 38 开始（根据实际样本）
       const fallbackOffset = 38;
       if (data.length > fallbackOffset) {
-        return data.slice(fallbackOffset);
+        return data.subarray(fallbackOffset);
       }
     }
 

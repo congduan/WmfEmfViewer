@@ -78,11 +78,13 @@ class BaseParser {
     }
 
     // 读取指定长度的字节
+    // 性能：subarray 返回零拷贝视图，避免大文件的整份内存复制
+    // （下游对 record.data 只读，已确认无写操作）
     readBytes(length) {
         if (this.offset + length > this.data.length) {
             length = this.data.length - this.offset;
         }
-        const bytes = this.data.slice(this.offset, this.offset + length);
+        const bytes = this.data.subarray(this.offset, this.offset + length);
         this.offset += length;
         return bytes;
     }

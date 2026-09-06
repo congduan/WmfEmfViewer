@@ -338,6 +338,9 @@
       // 调试信息是否可见（默认关闭：隐藏指令列表和日志，只显示渲染画面）
       let debugInfoVisible = false;
 
+      // 待构建的指令列表（延迟到调试模式开启时才渲染 DOM）
+      let pendingRecords = null;
+
       // 根据开关状态控制指令列表与日志面板的显示
       function updateDebugVisibility() {
         const sidebar = document.querySelector(".sidebar");
@@ -345,6 +348,12 @@
         sidebar.style.display = debugInfoVisible ? "flex" : "none";
         debugEl.style.display =
           debugInfoVisible && debugEl.textContent ? "block" : "none";
+        // 性能：指令列表默认隐藏，延迟到调试模式开启时才构建 DOM
+        if (debugInfoVisible && pendingRecords) {
+          const records = pendingRecords;
+          pendingRecords = null;
+          showRecordsList(records);
+        }
       }
 
       // 显示调试信息
@@ -421,21 +430,24 @@
         canvasRendered = true;
 
         // 检查是否有实际内容
+        // 性能：getImageData 是 GPU→CPU 同步回读，仅在调试信息可见时执行
         try {
-          const imageData = ctx.getImageData(
-            0,
-            0,
-            Math.min(canvas.width, 100),
-            Math.min(canvas.height, 100),
-          );
-          const data = imageData.data;
-          let nonWhitePixels = 0;
-          for (let i = 0; i < data.length; i += 4) {
-            if (data[i] !== 255 || data[i + 1] !== 255 || data[i + 2] !== 255) {
-              nonWhitePixels++;
+          if (debugInfoVisible) {
+            const imageData = ctx.getImageData(
+              0,
+              0,
+              Math.min(canvas.width, 100),
+              Math.min(canvas.height, 100),
+            );
+            const data = imageData.data;
+            let nonWhitePixels = 0;
+            for (let i = 0; i < data.length; i += 4) {
+              if (data[i] !== 255 || data[i + 1] !== 255 || data[i + 2] !== 255) {
+                nonWhitePixels++;
+              }
             }
+            showDebug("Non-white pixels in sample area: " + nonWhitePixels);
           }
-          showDebug("Non-white pixels in sample area: " + nonWhitePixels);
         } catch (error) {
           showDebug("内容检查失败: " + error.message);
         }
@@ -481,47 +493,54 @@
         }
       }
 
+      // 获取用于渲染/导出的解析结果
+      // 性能：优先复用预览阶段已解析的结果，避免重复解码与解析大文件
+      function getRenderData() {
+        if (currentRenderResult && currentRenderFileType) {
+          return {
+            result: currentRenderResult,
+            fileType: currentRenderFileType,
+          };
+        }
+        if (!currentBase64Data) {
+          return { result: null, fileType: null };
+        }
+        const binaryString = atob(currentBase64Data);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        const parser = new MetafileParser(bytes);
+        const result = parser.parse();
+        if (result.error) {
+          throw new Error(result.error);
+        }
+        return { result, fileType: parser.fileType };
+      }
+
+      // 按文件类型创建对应的绘制器（导出用）
+      function createExportDrawer(ctx, fileType) {
+        if (fileType === "wmf" || fileType === "placeable-wmf") {
+          return new WmfDrawer(ctx);
+        } else if (fileType === "emf") {
+          return new EmfDrawer(ctx);
+        } else if (fileType === "emf+") {
+          return new EmfPlusDrawer(ctx);
+        }
+        throw new Error("Unknown file type: " + fileType);
+      }
+
       // 导出为PDF（矢量，使用绘制指令生成）
       function exportToPDF() {
         try {
-          if (!currentBase64Data) {
+          const { result, fileType } = getRenderData();
+          if (!result) {
             throw new Error("没有可用的源数据，无法导出PDF");
           }
 
-          const binaryString = atob(currentBase64Data);
-          const len = binaryString.length;
-          const bytes = new Uint8Array(len);
-          for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-
-          if (typeof MetafileParser === "undefined") {
-            throw new Error(
-              "MetafileParser is not defined. The browser bundle may not have loaded correctly.",
-            );
-          }
-
-          const parser = new MetafileParser(bytes);
-          const result = parser.parse();
-          if (result.error) {
-            throw new Error(result.error);
-          }
-
           const pdfCtx = new PdfContext();
-          let drawer;
-          if (
-            parser.fileType === "wmf" ||
-            parser.fileType === "placeable-wmf"
-          ) {
-            drawer = new WmfDrawer(pdfCtx);
-          } else if (parser.fileType === "emf") {
-            drawer = new EmfDrawer(pdfCtx);
-          } else if (parser.fileType === "emf+") {
-            drawer = new EmfPlusDrawer(pdfCtx);
-          } else {
-            throw new Error("Unknown file type: " + parser.fileType);
-          }
-
+          const drawer = createExportDrawer(pdfCtx, fileType);
           drawer.draw(result);
 
           const pdfBytes = pdfCtx.buildPdf();
@@ -540,7 +559,8 @@
       // 导出为SVG（矢量，复用SvgContext把绘制指令转为SVG元素）
       function exportToSVG() {
         try {
-          if (!currentBase64Data) {
+          const { result, fileType } = getRenderData();
+          if (!result) {
             throw new Error("没有可用的源数据，无法导出SVG");
           }
 
@@ -550,34 +570,8 @@
             );
           }
 
-          const binaryString = atob(currentBase64Data);
-          const len = binaryString.length;
-          const bytes = new Uint8Array(len);
-          for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-
-          const parser = new MetafileParser(bytes);
-          const result = parser.parse();
-          if (result.error) {
-            throw new Error(result.error);
-          }
-
           const svgCtx = new SvgContext();
-          let drawer;
-          if (
-            parser.fileType === "wmf" ||
-            parser.fileType === "placeable-wmf"
-          ) {
-            drawer = new WmfDrawer(svgCtx);
-          } else if (parser.fileType === "emf") {
-            drawer = new EmfDrawer(svgCtx);
-          } else if (parser.fileType === "emf+") {
-            drawer = new EmfPlusDrawer(svgCtx);
-          } else {
-            throw new Error("Unknown file type: " + parser.fileType);
-          }
-
+          const drawer = createExportDrawer(svgCtx, fileType);
           drawer.draw(result);
 
           const svgText = svgCtx.getSvg();
@@ -1377,10 +1371,13 @@
       }
 
       // 显示指令列表
+      // 性能：大文件记录数上千，用 DocumentFragment 批量插入 +
+      // 容器级事件委托（避免每条记录一个监听器）
       function showRecordsList(records) {
         const recordsList = document.getElementById("recordsList");
         recordsList.innerHTML = "";
 
+        const fragment = document.createDocumentFragment();
         records.forEach((record, index) => {
           const recordItem = document.createElement("div");
           recordItem.className = "record-item";
@@ -1433,17 +1430,20 @@
           }
 
           recordItem.textContent = `[${index}] ${typeName}${extraInfo}${paramsInfo}`;
-          recordItem.addEventListener("click", () => {
-            // 移除其他选中项
-            document.querySelectorAll(".record-item").forEach((item) => {
-              item.classList.remove("selected");
-            });
-            // 选中当前项
-            recordItem.classList.add("selected");
-          });
-          recordsList.appendChild(recordItem);
+          fragment.appendChild(recordItem);
         });
+        recordsList.appendChild(fragment);
       }
+
+      // 事件委托：点击选中记录项
+      document.getElementById("recordsList").addEventListener("click", (e) => {
+        const item = e.target.closest(".record-item");
+        if (!item) return;
+        document.querySelectorAll(".record-item.selected").forEach((el) => {
+          el.classList.remove("selected");
+        });
+        item.classList.add("selected");
+      });
 
       // 预览WMF文件
       function previewWMF(base64Data) {
@@ -1512,7 +1512,9 @@
             `解析时间: ${parseTime} ms`;
 
           // 显示指令列表
-          showRecordsList(result.records);
+          // 性能：仅暂存记录，调试侧栏默认隐藏，开启时才构建 DOM
+          pendingRecords = result.records;
+          updateDebugVisibility();
 
           // 按当前选择的渲染器渲染
           renderPreview();
@@ -1532,6 +1534,11 @@
         .getElementById("debugToggle")
         .addEventListener("change", function () {
           debugInfoVisible = this.checked;
+          // 联动解析器/绘制器的日志门控（bundle 默认静默以提升性能）
+          globalThis.__WMF_DEBUG__ = debugInfoVisible;
+          if (debugInfoVisible && globalThis.__consoleLog) {
+            console.log = globalThis.__consoleLog;
+          }
           updateDebugVisibility();
         });
       document

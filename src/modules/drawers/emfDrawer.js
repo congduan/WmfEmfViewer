@@ -89,9 +89,12 @@ class EmfDrawer {
     this.pathState = 'idle';
 
     // 处理每个记录
+    const debugLogs = globalThis.__WMF_DEBUG__;
     for (let i = 0; i < metafileData.records.length; i++) {
       const record = metafileData.records[i];
-      console.log('Processing EMF record', i, ':', record.type, '(0x' + record.type.toString(16).padStart(8, '0') + ')');
+      if (debugLogs) {
+        console.log('Processing EMF record', i, ':', record.type, '(0x' + record.type.toString(16).padStart(8, '0') + ')');
+      }
       this.processEmfRecordType(record.type, record.data);
     }
 

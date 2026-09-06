@@ -244,9 +244,14 @@ class EmfPlusParser extends BaseParser {
                             // 只保留EMF+记录
                             if (r.isEmfPlus) {
                                 records.push(r);
-                                console.log('Parsed EMF+ record:', r.type, '(0x' + r.type.toString(16).padStart(4, '0') + ')', 'flags:', r.flags);
+                                // 性能：每条记录一次日志会拖慢大文件解析，仅在调试模式输出
+                                if (globalThis.__WMF_DEBUG__) {
+                                    console.log('Parsed EMF+ record:', r.type, '(0x' + r.type.toString(16).padStart(4, '0') + ')', 'flags:', r.flags);
+                                }
                             } else {
-                                console.log('Skipped EMF record:', r.type, '(0x' + r.type.toString(16).padStart(8, '0') + ')');
+                                if (globalThis.__WMF_DEBUG__) {
+                                    console.log('Skipped EMF record:', r.type, '(0x' + r.type.toString(16).padStart(8, '0') + ')');
+                                }
                             }
                         }
                         recordCount++;

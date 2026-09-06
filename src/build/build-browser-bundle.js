@@ -84,6 +84,18 @@ function buildBrowserBundle() {
   const browserBundle = `// WMF/EMF/EMF+解析器和绘制器 - 浏览器兼容版本
 // 自动生成的打包文件，包含所有模块化组件
 
+// 性能门控：解析/绘制热循环中的 console.log 数量巨大（每条记录多条），
+// 在 WebView 中每条日志都有 IPC 开销。默认静默，设置 globalThis.__WMF_DEBUG__ = true 可恢复输出。
+(function () {
+  if (typeof globalThis.__WMF_DEBUG__ === 'undefined') {
+    globalThis.__WMF_DEBUG__ = false;
+  }
+  globalThis.__consoleLog = console.log.bind(console);
+  if (!globalThis.__WMF_DEBUG__) {
+    console.log = function () {};
+  }
+})();
+
 ${fileTypeDetectorContent}
 
 ${coordinateTransformerContent}
