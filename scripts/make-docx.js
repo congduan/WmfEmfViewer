@@ -312,7 +312,7 @@ function main() {
     const zipBuf = makeZip(entries);
     fs.writeFileSync(output, zipBuf);
     console.log(`完成: ${output} (${items.length} 张图片, ${(zipBuf.length / 1024).toFixed(1)} KB)`);
-    console.log('用 Word / WPS / Pages 打开即可查看原生渲染效果 (LibreOffice 亦可, 渲染略有差异)。');
+    console.log('用 Word / WPS / Pages 打开即可查看原生渲染效果。');
 }
 
 main();

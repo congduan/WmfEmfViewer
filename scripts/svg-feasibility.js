@@ -1,7 +1,7 @@
 // SVG 渲染 CLI 验证工具
 // 思路：将 SvgContext（模拟 Canvas 2D API 子集，位于 src/modules/svgContext.js）
 // 传给现有 WmfDrawer/EmfDrawer/EmfPlusDrawer，把绘制指令直接转为 SVG。
-// 与 webview.html 中 PdfContext 的做法一致（drawio 的 mxEmfCanvas 也是同理）。
+// 与 webview.html 中 PdfContext 的做法一致。
 //
 // 用法：node scripts/svg-feasibility.js [文件路径] [输出路径]
 // 默认：test_files/sample.wmf -> out/svg-feasibility/sample.wmf.svg

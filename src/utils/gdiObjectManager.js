@@ -1,8 +1,12 @@
 // GDI 对象管理模块
+// 内部用 Map 按"句柄"存取对象。
+// - WMF：句柄即创建顺序索引，create* 自动分配最小未占用句柄；
+// - EMF：句柄由生产者任意分配（[MS-EMF] 2.2.8 ObjectHandle），
+//   必须用 createObjectAt(handle, obj) 按文件声明的句柄存储。
 class GdiObjectManager {
     constructor() {
-        // WMF对象句柄是0基索引，使用对象表来管理
-        this.objectTable = [];
+        /** @type {Map<number, object>} 句柄 -> GDI 对象 */
+        this.objectTable = new Map();
     }
 
     createPen(style, width, color) {
@@ -37,23 +41,25 @@ class GdiObjectManager {
     }
 
     createObject(obj) {
-        const index = this.objectTable.findIndex(item => item == null);
-        if (index === -1) {
-            this.objectTable.push(obj);
-            return this.objectTable.length - 1;
-        }
-        this.objectTable[index] = obj;
-        return index;
+        // 自动分配：找最小未占用句柄（与旧数组"首个空位"语义一致，WMF 用）
+        let handle = 0;
+        while (this.objectTable.has(handle)) handle++;
+        this.objectTable.set(handle, obj);
+        return handle;
+    }
+
+    // 按文件声明的句柄存储（EMF 用）
+    createObjectAt(handle, obj) {
+        this.objectTable.set(handle, obj);
+        return handle;
     }
 
     selectObject(handle) {
-        return this.objectTable[handle];
+        return this.objectTable.get(handle);
     }
 
     deleteObject(handle) {
-        if (handle >= 0 && handle < this.objectTable.length) {
-            this.objectTable[handle] = null;
-        }
+        this.objectTable.delete(handle);
     }
 
     getStockObject(stockIndex) {
@@ -72,7 +78,7 @@ class GdiObjectManager {
     }
 
     clear() {
-        this.objectTable = [];
+        this.objectTable.clear();
     }
 }
 

@@ -134,6 +134,7 @@ class EmfDrawer {
     this.ctx = ctx;
     this.coordinateTransformer = new CoordinateTransformer();
     this.gdiObjectManager = new GdiObjectManager();
+    // 注：EMF 对象统一存 gdiObjectManager（按文件句柄 createObjectAt），不再另设对象表
     this.currentPath = []; // 当前路径点集合
     this.pathState = 'idle'; // 路径状态：idle, active, completed
     this.fillColor = '#000000'; // 默认填充颜色
@@ -188,6 +189,19 @@ class EmfDrawer {
     // 设置 Canvas 实际尺寸（考虑设备像素比）
     this.ctx.canvas.width = Math.round(canvasWidth * dpr);
     this.ctx.canvas.height = Math.round(canvasHeight * dpr);
+
+    // 缓存 canvas 实际尺寸供 setViewport*Ex 换算 vpOrg 使用
+    this._canvasW = canvasWidth;
+    this._canvasH = canvasHeight;
+
+    // 初始化文件声明的 window/viewport 范围（1:1 兜底，
+    // 后续 SETWINDOWEXTEX/SETVIEWPORTEXTEX 会覆盖）
+    const _initW = (metafileData.header.bounds && (metafileData.header.bounds.right - metafileData.header.bounds.left)) || canvasWidth;
+    const _initH = (metafileData.header.bounds && (metafileData.header.bounds.bottom - metafileData.header.bounds.top)) || canvasHeight;
+    this._fileWindowExtX = _initW;
+    this._fileWindowExtY = _initH;
+    this._fileViewportExtX = _initW;
+    this._fileViewportExtY = _initH;
 
     // 设置 CSS 显示尺寸（逻辑像素）
     this.ctx.canvas.style.width = canvasWidth + 'px';
@@ -269,25 +283,42 @@ class EmfDrawer {
   // 应用GDI对象样式
   applyGdiObject(obj) {
     if (obj.type === 'pen') {
-      this.ctx.strokeStyle = obj.color;
-      this.ctx.lineWidth = obj.width || 1;
+      // PS_NULL(5)/NULL_PEN：不描边
+      const isNullPen = obj.style === 5 || obj.color === 'transparent';
+      this.ctx.strokeStyle = isNullPen ? 'transparent' : obj.color;
+      if (!isNullPen) {
+        // 线宽按当前 window→viewport 缩放换算到像素；cosmetic(PS_COSMETIC=0x10) 固定 1px
+        const scale = this.coordinateTransformer.getScale();
+        const w = obj.width || 1;
+        this.ctx.lineWidth = Math.max(1, Math.round(w * Math.abs(scale.x || 1)));
+      }
     } else if (obj.type === 'brush') {
-      this.ctx.fillStyle = obj.color;
+      // BS_NULL/BS_HOLLOW(1) 或显式 transparent：填充透明
+      this.ctx.fillStyle = obj.color === 'transparent' ? 'transparent' : obj.color;
+    } else if (obj.type === 'font' && obj.faceName) {
+      // 字体对象：构建 canvas font 字符串（尺寸按缩放换算）
+      const scale = this.coordinateTransformer.getScale();
+      const size = Math.max(1, Math.round(Math.abs(obj.height || 12) * Math.abs(scale.y || 1)));
+      const weight = (obj.weight || 400) >= 700 ? 'bold ' : '';
+      const italic = obj.italic ? 'italic ' : '';
+      this.ctx.font = `${italic}${weight}${size}px "${obj.faceName || 'sans-serif'}"`;
     }
   }
 
-  // 应用Stock对象（Windows预定义对象）
+  // 应用Stock对象（Windows预定义对象，GetStockObject 枚举 + ENHMETA_STOCK_OBJECT(0x80000000)）
   applyStockObject(handle) {
     const stockObjects = {
-      0x80000000: { type: 'brush', color: '#ffffff' }, // WHITE_BRUSH
-      0x80000001: { type: 'brush', color: '#c0c0c0' }, // LTGRAY_BRUSH
-      0x80000002: { type: 'brush', color: '#808080' }, // GRAY_BRUSH
-      0x80000003: { type: 'brush', color: '#404040' }, // DKGRAY_BRUSH
-      0x80000004: { type: 'brush', color: '#000000' }, // BLACK_BRUSH
-      0x80000005: { type: 'brush', color: 'transparent' }, // NULL_BRUSH
-      0x80000007: { type: 'pen', color: '#000000', width: 1 }, // BLACK_PEN
-      0x80000008: { type: 'pen', color: '#ffffff', width: 1 }, // WHITE_PEN
-      0x80000009: { type: 'pen', color: 'transparent', width: 0 } // NULL_PEN
+      0x80000000: { type: 'brush', color: '#ffffff' },        // WHITE_BRUSH
+      0x80000001: { type: 'brush', color: '#c0c0c0' },        // LTGRAY_BRUSH
+      0x80000002: { type: 'brush', color: '#808080' },        // GRAY_BRUSH
+      0x80000003: { type: 'brush', color: '#404040' },        // DKGRAY_BRUSH
+      0x80000004: { type: 'brush', color: '#000000' },        // BLACK_BRUSH
+      0x80000005: { type: 'brush', color: 'transparent' },    // NULL_BRUSH (HOLLOW)
+      0x80000006: { type: 'pen', color: '#ffffff', width: 1 },   // WHITE_PEN
+      0x80000007: { type: 'pen', color: '#000000', width: 1 },   // BLACK_PEN
+      0x80000008: { type: 'pen', color: 'transparent', width: 0 }, // NULL_PEN
+      0x8000000d: { type: 'font', height: -12, weight: 700, faceName: 'System' },      // SYSTEM_FONT
+      0x80000011: { type: 'font', height: -12, weight: 400, faceName: 'MS Shell Dlg' } // DEFAULT_GUI_FONT
     };
 
     const obj = stockObjects[handle];
@@ -655,20 +686,24 @@ class EmfDrawer {
     // elpPenStyle(20) elpWidth(24) elpBrushStyle(28) elpColor(32) elpHatch(36) ...
     if (data.length < 40) return;
     const ihPen = this.readDwordFromData(data, 0);
+    if ((ihPen & 0x80000000) !== 0) return; // ENHMETA_STOCK_OBJECT
     const style = this.readDwordFromData(data, 20);
     const width = this.readDwordFromData(data, 24);
     const brushStyle = this.readDwordFromData(data, 28);
-    if (brushStyle === 0) { // BS_SOLID
-      const color = '#' + [data[32], data[33], data[34]].reverse().map(b => b.toString(16).padStart(2, '0')).join('');
-      this.emfObjects.set(ihPen, { type: 'pen', style, width, color });
-      console.log('EMR_EXTCREATEPEN:', ihPen, 'style:', style, 'width:', width, 'color:', color);
-    } else {
-      this.emfObjects.set(ihPen, { type: 'pen', style, width, color: '#000000' });
-    }
+    const color = this.readDwordFromData(data, 32);
+    const elpHatch = this.readLongFromData(data, 36);
+    // BS_HATCHED 时 elpHatch 为颜色别名（[MS-EMF] 2.2.20）
+    let penColor;
+    if (brushStyle === 2 && (elpHatch === 8 || elpHatch === 9)) penColor = this.textColor;
+    else if (brushStyle === 2 && (elpHatch === 10 || elpHatch === 11)) penColor = this.fillColor;
+    else penColor = this.rgbToHex(color);
+    // 按文件句柄存入对象表（统一从 gdiObjectManager 查询）
+    this.gdiObjectManager.createObjectAt(ihPen, { type: 'pen', style, width, color: penColor });
+    console.log('EMR_EXTCREATEPEN: ih=', ihPen, 'style:', style, 'width:', width, 'color:', penColor);
   }
 
   processEmfSmallTextOut(data) {
-    // EMR_SMALLTEXTOUT (MS-EMF 2.3.5.9，参照 LibreOffice emfio ReadEMFSmallTextOut):
+    // EMR_SMALLTEXTOUT (MS-EMF 2.3.5.9):
     // 无 Bounds 字段！布局（record.data 已剥离 8 字节 EMR 头）：
     // x(0) y(4) cChars(8) fuOptions(12) iGraphicsMode(16) exScale(20) eyScale(24)
     // [rclRectangle(28..43) 若无 ETO_NO_RECT] 字符串紧随其后
@@ -717,34 +752,48 @@ class EmfDrawer {
 
   processEmfSetWindowExtEx(data) {
     if (data.length < 8) return;
-    const x = this.readDwordFromData(data, 0);
-    const y = this.readDwordFromData(data, 4);
+    const x = this.readLongFromData(data, 0);
+    const y = this.readLongFromData(data, 4);
     console.log('EMF SetWindowExtEx:', x, y);
-    this.coordinateTransformer.setWindowExt(x, y);
+    // 记录文件声明的窗口范围；transformer 的 windowExt 保持为文件声明值，
+    // 由 setViewportExtEx 决定 transform 输出的目标画布（保持为 canvas 尺寸）。
+    this._fileWindowExtX = x || 1;
+    this._fileWindowExtY = y || 1;
+    this.coordinateTransformer.setWindowExt(this._fileWindowExtX, this._fileWindowExtY);
   }
 
   processEmfSetWindowOrgEx(data) {
     if (data.length < 8) return;
-    const x = this.readDwordFromData(data, 0);
-    const y = this.readDwordFromData(data, 4);
+    const x = this.readLongFromData(data, 0);
+    const y = this.readLongFromData(data, 4);
     console.log('EMF SetWindowOrgEx:', x, y);
     this.coordinateTransformer.setWindowOrg(x, y);
   }
 
   processEmfSetViewportExtEx(data) {
     if (data.length < 8) return;
-    const x = this.readDwordFromData(data, 0);
-    const y = this.readDwordFromData(data, 4);
+    const x = this.readLongFromData(data, 0);
+    const y = this.readLongFromData(data, 4);
     console.log('EMF SetViewportExtEx:', x, y);
-    this.coordinateTransformer.setViewportExt(x, y);
+    // 关键：transformer 的 viewportExt 始终是 canvas 尺寸，文件声明的 vpExt
+    // 只用于视口原点的比例换算。直接用 x,y 覆盖 viewportExt 会导致所有坐标
+    // 被压缩到文件设备尺寸区域，绘制在 canvas 左上角。
+    this._fileViewportExtX = x || 1;
+    this._fileViewportExtY = y || 1;
+    if (this._canvasW && this._canvasH) {
+      this.coordinateTransformer.setViewportExt(this._canvasW, this._canvasH);
+    }
   }
 
   processEmfSetViewportOrgEx(data) {
     if (data.length < 8) return;
-    const x = this.readDwordFromData(data, 0);
-    const y = this.readDwordFromData(data, 4);
+    const x = this.readLongFromData(data, 0);
+    const y = this.readLongFromData(data, 4);
     console.log('EMF SetViewportOrgEx:', x, y);
-    this.coordinateTransformer.setViewportOrg(x, y);
+    // 文件 vpOrg 是"文件设备单位"，需按 fileVpExt → canvas 的比例换算到 canvas 像素。
+    const sx = this._fileViewportExtX ? (this._canvasW || 0) / this._fileViewportExtX : 1;
+    const sy = this._fileViewportExtY ? (this._canvasH || 0) / this._fileViewportExtY : 1;
+    this.coordinateTransformer.setViewportOrg(x * sx, y * sy);
   }
 
   processEmfSetBrushOrgEx(data) {
@@ -818,24 +867,46 @@ class EmfDrawer {
   }
 
   processEmfCreatePen(data) {
-    if (data.length < 12) return;
-    const penStyle = this.readDwordFromData(data, 0);
-    const width = this.readDwordFromData(data, 4);
-    const color = this.readDwordFromData(data, 8);
-    console.log('EMF CreatePen:', penStyle, width, color);
+    if (data.length < 20) return;
+    // EMR_CREATEPEN (MS-EMF 2.3.5.10):
+    //   ihPen(0) + iPenStyle(4) + xWidth(8) + yWidth(12, LOGPEN POINT 的 y，忽略) + Colorref(16)
+    // 旧实现从 offset 0 读 style/color，整体错位 4 字节导致颜色全错。
+    const ihPen = this.readDwordFromData(data, 0);
+    if ((ihPen & 0x80000000) !== 0) return; // ENHMETA_STOCK_OBJECT，不创建
+    const penStyle = this.readDwordFromData(data, 4);
+    const width = this.readLongFromData(data, 8);
+    const color = this.readDwordFromData(data, 16);
+    console.log('EMF CreatePen: ih=', ihPen, 'style:', penStyle, 'width:', width, 'color:', color.toString(16));
 
     const penColor = this.rgbToHex(color);
-    this.gdiObjectManager.createPen(penStyle, width, penColor);
+    this.gdiObjectManager.createObjectAt(ihPen, { type: 'pen', style: penStyle, width, color: penColor });
   }
 
   processEmfCreateBrushIndirect(data) {
     if (data.length < 16) return;
-    const brushStyle = this.readDwordFromData(data, 0);
-    const color = this.readDwordFromData(data, 4);
-    console.log('EMF CreateBrushIndirect:', brushStyle, color);
+    // EMR_CREATEBRUSHINDIRECT (MS-EMF 2.3.5.9):
+    //   ihBrush(0) + lbStyle(4) + lbColor(8) + lbHatch(12)
+    // 旧实现漏读 ihBrush，整体错位 4 字节（把 hatch 当 color，渲染全黑）。
+    const ihBrush = this.readDwordFromData(data, 0);
+    if ((ihBrush & 0x80000000) !== 0) return;
+    const brushStyle = this.readDwordFromData(data, 4);
+    const color = this.readDwordFromData(data, 8);
+    const hatch = this.readLongFromData(data, 12);
+    console.log('EMF CreateBrushIndirect: ih=', ihBrush, 'style:', brushStyle, 'color:', color.toString(16), 'hatch:', hatch);
 
-    const brushColor = this.rgbToHex(color);
-    this.gdiObjectManager.createBrush(brushStyle, brushColor);
+    // BS_HATCHED 时 lbHatch 为颜色别名（[MS-EMF] 2.1.17 / HS_* 枚举）：
+    //   8/9 (SOLIDTEXTCLR/DITHEREDTEXTCLR) -> 文本色; 10/11 (SOLIDBKCLR/...) -> 背景色
+    let brushColor = this.rgbToHex(color);
+    if (brushStyle === 2 /* BS_HATCHED */) {
+      if (hatch === 8 || hatch === 9) brushColor = this.textColor;
+      else if (hatch === 10 || hatch === 11) brushColor = this.fillColor;
+    }
+    // BS_NULL/BS_HOLLOW(1)：空心笔刷，填充应为透明
+    this.gdiObjectManager.createObjectAt(ihBrush, {
+      type: 'brush',
+      style: brushStyle,
+      color: brushStyle === 1 ? 'transparent' : brushColor
+    });
   }
 
   processEmfEllipse(data) {
@@ -969,12 +1040,34 @@ class EmfDrawer {
   }
 
   processEmfExtCreateFontIndirectW(data) {
-    if (data.length < 320) return;
-    // EMR_EXTCREATEFONTINDIRECTW 结构很复杂，包含字体信息
-    // 简化处理：只提取字体高度
-    const height = this.readDwordFromData(data, 4);
-    console.log('EMF ExtCreateFontIndirectW, height:', height);
-    // 这里应该创建字体对象并存储到GDI对象管理器
+    if (data.length < 12) return;
+    // EMR_EXTCREATEFONTINDIRECTW (MS-EMF 2.3.5.7):
+    //   ihFont(0) + offString(4) + LOGFONTW(从 offString 起)
+    // LOGFONTW: lfHeight(0,LONG) lfWidth(4) lfEscapement(8) lfOrientation(12)
+    //           lfWeight(16,LONG) lfItalic(20,BYTE) lfUnderline(21) lfStrikeOut(22) lfCharSet(23)
+    //           lfFaceName(28, 32xUTF-16)
+    const ihFont = this.readDwordFromData(data, 0);
+    if ((ihFont & 0x80000000) !== 0) return;
+    const offString = this.readDwordFromData(data, 4);
+    const lfOff = offString - 8; // offString 相对记录起始（含 8 字节 EMR 头）
+    if (lfOff < 0 || lfOff + 92 > data.length) return;
+
+    const height = this.readLongFromData(data, lfOff);
+    const weight = this.readLongFromData(data, lfOff + 16);
+    const italic = data[lfOff + 20];
+    const underline = data[lfOff + 21];
+    const strikeOut = data[lfOff + 22];
+    const charset = data[lfOff + 23];
+    let faceName = '';
+    for (let i = 0; i < 32; i++) {
+      const ch = data[lfOff + 28 + i * 2] | (data[lfOff + 28 + i * 2 + 1] << 8);
+      if (ch === 0) break;
+      faceName += String.fromCharCode(ch);
+    }
+    console.log('EMF ExtCreateFontIndirectW: ih=', ihFont, 'height:', height, 'weight:', weight, 'face:', faceName);
+    this.gdiObjectManager.createObjectAt(ihFont, {
+      type: 'font', height, width: 0, weight, italic, underline, strikeOut, faceName, charset
+    });
   }
 
   processEmfExtTextOutA(data) {
@@ -1393,7 +1486,7 @@ class EmfDrawer {
       arcDirection: this.arcDirection,
       textColor: this.textColor,
       objectTable: this.gdiObjectManager
-        ? this.gdiObjectManager.objectTable.slice()
+        ? new Map(this.gdiObjectManager.objectTable)
         : null,
       mapMode: ct.mapMode,
       windowOrgX: ct.windowOrgX,
@@ -1416,7 +1509,7 @@ class EmfDrawer {
     this.arcDirection = state.arcDirection;
     if (state.textColor) this.textColor = state.textColor;
     if (this.gdiObjectManager && state.objectTable) {
-      this.gdiObjectManager.objectTable = state.objectTable.slice();
+      this.gdiObjectManager.objectTable = new Map(state.objectTable);
     }
     const ct = this.coordinateTransformer;
     ct.mapMode = state.mapMode;
@@ -1484,7 +1577,7 @@ class EmfDrawer {
   }
 
   // 计算部分椭圆弧的起止角（画布角度）。
-  // 参照 drawio 的 emf-svg.js：GDI 坐标 Y 轴向下，其"逆时针"（AD_COUNTERCLOCKWISE，
+  // GDI 坐标 Y 轴向下，"逆时针"（AD_COUNTERCLOCKWISE，
   // 默认）在屏幕上即逆时针 = 画布 anticlockwise=true（沿角度递减方向）；
   // GDI 顺时针（AD_CLOCKWISE）= 画布 anticlockwise=false。
   _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {

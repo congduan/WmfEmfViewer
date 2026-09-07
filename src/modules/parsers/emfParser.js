@@ -2,8 +2,7 @@
 const BaseParser = require('./baseParser');
 
 // EMF指令类型映射
-// EMF 记录类型映射（依据 [MS-EMF] 2.1.1 RecordType 枚举及 wingdi.h，
-// 与 LibreOffice emfio/source/reader/emfreader.cxx 的 #define 一致）
+// EMF 记录类型映射（依据 [MS-EMF] 2.1.1 RecordType 枚举）
 const EMF_FUNCTIONS = {
     0x00000001: 'EMR_HEADER',
     0x00000002: 'EMR_POLYBEZIER',

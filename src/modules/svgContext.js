@@ -1,7 +1,6 @@
 // SvgContext - 模拟 Canvas 2D API 的 SVG 输出上下文
 // 将 WmfDrawer/EmfDrawer/EmfPlusDrawer 调用的 Canvas 2D 绘制指令
 // 转换为 SVG 元素（<path>/<rect>/<text>/<clipPath> 等），最后可序列化为完整 SVG 文档。
-// 与 webview.html 中的 PdfContext 思路一致（drawio 的 mxEmfCanvas 也是同理）。
 
 class SvgContext {
     constructor() {
