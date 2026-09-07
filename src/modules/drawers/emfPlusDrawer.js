@@ -227,6 +227,14 @@ class EmfPlusDrawer {
     console.log('EMF+ drawing completed');
   }
 
+  // 完成路径绘制（若路径仍处于 active/completed，则描边输出）
+  finishPath() {
+    if (this.pathState === 'active' || this.pathState === 'completed') {
+      this.ctx.stroke();
+      this.pathState = 'idle';
+    }
+  }
+
   processEmfPlusRecordType(recordType, flags, data) {
     // 查表分派：记录类型 -> 处理方法名，映射见文件顶部 EMF_PLUS_RECORD_HANDLERS
     const handlerName = EMF_PLUS_RECORD_HANDLERS[recordType];

@@ -45,12 +45,11 @@ class FileTypeDetector {
             // EMF文件头在offset 40处有dSignature字段，值为0x464D4520 (" EMF")
             const dSignature = this.readDwordAt(40);
             if (dSignature === 0x464D4520) { // " EMF"
-                // 检查是否是EMF+文件
-                if (this.isEmfPlusFile()) {
-                    return 'emf+';
-                } else {
-                    return 'emf';
-                }
+                // EMF+ 是 EMF 的超集：其 EMF+ 记录经 EMR_GDICOMMENT 内嵌于
+                // 标准 EMF 记录流中（Windows 按记录序交织播放）。
+                // 统一按 'emf' 解析全量记录，由 EmfDrawer 在遇到 GDICOMMENT 时
+                // 派发内嵌 EMF+ 记录；'emf+' 类型保留供 isEmfPlusFile() 单独查询。
+                return 'emf';
             }
         }
 
@@ -58,8 +57,10 @@ class FileTypeDetector {
     }
 
     /**
-     * 检查是否为 EMF+ 文件：扫描 EMR_COMMENT (0x46) 记录，
-     * CommentIdentifier 为 0x2B464D45 ("+FME"，小端) 时存在 EMF+ 数据。
+     * 检查是否为 EMF+ 文件：扫描 EMR_GDICOMMENT (0x46) 记录。
+     * [MS-EMF] 2.3.4.7 布局：记录头(8) + DataSize(4) + CommentIdentifier(4) + 数据，
+     * CommentIdentifier = 0x2B464D45 ("EMF+") 时携带 EMF+ 记录流。
+     * 兼容无 DataSize 的变体（CommentIdentifier 紧跟记录头）。
      * @returns {boolean}
      */
     isEmfPlusFile() {
@@ -69,17 +70,20 @@ class FileTypeDetector {
             // 读取EMF头大小（在offset 4处）
             const headerSize = this.readDwordAt(4);
 
-            // 遍历EMF记录，查找 EMR_COMMENT (0x46) 记录，
-            // 其 CommentIdentifier 字段为 0x2B464D45 ("+FME"，小端) 时即为 EMF+ 数据
+            // 遍历EMF记录，查找 EMR_GDICOMMENT (0x46)
             let offset = headerSize;
-            while (offset + 8 <= this.data.length) {
+            while (offset + 12 <= this.data.length) {
                 const type = this.readDwordAt(offset);
                 const size = this.readDwordAt(offset + 4);
                 if (size < 8 || offset + size > this.data.length) break;
 
                 if (type === 0x46 && size >= 12) {
-                    const commentId = this.readDwordAt(offset + 8);
-                    if (commentId === 0x2B464D45) {
+                    // 规范布局：DataSize@+8、CommentIdentifier@+12
+                    if (size >= 16 && this.readDwordAt(offset + 12) === 0x2B464D45) {
+                        return true;
+                    }
+                    // 兼容变体：CommentIdentifier 紧跟记录头
+                    if (this.readDwordAt(offset + 8) === 0x2B464D45) {
                         return true;
                     }
                 }

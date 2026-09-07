@@ -1,6 +1,8 @@
 // EMF绘制模块
 const CoordinateTransformer = require('../../utils/coordinateTransformer');
 const GdiObjectManager = require('../../utils/gdiObjectManager');
+const EmfPlusParser = require('../parsers/emfPlusParser');
+const EmfPlusDrawer = require('./emfPlusDrawer');
 
 // EMF 记录分派表：记录类型 -> 处理方法名（processEmfRecordType 中调用 this[方法名](data)）。
 // 值为 null 表示已识别但无需处理/暂不支持（与原 switch 的空分支等价，不打未知记录日志）。
@@ -90,11 +92,13 @@ const EMF_RECORD_HANDLERS = {
   0x00000035: 'processEmfExtFloodFill',     // EMR_EXTFLOODFILL
 
   // ========== 位图记录 (Bitmap Records) ==========
+  // 五种记录字段布局各不相同（MS-EMF 2.3.1），必须分别解析，
+  // 位图数据一律按 offBmiSrc/offBitsSrc 精确定位（相对记录起始，含 8 字节 EMR 头）。
   0x0000004C: 'processEmfBitBlt',           // EMR_BITBLT
   0x0000004D: 'processEmfStretchBlt',       // EMR_STRETCHBLT
-  0x00000051: 'processEmfBitBlt',           // EMR_STRETCHDIBITS（布局与 BITBLT 兼容）
-  0x00000072: 'processEmfBitBlt',           // EMR_ALPHABLEND（dwRop 位置为 BLENDFUNCTION）
-  0x00000074: 'processEmfStretchBlt',       // EMR_TRANSPARENTBLT（透明色参数暂忽略）
+  0x00000051: 'processEmfStretchDibBits',   // EMR_STRETCHDIBITS
+  0x00000072: 'processEmfAlphaBlend',       // EMR_ALPHABLEND
+  0x00000074: 'processEmfTransparentBlt',   // EMR_TRANSPARENTBLT
 
   // ========== 文本记录 (Text Records) ==========
   0x00000053: 'processEmfExtTextOutA',      // EMR_EXTTEXTOUTA
@@ -116,7 +120,7 @@ const EMF_RECORD_HANDLERS = {
   0x0000004B: null,                         // EMR_EXTSELECTCLIPRGN（暂跳过）
 
   // ========== 已识别但无需处理 ==========
-  0x00000046: null, // EMR_GDICOMMENT（含 EMF+ 内嵌数据，EMF 模式跳过）
+  0x00000046: 'processEmfGdiComment', // EMR_GDICOMMENT（含 EMF+ 内嵌数据时派发）
   0x00000047: null, // EMR_FILLRGN（区域绘制依赖 region 对象，暂跳过）
   0x00000048: null, // EMR_FRAMERGN
   0x00000049: null, // EMR_INVERTRGN
@@ -143,6 +147,8 @@ class EmfDrawer {
     this.arcDirection = 0x01; // 弧方向：默认 AD_COUNTERCLOCKWISE (1)
     this.textColor = '#000000'; // 文本颜色（SetTextColor）
     this.dcStateStack = []; // SaveDC/RestoreDC 状态栈
+    this.currentPos = { x: 0, y: 0 }; // 当前位置（逻辑/窗口坐标），MoveToEx/LineTo/Poly*To 使用
+    this._emfPlusDrawer = null; // 惰性创建的内嵌 EMF+ 播放器（与标准 EMF 记录共享 ctx）
   }
 
   draw(metafileData, options = {}) {
@@ -228,6 +234,7 @@ class EmfDrawer {
     // 重置路径状态
     this.currentPath = [];
     this.pathState = 'idle';
+    this.currentPos = { x: 0, y: 0 };
 
     // 处理每个记录
     const debugLogs = globalThis.__WMF_DEBUG__;
@@ -433,6 +440,10 @@ class EmfDrawer {
       points.push(transformed);
     }
 
+    // 从当前位置起步（GDI PolyBezierTo 语义）
+    this.ctx.beginPath();
+    const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+    this.ctx.moveTo(start.x, start.y);
     for (let i = 0; i < points.length; i += 3) {
       if (i + 2 < points.length) {
         this.ctx.bezierCurveTo(
@@ -443,6 +454,14 @@ class EmfDrawer {
       }
     }
     this.ctx.stroke();
+    const last = points[points.length - 1];
+    if (last) {
+      // 记录逻辑坐标终点
+      this.currentPos = {
+        x: this.readLongFromData(data, 20 + (count - 1) * 8),
+        y: this.readLongFromData(data, 24 + (count - 1) * 8)
+      };
+    }
   }
 
   processEmfPolylineTo(data) {
@@ -455,6 +474,9 @@ class EmfDrawer {
 
     if (data.length < 20 + count * 8) return;
 
+    this.ctx.beginPath();
+    const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+    this.ctx.moveTo(start.x, start.y);
     for (let i = 0; i < count; i++) {
       const x = this.readLongFromData(data, 20 + i * 8);
       const y = this.readLongFromData(data, 24 + i * 8);
@@ -462,6 +484,10 @@ class EmfDrawer {
       this.ctx.lineTo(transformed.x, transformed.y);
     }
     this.ctx.stroke();
+    this.currentPos = {
+      x: this.readLongFromData(data, 20 + (count - 1) * 8),
+      y: this.readLongFromData(data, 24 + (count - 1) * 8)
+    };
   }
 
   processEmfPolyPolyline(data) {
@@ -607,10 +633,17 @@ class EmfDrawer {
     const count = this.readDwordFromData(data, 16);
     if (count < 3 || count % 3 !== 0 || data.length < 20 + count * 4) return;
     const points = this.readPoints16(data, 20, count);
+    this.ctx.beginPath();
+    const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+    this.ctx.moveTo(start.x, start.y);
     for (let i = 0; i + 2 < points.length; i += 3) {
       this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
     }
     this.ctx.stroke();
+    this.currentPos = {
+      x: this.readInt16FromData(data, 20 + (count - 1) * 4),
+      y: this.readInt16FromData(data, 20 + (count - 1) * 4 + 2)
+    };
   }
 
   processEmfPolyLineTo16(data) {
@@ -619,8 +652,15 @@ class EmfDrawer {
     const count = this.readDwordFromData(data, 16);
     if (count < 1 || data.length < 20 + count * 4) return;
     const points = this.readPoints16(data, 20, count);
+    this.ctx.beginPath();
+    const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+    this.ctx.moveTo(start.x, start.y);
     points.forEach(p => this.ctx.lineTo(p.x, p.y));
     this.ctx.stroke();
+    this.currentPos = {
+      x: this.readInt16FromData(data, 20 + (count - 1) * 4),
+      y: this.readInt16FromData(data, 20 + (count - 1) * 4 + 2)
+    };
   }
 
   processEmfPolyPolyline16(data) {
@@ -750,6 +790,24 @@ class EmfDrawer {
     console.log('EMR_SMALLTEXTOUT:', x, y, 'text:', text.substring(0, 50));
   }
 
+  // 处理 EMR_GDICOMMENT：EMF+ 数据经此内嵌于标准 EMF 记录流（Windows 按记录序交织播放）。
+  // data（record.data，已剥离 8 字节 EMR 头）布局：[DataSize(4)] [CommentIdentifier(4)] [EMF+ 记录...]
+  processEmfGdiComment(data) {
+    if (!data || data.length < 8) return;
+    if (this.readDwordFromData(data, 4) !== 0x2B464D45) return; // 非 EMF+ 注释
+    try {
+      const parser = new EmfPlusParser(data); // parseEmfPlusRecords 只依赖入参
+      const emfPlusRecords = parser.parseEmfPlusRecords(data);
+      if (emfPlusRecords.length === 0) return;
+      if (!this._emfPlusDrawer) this._emfPlusDrawer = new EmfPlusDrawer(this.ctx);
+      for (const rec of emfPlusRecords) {
+        this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
+      }
+    } catch (e) {
+      console.log('EMF+ GDIComment playback failed:', e.message);
+    }
+  }
+
   processEmfSetWindowExtEx(data) {
     if (data.length < 8) return;
     const x = this.readLongFromData(data, 0);
@@ -828,11 +886,13 @@ class EmfDrawer {
 
   processEmfMoveToEx(data) {
     if (data.length < 8) return;
-    const x = this.readDwordFromData(data, 0);
-    const y = this.readDwordFromData(data, 4);
-    const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-    this.ctx.moveTo(transformed.x, transformed.y);
-    console.log('EMF MoveToEx:', x, y, '->', transformed.x, transformed.y);
+    const x = this.readLongFromData(data, 0);
+    const y = this.readLongFromData(data, 4);
+    // GDI 语义：MoveToEx 仅更新"当前位置"，不立即产生绘制动作。
+    // 实际的 moveTo 由后续 LineTo/Poly*To 在自身 beginPath 中完成，
+    // 否则 moveTo 会累积进共享路径段导致 SVG 体积二次方膨胀。
+    this.currentPos = { x, y };
+    console.log('EMF MoveToEx:', x, y);
   }
 
   processEmfRestoreDC(data) {
@@ -950,12 +1010,17 @@ class EmfDrawer {
 
   processEmfLineTo(data) {
     if (data.length < 8) return;
-    const x = this.readDwordFromData(data, 0);
-    const y = this.readDwordFromData(data, 4);
-    const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-    this.ctx.lineTo(transformed.x, transformed.y);
+    const x = this.readLongFromData(data, 0);
+    const y = this.readLongFromData(data, 4);
+    const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+    const to = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+    // 每条线独立 beginPath，避免路径段跨记录累积
+    this.ctx.beginPath();
+    this.ctx.moveTo(from.x, from.y);
+    this.ctx.lineTo(to.x, to.y);
     this.ctx.stroke();
-    console.log('EMF LineTo:', x, y, '->', transformed.x, transformed.y);
+    this.currentPos = { x, y };
+    console.log('EMF LineTo:', x, y);
   }
 
   processEmfBeginPath(data) {
@@ -1152,202 +1217,380 @@ class EmfDrawer {
     }
   }
 
-  processEmfBitBlt(data) {
-    if (data.length < 100) return;
-    // EMR_BITBLT 结构 (MS-EMF 2.3.1.1)
-    // Bounds (16 bytes, offset 0-15): 目标矩形边界
-    // xDest (4 bytes, offset 16): 目标X坐标
-    // yDest (4 bytes, offset 20): 目标Y坐标  
-    // cxDest (4 bytes, offset 24): 目标宽度
-    // cyDest (4 bytes, offset 28): 目标高度
+  // ---- 位图记录公共工具 ----
+  // 五种 BLT 记录的位图数据按 offBmiSrc/offBitsSrc 精确定位。
+  // 注意：这些偏移相对记录起始（含 8 字节 EMR 头），而 record.data 已剥离头部，
+  // 因此 data 内偏移 = 文件声明值 - 8。
 
-    const boundsLeft = this.readLongFromData(data, 0);
-    const boundsTop = this.readLongFromData(data, 4);
-    const boundsRight = this.readLongFromData(data, 8);
-    const boundsBottom = this.readLongFromData(data, 12);
-
-    const destX = this.readLongFromData(data, 16);
-    const destY = this.readLongFromData(data, 20);
-    const destWidth = this.readLongFromData(data, 24);
-    const destHeight = this.readLongFromData(data, 28);
-
-    // 使用 bounds 来计算实际宽高（如果 cx/cy 为0）
-    const actualWidth = destWidth > 0 ? destWidth : (boundsRight - boundsLeft);
-    const actualHeight = destHeight > 0 ? destHeight : (boundsBottom - boundsTop);
-
-    console.log('EMF BitBlt: dest=', destX, destY, 'size=', actualWidth, 'x', actualHeight);
-
-    // 尝试渲染嵌入的位图数据
-    // 搜索 BITMAPINFOHEADER (biSize=40)
+  // 解码 DIB（BITMAPINFOHEADER + 调色板 + 像素位）为 RGBA。
+  // 支持 1/4/8/16/24/32bpp、BI_RGB 未压缩、BI_RLE8/BI_RLE4、top-down（biHeight<0）。
+  _decodeDib(data, offBmi, cbBmi, offBits, cbBits, opts = {}) {
     try {
-      let bmiOffset = -1;
-      // 在记录数据中搜索 BITMAPINFOHEADER
-      for (let i = 40; i < Math.min(data.length - 40, 200); i += 4) {
-        const biSize = this.readDwordFromData(data, i);
-        if (biSize === 40 || biSize === 108 || biSize === 124) {
-          const biWidth = this.readLongFromData(data, i + 4);
-          const biHeight = this.readLongFromData(data, i + 8);
-          const biPlanes = data[i + 12] | (data[i + 13] << 8);
-          const biBitCount = data[i + 14] | (data[i + 15] << 8);
+      const bmi = offBmi - 8;   // data 内偏移
+      const bits = offBits - 8;
+      if (bmi < 0 || bmi + 40 > data.length) return null;
+      const biSize = this.readDwordFromData(data, bmi);
+      const biWidth = this.readLongFromData(data, bmi + 4);
+      const biHeightRaw = this.readLongFromData(data, bmi + 8);
+      const biPlanes = data[bmi + 12] | (data[bmi + 13] << 8);
+      const biBitCount = data[bmi + 14] | (data[bmi + 15] << 8);
+      const biCompression = this.readDwordFromData(data, bmi + 16);
+      const biClrUsed = this.readDwordFromData(data, bmi + 32);
+      if (biPlanes !== 1 || biWidth <= 0 || biWidth > 20000 || Math.abs(biHeightRaw) > 20000) return null;
+      const width = biWidth;
+      const height = Math.abs(biHeightRaw);
+      const topDown = biHeightRaw < 0;
+      // 像素量保护：超出上限（1.5M 像素）的位图跳过，防内存/输出膨胀
+      if (width * height > 1572864) return null;
 
-          // 验证header合理性
-          if (biPlanes === 1 && biWidth > 0 && biWidth < 20000 && Math.abs(biHeight) < 20000 &&
-            (biBitCount === 1 || biBitCount === 4 || biBitCount === 8 || biBitCount === 16 ||
-              biBitCount === 24 || biBitCount === 32)) {
-            bmiOffset = i;
+      const palCount = biBitCount <= 8 ? (biClrUsed || (1 << biBitCount)) : 0;
+      const palette = [];
+      for (let i = 0; i < palCount; i++) {
+        const o = bmi + biSize + i * 4;
+        if (o + 4 > data.length) break;
+        palette.push([data[o + 2], data[o + 1], data[o], 255]); // BGR -> RGB
+      }
+
+      const out = new Uint8ClampedArray(width * height * 4);
+      const end = Math.min(data.length, bits + cbBits);
+      const transparent = opts.transparentColor;
+      const tr = transparent !== undefined ? (transparent & 0xFF) : -1;
+      const tg = transparent !== undefined ? ((transparent >> 8) & 0xFF) : -1;
+      const tb = transparent !== undefined ? ((transparent >> 16) & 0xFF) : -1;
+      const useAlpha = !!opts.alphaFromPixels;
+      const constantAlpha = opts.constantAlpha !== undefined ? opts.constantAlpha : 255;
+
+      const putPx = (x, y, r, g, b, a) => {
+        if (x < 0 || x >= width || y < 0 || y >= height) return;
+        if (r === tr && g === tg && b === tb) a = 0; // 透明色键
+        if (constantAlpha < 255) a = (a * constantAlpha) / 255;
+        const o = (y * width + x) * 4;
+        out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = a;
+      };
+
+      if (biCompression === 0 || biCompression === 3) { // BI_RGB / BI_BITFIELDS
+        const rowSize = Math.ceil((width * biBitCount) / 32) * 4;
+        for (let y = 0; y < height; y++) {
+          const srcY = topDown ? y : (height - 1 - y);
+          const rowOff = bits + srcY * rowSize;
+          for (let x = 0; x < width; x++) {
+            let r = 0, g = 0, b = 0, a = 255;
+            if (biBitCount === 1) {
+              const o = rowOff + (x >> 3);
+              if (o >= end) continue;
+              const idx = (data[o] >> (7 - (x & 7))) & 1;
+              const c = palette[idx] || [0, 0, 0, 255];
+              r = c[0]; g = c[1]; b = c[2];
+            } else if (biBitCount === 4) {
+              const o = rowOff + (x >> 1);
+              if (o >= end) continue;
+              const idx = (x & 1) === 0 ? (data[o] >> 4) : (data[o] & 0x0F);
+              const c = palette[idx] || [0, 0, 0, 255];
+              r = c[0]; g = c[1]; b = c[2];
+            } else if (biBitCount === 8) {
+              const o = rowOff + x;
+              if (o >= end) continue;
+              const c = palette[data[o]] || [0, 0, 0, 255];
+              r = c[0]; g = c[1]; b = c[2];
+            } else if (biBitCount === 16) {
+              const o = rowOff + x * 2;
+              if (o + 2 > end) continue;
+              const v = data[o] | (data[o + 1] << 8);
+              r = ((v >> 10) & 0x1F) * 255 / 31;
+              g = ((v >> 5) & 0x1F) * 255 / 31;
+              b = (v & 0x1F) * 255 / 31;
+            } else if (biBitCount === 24) {
+              const o = rowOff + x * 3;
+              if (o + 3 > end) continue;
+              b = data[o]; g = data[o + 1]; r = data[o + 2];
+            } else if (biBitCount === 32) {
+              const o = rowOff + x * 4;
+              if (o + 4 > end) continue;
+              b = data[o]; g = data[o + 1]; r = data[o + 2];
+              a = useAlpha ? data[o + 3] : 255; // BI_RGB 时 alpha 通道无意义，视为不透明
+            }
+            putPx(x, y, r, g, b, a);
+          }
+        }
+      } else if (biCompression === 1 || biCompression === 2) { // BI_RLE8 / BI_RLE4
+        let pos = bits;
+        let x = 0, y = height - 1; // RLE 数据按 bottom-up 顺序，从图像底部行开始
+        const horiz = biCompression === 2 ? 2 : 1; // 每像素字节数（RLE4 半字节，按字节推进再展开）
+        while (pos + 2 <= end && y >= 0) {
+          const b0 = data[pos], b1 = data[pos + 1];
+          pos += 2;
+          if (b0 > 0) { // 编码模式：b0 个 palette[b1] 像素
+            for (let i = 0; i < b0; i++) {
+              let r, g, b;
+              if (biCompression === 1) {
+                const c = palette[b1] || [0, 0, 0, 255];
+                r = c[0]; g = c[1]; b = c[2];
+              } else {
+                const idx = (i & 1) === 0 ? (b1 >> 4) : (b1 & 0x0F);
+                const c = palette[idx] || [0, 0, 0, 255];
+                r = c[0]; g = c[1]; b = c[2];
+              }
+              putPx(x + i, y, r, g, b, 255);
+            }
+            x += b0;
+          } else if (b1 === 0) { // 行结束
+            x = 0; y--;
+          } else if (b1 === 1) { // 位图结束
             break;
+          } else if (b1 === 2) { // delta
+            if (pos + 2 > end) break;
+            x += data[pos]; y -= data[pos + 1];
+            pos += 2;
+          } else { // 绝对模式：b1 字节原始数据（字对齐）
+            const nbytes = biCompression === 1 ? b1 : Math.ceil(b1 / 2);
+            if (pos + nbytes > end) break;
+            for (let i = 0; i < b1; i++) {
+              let idx;
+              if (biCompression === 1) idx = data[pos + i];
+              else idx = (i & 1) === 0 ? (data[pos + (i >> 1)] >> 4) : (data[pos + (i >> 1)] & 0x0F);
+              const c = palette[idx] || [0, 0, 0, 255];
+              putPx(x + i, y, c[0], c[1], c[2], 255);
+            }
+            x += b1;
+            pos += nbytes + ((nbytes & 1) ? 1 : 0); // 字对齐填充
+          }
+        }
+      } else {
+        return null; // BI_JPEG/BI_PNG 等暂不支持
+      }
+
+      return { width, height, data: out };
+    } catch (e) {
+      console.log('DIB decode failed:', e.message);
+      return null;
+    }
+  }
+
+  // 将解码后的 DIB 绘制到目标矩形（支持缩放）
+  _drawDecodedDib(dib, destX, destY, destW, destH) {
+    if (!dib || destW === 0 || destH === 0) return;
+    const t1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
+    const t2 = this.coordinateTransformer.transform(destX + Math.abs(destW), destY + Math.abs(destH), this.ctx.canvas.width, this.ctx.canvas.height);
+    const x = Math.min(t1.x, t2.x);
+    const y = Math.min(t1.y, t2.y);
+    const w = Math.abs(t2.x - t1.x);
+    const h = Math.abs(t2.y - t1.y);
+    if (w <= 0 || h <= 0) return;
+
+    // 镜像语义：目标宽/高为负时翻转源图
+    if (destW < 0 || destH < 0) {
+      const flipped = this.ctx.createImageData(dib.width, dib.height);
+      for (let sy = 0; sy < dib.height; sy++) {
+        for (let sx = 0; sx < dib.width; sx++) {
+          const dx2 = destW < 0 ? dib.width - 1 - sx : sx;
+          const dy2 = destH < 0 ? dib.height - 1 - sy : sy;
+          for (let k = 0; k < 4; k++) {
+            flipped.data[(dy2 * dib.width + dx2) * 4 + k] = dib.data[(sy * dib.width + sx) * 4 + k];
           }
         }
       }
-
-      if (bmiOffset >= 0) {
-        const biSize = this.readDwordFromData(data, bmiOffset);
-        const biWidth = this.readLongFromData(data, bmiOffset + 4);
-        const biHeight = this.readLongFromData(data, bmiOffset + 8);
-        const biBitCount = data[bmiOffset + 14] | (data[bmiOffset + 15] << 8);
-        const biCompression = this.readDwordFromData(data, bmiOffset + 16);
-
-        console.log('  Bitmap:', biWidth, 'x', biHeight, 'bits:', biBitCount, 'compression:', biCompression);
-
-        // 计算位图数据偏移
-        let colorTableSize = 0;
-        if (biBitCount <= 8) {
-          const biClrUsed = this.readDwordFromData(data, bmiOffset + 32);
-          colorTableSize = (biClrUsed || (1 << biBitCount)) * 4;
-        }
-        const bitsOffset = bmiOffset + biSize + colorTableSize;
-        const bitsSize = data.length - bitsOffset;
-
-        console.log('  Color table:', colorTableSize, 'bytes, Bitmap data offset:', bitsOffset, 'size:', bitsSize);
-
-        // 如果是未压缩位图，尝试渲染
-        if (biCompression === 0 && bitsOffset < data.length) {
-          this.renderBitmap(destX, destY, actualWidth, actualHeight,
-            biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize, bmiOffset + biSize);
-          return;
-        }
-      }
-    } catch (error) {
-      console.log('  Failed to render bitmap:', error.message);
+      dib = flipped;
     }
 
-    // 降级：绘制一个占位符矩形表示图像位置
-    const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformed2 = this.coordinateTransformer.transform(destX + actualWidth, destY + actualHeight, this.ctx.canvas.width, this.ctx.canvas.height);
+    // 浏览器/真实 canvas：临时 canvas + drawImage；SvgContext：putImageData（SVG image 天然缩放）
+    const canvasCtor = (typeof document === 'undefined' && this.ctx.canvas)
+      ? this.ctx.canvas.constructor
+      : null;
+    const isRealCanvasCtor = typeof canvasCtor === 'function' && canvasCtor.name !== 'Object';
+    const tempCanvas = typeof document !== 'undefined'
+      ? document.createElement('canvas')
+      : (isRealCanvasCtor ? new canvasCtor(dib.width, dib.height) : null);
 
-    const w = Math.abs(transformed2.x - transformed1.x);
-    const h = Math.abs(transformed2.y - transformed1.y);
+    if (tempCanvas) {
+      tempCanvas.width = dib.width;
+      tempCanvas.height = dib.height;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.putImageData(this._wrapImageData(dib), 0, 0);
+      this.ctx.drawImage(tempCanvas, x, y, w, h);
+    } else {
+      this.ctx.putImageData(this._wrapImageData(dib), x, y, w, h);
+    }
+    console.log('  DIB drawn at:', x, y, w, h, '(source', dib.width, 'x', dib.height + ')');
+  }
 
-    if (w > 0 && h > 0) {
-      const savedFillStyle = this.ctx.fillStyle;
-      const savedStrokeStyle = this.ctx.strokeStyle;
+  _wrapImageData(dib) {
+    // 保证对象满足 ImageData 接口（ctx.putImageData 兼容）
+    if (typeof ImageData !== 'undefined') {
+      try { return new ImageData(dib.data, dib.width, dib.height); } catch (e) { /* fallthrough */ }
+    }
+    return { width: dib.width, height: dib.height, data: dib.data };
+  }
 
-      this.ctx.fillStyle = '#f0f0f0';
-      this.ctx.strokeStyle = '#cccccc';
-      this.ctx.fillRect(transformed1.x, transformed1.y, w, h);
-      this.ctx.strokeRect(transformed1.x, transformed1.y, w, h);
+  processEmfBitBlt(data) {
+    // EMR_BITBLT (MS-EMF 2.3.1.1)，data 内偏移（已剥离 8 字节记录头）：
+    // Bounds(0..15) xDest(16) yDest(20) cxDest(24) cyDest(28) dwRop(32) xSrc(36) ySrc(40)
+    // XformSrc(44..67) BkColorSrc(68) UsageSrc(72) offBmiSrc(76) cbBmiSrc(80)
+    // offBitsSrc(84) cbBitsSrc(88)
+    if (data.length < 92) return;
+    const xDest = this.readLongFromData(data, 16);
+    const yDest = this.readLongFromData(data, 20);
+    const cxDest = this.readLongFromData(data, 24);
+    const cyDest = this.readLongFromData(data, 28);
+    const dwRop = this.readDwordFromData(data, 32);
+    const offBmi = this.readDwordFromData(data, 76);
+    const cbBmi = this.readDwordFromData(data, 80);
+    const offBits = this.readDwordFromData(data, 84);
+    const cbBits = this.readDwordFromData(data, 88);
+    console.log('EMF BitBlt: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'rop=0x' + dwRop.toString(16));
 
-      this.ctx.fillStyle = savedFillStyle;
-      this.ctx.strokeStyle = savedStrokeStyle;
+    if (dwRop === 0x00000042) { // BLACKNESS
+      this._fillBltRect(xDest, yDest, cxDest, cyDest, '#000000'); return;
+    }
+    if (dwRop === 0x00FF0062) { // WHITENESS
+      this._fillBltRect(xDest, yDest, cxDest, cyDest, '#ffffff'); return;
+    }
+    // 无 DIB 或解码失败：不绘制（避免灰色占位块覆盖后续内容）
+    const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits) : null;
+    if (dib) {
+      this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
     }
   }
 
   processEmfStretchBlt(data) {
+    // EMR_STRETCHBLT (MS-EMF 2.3.1.6)，data 内偏移：
+    // Bounds(0..15) xDest(16) yDest(20) cxDest(24) cyDest(28) dwRop(32) xSrc(36) ySrc(40)
+    // XformSrc(44..67) BkColorSrc(68) UsageSrc(72) offBmiSrc(76) cbBmiSrc(80)
+    // offBitsSrc(84) cbBitsSrc(88) cxSrc(92) cySrc(96)
     if (data.length < 100) return;
-    // EMR_STRETCHBLT 结构 (MS-EMF 2.3.1.6)
-    // STRETCHBLT 记录通常比较小，不包含位图数据，只是引用
-    // 对于小的STRETCHBLT记录，绘制占位符
+    const xDest = this.readLongFromData(data, 16);
+    const yDest = this.readLongFromData(data, 20);
+    const cxDest = this.readLongFromData(data, 24);
+    const cyDest = this.readLongFromData(data, 28);
+    const dwRop = this.readDwordFromData(data, 32);
+    const xSrc = this.readLongFromData(data, 36);
+    const ySrc = this.readLongFromData(data, 40);
+    const offBmi = this.readDwordFromData(data, 76);
+    const cbBmi = this.readDwordFromData(data, 80);
+    const offBits = this.readDwordFromData(data, 84);
+    const cbBits = this.readDwordFromData(data, 88);
+    const cxSrc = this.readLongFromData(data, 92);
+    const cySrc = this.readLongFromData(data, 96);
+    console.log('EMF StretchBlt: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'src=(', xSrc, ySrc, ')', cxSrc, 'x', cySrc);
 
-    const boundsLeft = this.readLongFromData(data, 0);
-    const boundsTop = this.readLongFromData(data, 4);
-    const boundsRight = this.readLongFromData(data, 8);
-    const boundsBottom = this.readLongFromData(data, 12);
+    if (dwRop === 0x00000042) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#000000'); return; }
+    if (dwRop === 0x00FF0062) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#ffffff'); return; }
+    const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits) : null;
+    if (dib) {
+      // 源矩形裁剪：按 cxSrc/cySrc 与源偏移取子图（简化：整图贴到目标大小）
+      this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
+    }
+  }
 
-    const destX = this.readLongFromData(data, 16);
-    const destY = this.readLongFromData(data, 20);
-    const destWidth = this.readLongFromData(data, 24);
-    const destHeight = this.readLongFromData(data, 28);
+  processEmfStretchDibBits(data) {
+    // EMR_STRETCHDIBITS (MS-EMF 2.3.1.8)，data 内偏移：
+    // Bounds(0..15) xDest(16) yDest(20) xSrc(24) ySrc(28) cxSrc(32) cySrc(36)
+    // offBmiSrc(40) cbBmiSrc(44) offBitsSrc(48) cbBitsSrc(52) iUsageSrc(56) dwRop(60)
+    // cxDest(64) cyDest(68)
+    if (data.length < 72) return;
+    const xDest = this.readLongFromData(data, 16);
+    const yDest = this.readLongFromData(data, 20);
+    const xSrc = this.readLongFromData(data, 24);
+    const ySrc = this.readLongFromData(data, 28);
+    const cxSrc = this.readDwordFromData(data, 32);
+    const cySrc = this.readDwordFromData(data, 36);
+    const offBmi = this.readDwordFromData(data, 40);
+    const cbBmi = this.readDwordFromData(data, 44);
+    const offBits = this.readDwordFromData(data, 48);
+    const cbBits = this.readDwordFromData(data, 52);
+    const dwRop = this.readDwordFromData(data, 60);
+    let cxDest = this.readLongFromData(data, 64);
+    let cyDest = this.readLongFromData(data, 68);
+    // cxDest/cyDest 为符号扩展的源尺寸（MS-EMF 2.2.9：负值表示翻转）
+    if (cxDest === 0 && cxSrc) cxDest = cxSrc;
+    if (cyDest === 0 && cySrc) cyDest = cySrc;
+    console.log('EMF StretchDIBits: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'src=(', xSrc, ySrc, ')', cxSrc, 'x', cySrc);
 
-    // 使用 bounds 来计算实际宽高（如果 cx/cy 为0）
-    const actualWidth = destWidth > 0 ? destWidth : (boundsRight - boundsLeft);
-    const actualHeight = destHeight > 0 ? destHeight : (boundsBottom - boundsTop);
-
-    console.log('EMF StretchBlt: dest=', destX, destY, 'size=', actualWidth, 'x', actualHeight, 'data.length=', data.length);
-
-    // 如果记录足够大(>1000字节)，可能包含位图数据，尝试搜索
-    if (data.length > 1000) {
-      try {
-        let bmiOffset = -1;
-        // 在记录数据中搜索 BITMAPINFOHEADER
-        for (let i = 40; i < Math.min(data.length - 40, 200); i += 4) {
-          const biSize = this.readDwordFromData(data, i);
-          if (biSize === 40 || biSize === 108 || biSize === 124) {
-            const biWidth = this.readLongFromData(data, i + 4);
-            const biHeight = this.readLongFromData(data, i + 8);
-            const biPlanes = data[i + 12] | (data[i + 13] << 8);
-            const biBitCount = data[i + 14] | (data[i + 15] << 8);
-
-            // 验证header合理性
-            if (biPlanes === 1 && biWidth > 0 && biWidth < 20000 && Math.abs(biHeight) < 20000 &&
-              (biBitCount === 1 || biBitCount === 4 || biBitCount === 8 || biBitCount === 16 ||
-                biBitCount === 24 || biBitCount === 32)) {
-              bmiOffset = i;
-              break;
+    if (dwRop === 0x00000042) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#000000'); return; }
+    if (dwRop === 0x00FF0062) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#ffffff'); return; }
+    const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits) : null;
+    if (dib) {
+      // 源矩形子图裁剪（cxSrc/cySrc 可能小于整图）
+      let use = dib;
+      if ((cxSrc > 0 && cxSrc < dib.width) || (cySrc > 0 && cySrc < dib.height)) {
+        const sw = cxSrc > 0 ? cxSrc : dib.width;
+        const sh = cySrc > 0 ? cySrc : dib.height;
+        const sub = this.ctx.createImageData(sw, sh);
+        for (let yy = 0; yy < sh; yy++) {
+          for (let xx = 0; xx < sw; xx++) {
+            const sx = xSrc + xx, sy = ySrc + yy;
+            if (sx < 0 || sx >= dib.width || sy < 0 || sy >= dib.height) continue;
+            for (let k = 0; k < 4; k++) {
+              sub.data[(yy * sw + xx) * 4 + k] = dib.data[(sy * dib.width + sx) * 4 + k];
             }
           }
         }
-
-        if (bmiOffset >= 0) {
-          const biSize = this.readDwordFromData(data, bmiOffset);
-          const biWidth = this.readLongFromData(data, bmiOffset + 4);
-          const biHeight = this.readLongFromData(data, bmiOffset + 8);
-          const biBitCount = data[bmiOffset + 14] | (data[bmiOffset + 15] << 8);
-          const biCompression = this.readDwordFromData(data, bmiOffset + 16);
-
-          console.log('  Bitmap:', biWidth, 'x', biHeight, 'bits:', biBitCount, 'compression:', biCompression);
-
-          // 计算位图数据偏移
-          let colorTableSize = 0;
-          if (biBitCount <= 8) {
-            const biClrUsed = this.readDwordFromData(data, bmiOffset + 32);
-            colorTableSize = (biClrUsed || (1 << biBitCount)) * 4;
-          }
-          const bitsOffset = bmiOffset + biSize + colorTableSize;
-          const bitsSize = data.length - bitsOffset;
-
-          console.log('  Bitmap data offset:', bitsOffset, 'size:', bitsSize);
-
-          // 如果是未压缩位图，尝试渲染
-          if (biCompression === 0 && bitsOffset < data.length) {
-            this.renderBitmap(destX, destY, actualWidth, actualHeight,
-              biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize, bmiOffset + biSize);
-            return;
-          }
-        }
-      } catch (error) {
-        console.log('  Failed to render bitmap:', error.message);
+        use = { width: sw, height: sh, data: sub.data };
       }
+      this._drawDecodedDib(use, xDest, yDest, cxDest, cyDest);
     }
+  }
 
-    // 降级：绘制一个占位符矩形表示图像位置
-    const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformed2 = this.coordinateTransformer.transform(destX + actualWidth, destY + actualHeight, this.ctx.canvas.width, this.ctx.canvas.height);
+  processEmfAlphaBlend(data) {
+    // EMR_ALPHABLEND (MS-EMF 2.3.1.2)，data 内偏移：
+    // Bounds(0..15) xDest(16) yDest(20) cxDest(24) cyDest(28) BLENDFUNCTION(32)
+    // xSrc(36) ySrc(40) XformSrc(44..67) BkColorSrc(68) UsageSrc(72)
+    // offBmiSrc(76) cbBmiSrc(80) offBitsSrc(84) cbBitsSrc(88)
+    if (data.length < 92) return;
+    const xDest = this.readLongFromData(data, 16);
+    const yDest = this.readLongFromData(data, 20);
+    const cxDest = this.readLongFromData(data, 24);
+    const cyDest = this.readLongFromData(data, 28);
+    const blendFn = this.readDwordFromData(data, 32);
+    const offBmi = this.readDwordFromData(data, 76);
+    const cbBmi = this.readDwordFromData(data, 80);
+    const offBits = this.readDwordFromData(data, 84);
+    const cbBits = this.readDwordFromData(data, 88);
+    const alphaFormat = blendFn & 0xFF;                 // 1 = AC_SRC_ALPHA
+    const constantAlpha = (blendFn >>> 16) & 0xFF;      // SourceConstantAlpha
+    console.log('EMF AlphaBlend: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'alphaFmt=', alphaFormat, 'constA=', constantAlpha);
 
-    const w = Math.abs(transformed2.x - transformed1.x);
-    const h = Math.abs(transformed2.y - transformed1.y);
-
-    if (w > 0 && h > 0) {
-      const savedFillStyle = this.ctx.fillStyle;
-      const savedStrokeStyle = this.ctx.strokeStyle;
-
-      this.ctx.fillStyle = '#f0f0f0';
-      this.ctx.strokeStyle = '#cccccc';
-      this.ctx.fillRect(transformed1.x, transformed1.y, w, h);
-      this.ctx.strokeRect(transformed1.x, transformed1.y, w, h);
-
-      this.ctx.fillStyle = savedFillStyle;
-      this.ctx.strokeStyle = savedStrokeStyle;
+    const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits,
+      { alphaFromPixels: alphaFormat === 1, constantAlpha }) : null;
+    if (dib) {
+      this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
     }
+  }
+
+  processEmfTransparentBlt(data) {
+    // EMR_TRANSPARENTBLT (MS-EMF 2.3.1.11)，data 内偏移：
+    // Bounds(0..15) xDest(16) yDest(20) cxDest(24) cyDest(28) TransparentColor(32)
+    // xSrc(36) ySrc(40) XformSrc(44..67) BkColorSrc(68) UsageSrc(72)
+    // offBmiSrc(76) cbBmiSrc(80) offBitsSrc(84) cbBitsSrc(88) cxSrc(92) cySrc(96)
+    if (data.length < 100) return;
+    const xDest = this.readLongFromData(data, 16);
+    const yDest = this.readLongFromData(data, 20);
+    const cxDest = this.readLongFromData(data, 24);
+    const cyDest = this.readLongFromData(data, 28);
+    const transparentColor = this.readDwordFromData(data, 32);
+    const offBmi = this.readDwordFromData(data, 76);
+    const cbBmi = this.readDwordFromData(data, 80);
+    const offBits = this.readDwordFromData(data, 84);
+    const cbBits = this.readDwordFromData(data, 88);
+    console.log('EMF TransparentBlt: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'colorKey=0x' + transparentColor.toString(16));
+
+    const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits,
+      { transparentColor }) : null;
+    if (dib) {
+      this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
+    }
+  }
+
+  // BLT 无位图时的纯色填充（BLACKNESS/WHITENESS 或占位）
+  _fillBltRect(x, y, w, h, color) {
+    const t1 = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+    const t2 = this.coordinateTransformer.transform(x + Math.abs(w), y + Math.abs(h), this.ctx.canvas.width, this.ctx.canvas.height);
+    const rx = Math.min(t1.x, t2.x), ry = Math.min(t1.y, t2.y);
+    const rw = Math.abs(t2.x - t1.x), rh = Math.abs(t2.y - t1.y);
+    if (rw <= 0 || rh <= 0) return;
+    const saved = this.ctx.fillStyle;
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(rx, ry, rw, rh);
+    this.ctx.fillStyle = saved;
   }
 
   processEmfCreateMonoBrush(data) {
@@ -1485,6 +1728,7 @@ class EmfDrawer {
       lineWidth: this.lineWidth,
       arcDirection: this.arcDirection,
       textColor: this.textColor,
+      currentPos: { x: this.currentPos.x, y: this.currentPos.y },
       objectTable: this.gdiObjectManager
         ? new Map(this.gdiObjectManager.objectTable)
         : null,
@@ -1497,6 +1741,9 @@ class EmfDrawer {
       viewportOrgY: ct.viewportOrgY,
       viewportExtX: ct.viewportExtX,
       viewportExtY: ct.viewportExtY,
+      worldM11: ct.worldM11, worldM12: ct.worldM12,
+      worldM21: ct.worldM21, worldM22: ct.worldM22,
+      worldDx: ct.worldDx, worldDy: ct.worldDy,
     };
   }
 
@@ -1508,6 +1755,7 @@ class EmfDrawer {
     this.lineWidth = state.lineWidth;
     this.arcDirection = state.arcDirection;
     if (state.textColor) this.textColor = state.textColor;
+    if (state.currentPos) this.currentPos = { x: state.currentPos.x, y: state.currentPos.y };
     if (this.gdiObjectManager && state.objectTable) {
       this.gdiObjectManager.objectTable = new Map(state.objectTable);
     }
@@ -1521,19 +1769,54 @@ class EmfDrawer {
     ct.viewportOrgY = state.viewportOrgY;
     ct.viewportExtX = state.viewportExtX;
     ct.viewportExtY = state.viewportExtY;
+    ct.worldM11 = state.worldM11; ct.worldM12 = state.worldM12;
+    ct.worldM21 = state.worldM21; ct.worldM22 = state.worldM22;
+    ct.worldDx = state.worldDx; ct.worldDy = state.worldDy;
+  }
+
+  // 读取 XFORM（MS-EMF 2.2.13，6 个 4 字节浮点：eM11 eM12 eM21 eM22 eDx eDy）
+  _readXForm(data, off) {
+    if (!data || off + 24 > data.length) return null;
+    return {
+      eM11: this.readFloatFromData(data, off),
+      eM12: this.readFloatFromData(data, off + 4),
+      eM21: this.readFloatFromData(data, off + 8),
+      eM22: this.readFloatFromData(data, off + 12),
+      eDx: this.readFloatFromData(data, off + 16),
+      eDy: this.readFloatFromData(data, off + 20)
+    };
+  }
+
+  readFloatFromData(data, offset) {
+    if (offset + 4 > data.length) return 0;
+    const b = data;
+    const v = (b[offset] | (b[offset + 1] << 8) | (b[offset + 2] << 16) | (b[offset + 3] << 24)) >>> 0;
+    // IEEE-754 单精度解析
+    const sign = (v & 0x80000000) ? -1 : 1;
+    const exp = (v >>> 23) & 0xFF;
+    const frac = v & 0x7FFFFF;
+    if (exp === 255) return frac ? NaN : sign * Infinity;
+    if (exp === 0) return frac === 0 ? sign * 0 : sign * frac * Math.pow(2, -149);
+    return sign * (1 + frac / 0x800000) * Math.pow(2, exp - 127);
   }
 
   processEmfSetWorldTransform(data) {
+    // EMR_SETWORLDTRANSFORM (MS-EMF 2.3.3.20)：XForm(24B)
     if (data.length < 24) return;
-    // XFORM结构：M11, M12, M21, M22, Dx, Dy (每个4字节float)
-    console.log('EMF SetWorldTransform');
-    // Canvas中的transform需要从XFORM转换
+    const xf = this._readXForm(data, 0);
+    if (!xf) return;
+    console.log('EMF SetWorldTransform:', xf);
+    this.coordinateTransformer.setWorldTransform(xf);
   }
 
   processEmfModifyWorldTransform(data) {
+    // EMR_MODIFYWORLDTRANSFORM (MS-EMF 2.3.3.14)：XForm(24B) + iMode(4B)
     if (data.length < 28) return;
-    console.log('EMF ModifyWorldTransform');
-    // 修改世界坐标变换
+    const xf = this._readXForm(data, 0);
+    if (!xf) return;
+    const mode = this.readDwordFromData(data, 24);
+    console.log('EMF ModifyWorldTransform mode:', mode, xf);
+    this.coordinateTransformer.modifyWorldTransform(xf, mode);
   }
 
   processEmfAngleArc(data) {
@@ -1858,120 +2141,6 @@ class EmfDrawer {
     if (this.pathState === 'active' || this.pathState === 'completed') {
       this.ctx.stroke();
       this.pathState = 'idle';
-    }
-  }
-
-  // 渲染DIB位图数据到Canvas
-  renderBitmap(destX, destY, destWidth, destHeight, biWidth, biHeight, biBitCount, data, bitsOffset, bitsSize, colorTableOffset) {
-    try {
-      // 行字节数按 DWORD（4 字节）对齐
-      const rowSize = Math.ceil((biWidth * biBitCount) / 32) * 4;
-      const absHeight = Math.abs(biHeight);
-      const isBottomUp = biHeight > 0;
-
-      // 创建ImageData
-      const imageData = this.ctx.createImageData(biWidth, absHeight);
-      const pixels = imageData.data;
-
-      // 读取调色板（1/4/8bpp 时有效），条目为 BGR(A)
-      const palette = [];
-      if (biBitCount <= 8 && colorTableOffset !== undefined) {
-        const count = 1 << biBitCount;
-        for (let i = 0; i < count; i++) {
-          const o = colorTableOffset + i * 4;
-          if (o + 4 > data.length) break;
-          palette.push([data[o + 2], data[o + 1], data[o], 255]);
-        }
-      }
-
-      // 读取位图数据（按位深解码）
-      for (let y = 0; y < absHeight; y++) {
-        const srcY = isBottomUp ? (absHeight - 1 - y) : y;
-        const srcRowOffset = bitsOffset + srcY * rowSize;
-
-        for (let x = 0; x < biWidth; x++) {
-          const dstOffset = (y * biWidth + x) * 4;
-          let r = 0, g = 0, b = 0, a = 255;
-
-          if (biBitCount === 1) {
-            const byteIdx = srcRowOffset + (x >> 3);
-            if (byteIdx < bitsOffset + bitsSize) {
-              const bit = 7 - (x & 7);
-              const idx = (data[byteIdx] >> bit) & 1;
-              const c = palette[idx] || [0, 0, 0, 255];
-              r = c[0]; g = c[1]; b = c[2];
-            }
-          } else if (biBitCount === 4) {
-            const byteIdx = srcRowOffset + (x >> 1);
-            if (byteIdx < bitsOffset + bitsSize) {
-              const idx = (x & 1) === 0 ? (data[byteIdx] >> 4) : (data[byteIdx] & 0x0F);
-              const c = palette[idx] || [0, 0, 0, 255];
-              r = c[0]; g = c[1]; b = c[2];
-            }
-          } else if (biBitCount === 8) {
-            const idx = data[srcRowOffset + x];
-            const c = palette[idx] || [0, 0, 0, 255];
-            r = c[0]; g = c[1]; b = c[2];
-          } else if (biBitCount === 16) {
-            // RGB555：b[0-4] g[5-9] r[10-14]
-            const o = srcRowOffset + x * 2;
-            if (o + 2 <= bitsOffset + bitsSize) {
-              const v = data[o] | (data[o + 1] << 8);
-              r = ((v >> 10) & 0x1F) * 255 / 31;
-              g = ((v >> 5) & 0x1F) * 255 / 31;
-              b = (v & 0x1F) * 255 / 31;
-            }
-          } else if (biBitCount === 24) {
-            const o = srcRowOffset + x * 3;
-            if (o + 3 <= bitsOffset + bitsSize) {
-              b = data[o]; g = data[o + 1]; r = data[o + 2];
-            }
-          } else if (biBitCount === 32) {
-            const o = srcRowOffset + x * 4;
-            if (o + 4 <= bitsOffset + bitsSize) {
-              b = data[o]; g = data[o + 1]; r = data[o + 2]; a = data[o + 3];
-            }
-          }
-
-          pixels[dstOffset] = r | 0;
-          pixels[dstOffset + 1] = g | 0;
-          pixels[dstOffset + 2] = b | 0;
-          pixels[dstOffset + 3] = a;
-        }
-      }
-
-      // 创建临时canvas
-      // 注意：SvgContext 的 mock canvas 是普通对象，constructor 为 Object，不可用于创建画布
-      const canvasCtor = (typeof document === 'undefined' && this.ctx.canvas)
-        ? this.ctx.canvas.constructor
-        : null;
-      const isRealCanvasCtor = typeof canvasCtor === 'function' && canvasCtor.name !== 'Object';
-      const tempCanvas = typeof document !== 'undefined'
-        ? document.createElement('canvas')
-        : (isRealCanvasCtor ? new canvasCtor(biWidth, absHeight) : null);
-
-      if (tempCanvas) {
-        tempCanvas.width = biWidth;
-        tempCanvas.height = absHeight;
-        const tempCtx = tempCanvas.getContext('2d');
-        tempCtx.putImageData(imageData, 0, 0);
-
-        // 转换坐标并绘制到目标canvas
-        const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight, this.ctx.canvas.width, this.ctx.canvas.height);
-
-        const w = Math.abs(transformed2.x - transformed1.x);
-        const h = Math.abs(transformed2.y - transformed1.y);
-
-        console.log('  Rendering bitmap to:', transformed1.x, transformed1.y, w, h);
-        this.ctx.drawImage(tempCanvas, transformed1.x, transformed1.y, w, h);
-      } else {
-        // 如果无法创建临时canvas（Node环境），直接使用putImageData
-        const transformed = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-        this.ctx.putImageData(imageData, transformed.x, transformed.y);
-      }
-    } catch (error) {
-      console.error('Error rendering bitmap:', error.message);
     }
   }
 }

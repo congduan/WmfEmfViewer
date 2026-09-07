@@ -16,6 +16,7 @@ class SvgContext {
 
         this._nodes = [];       // SVG 元素列表
         this._defs = [];        // <defs> 里的 clipPath 等
+        this._images = [];      // putImageData 保存的位图（getSvg 时编码为 PNG）
         this._segments = [];    // 当前路径段
         this._hasSubpath = false;
         this._state = { clip: null };
@@ -33,11 +34,16 @@ class SvgContext {
     }
 
     static _esc(s) {
-        return String(s)
+        return SvgContext._sanitizeXml(String(s))
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
+    }
+
+    // 剔除 XML 1.0 非法字符（控制字符），避免渲染失败
+    static _sanitizeXml(s) {
+        return String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '');
     }
 
     _attr(extra) {
@@ -305,7 +311,101 @@ class SvgContext {
         return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
     }
 
-    putImageData() { /* 像素级输出暂不支持，drawImage 直接使用 canvas.toDataURL */ }
+    putImageData(imageData, dx, dy, dw, dh) {
+        // 保存像素数据，getSvg() 时编码为 PNG 内嵌。
+        // dw/dh：可选显示尺寸（缩放绘制目标大小），缺省为位图像素尺寸
+        if (!imageData || !imageData.data || !imageData.width || !imageData.height) return;
+        this._images.push({
+            data: new Uint8ClampedArray(imageData.data),
+            width: imageData.width,
+            height: imageData.height,
+            dx: dx || 0,
+            dy: dy || 0,
+            dw: dw || imageData.width,
+            dh: dh || imageData.height,
+        });
+    }
+
+    // 最小 PNG 编码器（zlib 无压缩块 + CRC32），跨环境可用（无需 canvas/zlib）
+    _pngBase64(imgData) {
+        const { width: w, height: h, data: px } = imgData;
+        // 保护：超大位图（>1.5M 像素，无压缩 PNG 后 base64 会超 XML 解析器单节点上限）
+        if (w * h > 1572864 || w <= 0 || h <= 0) return null;
+        // 原始扫描线：每行前置 filter byte 0
+        const raw = new Uint8Array(h * (w * 4 + 1));
+        for (let y = 0; y < h; y++) {
+            const ro = y * (w * 4 + 1);
+            raw[ro] = 0;
+            for (let x = 0; x < w * 4; x++) raw[ro + 1 + x] = px[y * w * 4 + x];
+        }
+        // zlib 流：头 0x78 0x01 + stored deflate 块 + adler32
+        const nBlocks = Math.ceil(raw.length / 65535) || 1;
+        const zlib = new Uint8Array(2 + raw.length + nBlocks * 5 + 4);
+        let p = 0;
+        zlib[p++] = 0x78; zlib[p++] = 0x01;
+        for (let i = 0; i < nBlocks; i++) {
+            const len = Math.min(65535, raw.length - i * 65535);
+            const isLast = i === nBlocks - 1 ? 1 : 0;
+            zlib[p++] = isLast;
+            zlib[p++] = len & 0xFF; zlib[p++] = (len >> 8) & 0xFF;
+            zlib[p++] = ~len & 0xFF; zlib[p++] = (~len >> 8) & 0xFF;
+            zlib.set(raw.subarray(i * 65535, i * 65535 + len), p);
+            p += len;
+        }
+        // adler32
+        let a = 1, b = 0;
+        for (let i = 0; i < raw.length; i++) {
+            a = (a + raw[i]) % 65521;
+            b = (b + a) % 65521;
+        }
+        const adler = ((b << 16) | a) >>> 0;
+        zlib[p++] = (adler >>> 24) & 0xFF; zlib[p++] = (adler >>> 16) & 0xFF;
+        zlib[p++] = (adler >>> 8) & 0xFF; zlib[p++] = adler & 0xFF;
+
+        // PNG chunk 组装
+        const crcTable = SvgContext._crcTable || (SvgContext._crcTable = (() => {
+            const t = new Uint32Array(256);
+            for (let n = 0; n < 256; n++) {
+                let c = n;
+                for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+                t[n] = c >>> 0;
+            }
+            return t;
+        })());
+        const crc32 = (buf, start, end) => {
+            let c = 0xFFFFFFFF;
+            for (let i = start; i < end; i++) c = crcTable[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+            return (c ^ 0xFFFFFFFF) >>> 0;
+        };
+        const chunk = (type, payload) => {
+            const len = payload.length;
+            const out = new Uint8Array(12 + len);
+            const dv = new DataView(out.buffer);
+            dv.setUint32(0, len);
+            for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+            out.set(payload, 8);
+            dv.setUint32(8 + len, crc32(out, 4, 8 + len));
+            return out;
+        };
+        const u32 = (v) => new Uint8Array([(v >>> 24) & 0xFF, (v >>> 16) & 0xFF, (v >>> 8) & 0xFF, v & 0xFF]);
+        const ihdr = new Uint8Array(13);
+        ihdr.set(u32(w), 0); ihdr.set(u32(h), 4);
+        ihdr[8] = 8;  // bit depth
+        ihdr[9] = 6;  // RGBA
+        const png = [new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+            chunk('IHDR', ihdr), chunk('IDAT', zlib), chunk('IEND', new Uint8Array(0))];
+        const total = png.reduce((s, c) => s + c.length, 0);
+        const bytes = new Uint8Array(total);
+        let off = 0;
+        for (const c of png) { bytes.set(c, off); off += c.length; }
+        // base64
+        let bin = '';
+        const CH = 0x8000;
+        for (let i = 0; i < bytes.length; i += CH) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+        }
+        return 'data:image/png;base64,' + btoa(bin);
+    }
 
     drawImage(img, dx, dy, dw, dh) {
         // 浏览器环境：img 为真实 canvas，可序列化为 base64 PNG 内嵌到 SVG
@@ -326,6 +426,18 @@ class SvgContext {
 
     // ---- 序列化 ----
     getSvg() {
+        // 位图节点先于其他节点尾部输出（保持绘制顺序：putImageData 发生在绘制流中，
+        // 简化处理为按调用顺序追加，与 _nodes 交织会有细微差异，位图记录通常独立成块）
+        for (const img of this._images) {
+            try {
+                const href = this._pngBase64(img);
+                this._nodes.push(
+                    '<image x="' + this._fmt(img.dx) + '" y="' + this._fmt(img.dy) + '"' +
+                    ' width="' + this._fmt(img.dw) + '" height="' + this._fmt(img.dh) + '"' +
+                    ' href="' + href + '" preserveAspectRatio="none" />'
+                );
+            } catch (e) { /* 编码失败则跳过该位图 */ }
+        }
         const cw = this.canvas.width || 800;
         const ch = this.canvas.height || 600;
         // 还原逻辑显示尺寸（除以 dpr），viewBox 保持坐标空间不变

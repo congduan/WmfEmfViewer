@@ -51,6 +51,75 @@ class CoordinateTransformer {
         this.viewportExtX = 800;
         /** @type {number} 视口范围Y（设备单位） */
         this.viewportExtY = 600;
+        // 世界变换（GM_ADVANCED / EMR_SETWORLDTRANSFORM），行向量约定 [x y 1] * M：
+        // x' = x*eM11 + y*eM21 + eDx; y' = x*eM12 + y*eM22 + eDy
+        this.worldM11 = 1; this.worldM12 = 0;
+        this.worldM21 = 0; this.worldM22 = 1;
+        this.worldDx = 0; this.worldDy = 0;
+    }
+
+    /** 设置世界变换（MWT_SET / EMR_SETWORLDTRANSFORM） */
+    setWorldTransform(xform) {
+        if (!xform) return;
+        this.worldM11 = xform.eM11; this.worldM12 = xform.eM12;
+        this.worldM21 = xform.eM21; this.worldM22 = xform.eM22;
+        this.worldDx = xform.eDx; this.worldDy = xform.eDy;
+    }
+
+    /**
+     * 修改世界变换。mode（[MS-EMF] 2.1.25）：
+     * 1=MWT_IDENTITY, 2=MWT_LEFTMULTIPLY(新*旧), 3=MWT_RIGHTMULTIPLY(旧*新), 4=MWT_SET
+     */
+    modifyWorldTransform(xform, mode) {
+        if (!xform) return;
+        const m = {
+            a11: this.worldM11, a12: this.worldM12,
+            a21: this.worldM21, a22: this.worldM22,
+            dx: this.worldDx, dy: this.worldDy
+        };
+        const b = {
+            a11: xform.eM11, a12: xform.eM12,
+            a21: xform.eM21, a22: xform.eM22,
+            dx: xform.eDx, dy: xform.eDy
+        };
+        let r;
+        switch (mode) {
+            case 1: // MWT_IDENTITY
+                r = { a11: 1, a12: 0, a21: 0, a22: 1, dx: 0, dy: 0 };
+                break;
+            case 2: // MWT_LEFTMULTIPLY：先应用传入（新），再应用当前（旧）
+                r = this._mul(b, m);
+                break;
+            case 4: // MWT_SET
+                r = b;
+                break;
+            case 3: // MWT_RIGHTMULTIPLY：先应用当前（旧），再应用传入（新）
+            default:
+                r = this._mul(m, b);
+                break;
+        }
+        this.worldM11 = r.a11; this.worldM12 = r.a12;
+        this.worldM21 = r.a21; this.worldM22 = r.a22;
+        this.worldDx = r.dx; this.worldDy = r.dy;
+    }
+
+    // 行向量约定下 3x3 矩阵乘法：C = A * B（点先经 A 再经 B）
+    _mul(a, b) {
+        return {
+            a11: a.a11 * b.a11 + a.a12 * b.a21,
+            a12: a.a11 * b.a12 + a.a12 * b.a22,
+            a21: a.a21 * b.a11 + a.a22 * b.a21,
+            a22: a.a21 * b.a12 + a.a22 * b.a22,
+            dx: a.dx * b.a11 + a.dy * b.a21 + b.dx,
+            dy: a.dx * b.a12 + a.dy * b.a22 + b.dy,
+        };
+    }
+
+    _applyWorld(x, y) {
+        return {
+            x: x * this.worldM11 + y * this.worldM21 + this.worldDx,
+            y: x * this.worldM12 + y * this.worldM22 + this.worldDy
+        };
     }
 
     /**
@@ -77,6 +146,12 @@ class CoordinateTransformer {
      * @returns {Point}
      */
     transform(x, y, canvasWidth, canvasHeight) {
+        // 世界变换（如有）先作用于逻辑坐标
+        if (this.worldM11 !== 1 || this.worldM12 !== 0 || this.worldM21 !== 0 ||
+            this.worldM22 !== 1 || this.worldDx !== 0 || this.worldDy !== 0) {
+            const w = this._applyWorld(x, y);
+            x = w.x; y = w.y;
+        }
         // 统一使用viewport/window转换逻辑
         let cx = x - this.windowOrgX;
         let cy = y - this.windowOrgY;

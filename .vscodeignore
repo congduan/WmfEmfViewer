@@ -1,23 +1,43 @@
-# VSIX 打包排除：扩展运行只需要 out/ 与 src/resources/（webview 模板）
-# 测试样例、npm 子包、网站、文档等不进入发布产物
+# VSIX 打包排除：运行时只需 out/ 编译产物 + src/resources/（webview 模板）
+# 测试样例、快照产物、npm 子包、网站、文档等一律不进入发布产物。
+# 说明：vsce 用 minimatch 逐文件匹配（dot:true），规则支持 ! 白名单恢复，
+# 且对无通配结尾的目录条目会自动追加 /**。
+
+# ── 顶层目录 / 文件 ──
 test/
 test_files/
 packages/
 website/
 docs/
 scripts/
+screenshots/
 .github/
 .vscode/
 .vscode-test/
-screenshots/
 .reference/
 coverage/
-src/modules/
-src/utils/
-src/build/
-src/browser.js
 node_modules/
-out/**/*.map
+.workbuddy/
+output/
 *.vsix
+package-lock.json
+tsconfig.json
+tsconfig.check.json
+.gitignore
+.eslintrc.js
 AGENTS.md
 README.md
+
+# ── out/ 白名单：只保留运行时必需的编译产物 ──
+# out 下的 emf-diff-valid / compare-libreoffice 等目录是回归测试的
+# SVG/PNG 输出（数百 MB），与扩展运行无关，必须排除。
+out/**
+!out/extension.js
+!out/metafileParser.browser.js
+!out/commands/**
+!out/providers/**
+
+# ── src/ 白名单：只保留 resources（扩展图标 + webview 模板）──
+# TS/JS 源码在打包前已被 tsc/esbuild 编译进 out/，无需随包发布。
+src/**
+!src/resources/**

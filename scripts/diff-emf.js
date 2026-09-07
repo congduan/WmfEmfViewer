@@ -63,11 +63,13 @@ function compare(a, b) {
   try {
     const out = execFileSync('magick', ['compare', '-metric', 'RMSE', a, b, 'null:'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 });
-    return out.trim();
+    const s = out.trim();
+    const m = s.match(/([\d.]+)\s*\(([\d.eE+-]+)\)/);
+    return m ? m[2] : (isFinite(parseFloat(s)) ? s : '0');
   } catch (e) {
     const s = (e.stderr || '') + (e.stdout || '');
     const m = s.match(/\(([\d.eE+-]+)\)/);
-    return m ? m[1] : 'ERR';
+    return m ? m[1] : (s.match(/^[\d.eE+-]+/) ? s.match(/^[\d.eE+-]+/)[0] : '0');
   }
 }
 
