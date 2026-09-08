@@ -23,6 +23,7 @@ class SvgContext {
         this._stack = [];
         this._clipCount = 0;
         this._scaleX = 1;       // HiDPI 缩放，用于还原逻辑显示尺寸
+        this._dash = [];        // 虚线模式（applyGdiObject 套用 PS_DASH/DOT 等）
         this._scaleY = 1;
     }
 
@@ -60,6 +61,15 @@ class SvgContext {
         this._scaleY = sy || 1;
     }
 
+    // 设置笔的虚线模式（Canvas 标准：传入 dash 数组与可选 offset；传 [] 重置为实线）
+    setLineDash(segments) {
+        this._dash = Array.isArray(segments) ? segments.slice() : [];
+    }
+
+    getLineDash() {
+        return (this._dash || []).slice();
+    }
+
     save() {
         this._stack.push({
             strokeStyle: this.strokeStyle,
@@ -71,6 +81,7 @@ class SvgContext {
             fillRule: this.fillRule,
             globalAlpha: this.globalAlpha,
             clip: this._state.clip,
+            dash: (this._dash || []).slice(),
         });
     }
 
@@ -86,6 +97,7 @@ class SvgContext {
         this.fillRule = s.fillRule;
         this.globalAlpha = s.globalAlpha;
         this._state.clip = s.clip;
+        this._dash = (s.dash || []).slice();
     }
 
     // ---- 路径 ----
@@ -242,8 +254,9 @@ class SvgContext {
 
     stroke() {
         if (!this._hasSubpath) return;
+        const dashAttr = (this._dash && this._dash.length) ? ' stroke-dasharray="' + this._dash.map(v => this._fmt(v)).join(' ') + '"' : '';
         this._nodes.push(
-            '<path d="' + this._d() + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this.lineWidth) + '" ' + this._attr() + '/>'
+            '<path d="' + this._d() + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this.lineWidth) + '"' + dashAttr + ' ' + this._attr() + '/>'
         );
     }
 
@@ -262,8 +275,9 @@ class SvgContext {
 
     strokeRect(x, y, w, h) {
         const r = this._normalizeRect(x, y, w, h);
+        const dashAttr = (this._dash && this._dash.length) ? ' stroke-dasharray="' + this._dash.map(v => this._fmt(v)).join(' ') + '"' : '';
         this._nodes.push(
-            '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this.lineWidth) + '" ' + this._attr() + '/>'
+            '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this.lineWidth) + '"' + dashAttr + ' ' + this._attr() + '/>'
         );
     }
 

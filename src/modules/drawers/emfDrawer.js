@@ -160,29 +160,30 @@ class EmfDrawer {
     const viewHeight = options.viewHeight || 600;
 
     // 设置Canvas大小和坐标转换
+    // 设备空间模型
+    //  canvas = EMF 设备坐标系（header rclBounds 给出内容设备包围盒）。
+    //  坐标经 window→viewport 仿射映射（若文件声明了 SETMAPMODE/EXT/ORG）进入该空间，
+    //  不再 scaleToFit 放大——外部 rsvg/view 按需缩放显示，1px 描边在任一端恒定 1px。
     let canvasWidth, canvasHeight;
     if (metafileData.header.bounds) {
       const bounds = metafileData.header.bounds;
       const width = bounds.right - bounds.left;
       const height = bounds.bottom - bounds.top;
-
-      // 在保持宽高比的情况下，尽可能占满view
-      const scaleToFit = Math.min(
-        viewWidth / width,
-        viewHeight / height
-      );
-      canvasWidth = Math.round(width * scaleToFit);
-      canvasHeight = Math.round(height * scaleToFit);
-
-      // 设置窗口范围用于坐标转换
+      canvasWidth = Math.max(1, Math.round(Math.abs(width)));
+      canvasHeight = Math.max(1, Math.round(Math.abs(height)));
+      // 初始 window/viewport 均视为 identity（1:1 设备），随后若文件有
+      // SETWINDOWEXTEX / SETVIEWPORTEXTEX 记录会覆盖为文件的 window/viewport 映射。
       this.coordinateTransformer.setWindowOrg(bounds.left, bounds.top);
-      this.coordinateTransformer.setWindowExt(width, height);
+      this.coordinateTransformer.setWindowExt(canvasWidth, canvasHeight);
       this.coordinateTransformer.setViewportOrg(0, 0);
       this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
-
-      console.log('Window:', { org: [bounds.left, bounds.top], ext: [width, height] });
+      // 记录文件初始 window 范围（后续 SETWINDOWEXTEX 会再覆盖，作为兜底基准）
+      this._fileWindowExtX = canvasWidth;
+      this._fileWindowExtY = canvasHeight;
+      this._fileViewportExtX = canvasWidth;
+      this._fileViewportExtY = canvasHeight;
+      console.log('Window:', { org: [bounds.left, bounds.top], ext: [canvasWidth, canvasHeight] });
       console.log('Viewport:', { org: [0, 0], ext: [canvasWidth, canvasHeight] });
-      console.log('View size:', { viewWidth, viewHeight });
     } else {
       canvasWidth = viewWidth;
       canvasHeight = viewHeight;
@@ -302,6 +303,18 @@ class EmfDrawer {
         const scale = this.coordinateTransformer.getScale();
         const w = obj.width || 1;
         this.ctx.lineWidth = Math.max(1, Math.round(w * Math.abs(scale.x || 1)));
+        // Pen Style → SVG stroke-dasharray
+        // PS_SOLID=0 / PS_DASH=1 / PS_DOT=2 / PS_DASHDOT=3 / PS_DASHDOTDOT=4
+        const ps = obj.style & 0xF;
+        let dash = [];
+        if (ps === 1) dash = [3 * w, 1 * w];                // PS_DASH
+        else if (ps === 2) dash = [1 * w, 1 * w];           // PS_DOT
+        else if (ps === 3) dash = [3 * w, 1 * w, 1 * w, 1 * w];              // PS_DASHDOT
+        else if (ps === 4) dash = [3 * w, 1 * w, 1 * w, 1 * w, 1 * w, 1 * w]; // PS_DASHDOTDOT
+        if (typeof this.ctx.setLineDash === 'function') this.ctx.setLineDash(dash);
+      } else {
+        // NULL_PEN：清空 dash 避免残留
+        if (typeof this.ctx.setLineDash === 'function') this.ctx.setLineDash([]);
       }
     } else if (obj.type === 'brush') {
       // BS_NULL/BS_HOLLOW(1) 或显式 transparent：填充透明
@@ -842,14 +855,13 @@ class EmfDrawer {
     const x = this.readLongFromData(data, 0);
     const y = this.readLongFromData(data, 4);
     console.log('EMF SetViewportExtEx:', x, y);
-    // 关键：transformer 的 viewportExt 始终是 canvas 尺寸，文件声明的 vpExt
-    // 只用于视口原点的比例换算。直接用 x,y 覆盖 viewportExt 会导致所有坐标
-    // 被压缩到文件设备尺寸区域，绘制在 canvas 左上角。
+    // 文件声明的 viewport ext 直接进入 transformer（GDI 语义：window→viewport
+    // 仿射映射把逻辑坐标变换到设备坐标）。canvas 本身即设备空间（见 draw()），
+    // 二者一致时 1:1 正确；此前把它强制为 canvas 尺寸的 hack 会使声明了
+    // 自定义 viewport 的 EMF（如 MM_ISOTROPIC 大 window/小 viewport）缩放错误。
     this._fileViewportExtX = x || 1;
     this._fileViewportExtY = y || 1;
-    if (this._canvasW && this._canvasH) {
-      this.coordinateTransformer.setViewportExt(this._canvasW, this._canvasH);
-    }
+    this.coordinateTransformer.setViewportExt(x, y);
   }
 
   processEmfSetViewportOrgEx(data) {
@@ -857,10 +869,8 @@ class EmfDrawer {
     const x = this.readLongFromData(data, 0);
     const y = this.readLongFromData(data, 4);
     console.log('EMF SetViewportOrgEx:', x, y);
-    // 文件 vpOrg 是"文件设备单位"，需按 fileVpExt → canvas 的比例换算到 canvas 像素。
-    const sx = this._fileViewportExtX ? (this._canvasW || 0) / this._fileViewportExtX : 1;
-    const sy = this._fileViewportExtY ? (this._canvasH || 0) / this._fileViewportExtY : 1;
-    this.coordinateTransformer.setViewportOrg(x * sx, y * sy);
+    // 文件 vpOrg 就是设备坐标偏移，直接使用（设备空间与 canvas 一致）
+    this.coordinateTransformer.setViewportOrg(x, y);
   }
 
   processEmfSetBrushOrgEx(data) {

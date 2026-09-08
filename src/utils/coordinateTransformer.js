@@ -31,6 +31,28 @@ const MAP_MODE = {
  * @typedef {{x: number, y: number}} Point
  */
 
+/**
+ * 世界变换矩阵（[MS-EMF] XFORM 结构）
+ * @typedef {Object} Xform
+ * @property {number} eM11
+ * @property {number} eM12
+ * @property {number} eM21
+ * @property {number} eM22
+ * @property {number} eDx
+ * @property {number} eDy
+ */
+
+/**
+ * 乘法中间矩阵
+ * @typedef {Object} MulMatrix
+ * @property {number} a11
+ * @property {number} a12
+ * @property {number} a21
+ * @property {number} a22
+ * @property {number} dx
+ * @property {number} dy
+ */
+
 class CoordinateTransformer {
     constructor() {
         /** @type {number} 当前映射模式，默认 MM_TEXT */
@@ -59,6 +81,7 @@ class CoordinateTransformer {
     }
 
     /** 设置世界变换（MWT_SET / EMR_SETWORLDTRANSFORM） */
+    /** @param {Xform} xform */
     setWorldTransform(xform) {
         if (!xform) return;
         this.worldM11 = xform.eM11; this.worldM12 = xform.eM12;
@@ -69,6 +92,8 @@ class CoordinateTransformer {
     /**
      * 修改世界变换。mode（[MS-EMF] 2.1.25）：
      * 1=MWT_IDENTITY, 2=MWT_LEFTMULTIPLY(新*旧), 3=MWT_RIGHTMULTIPLY(旧*新), 4=MWT_SET
+     * @param {Xform} xform
+     * @param {number} mode
      */
     modifyWorldTransform(xform, mode) {
         if (!xform) return;
@@ -104,6 +129,7 @@ class CoordinateTransformer {
     }
 
     // 行向量约定下 3x3 矩阵乘法：C = A * B（点先经 A 再经 B）
+    /** @param {MulMatrix} a @param {MulMatrix} b @returns {MulMatrix} */
     _mul(a, b) {
         return {
             a11: a.a11 * b.a11 + a.a12 * b.a21,
@@ -115,6 +141,7 @@ class CoordinateTransformer {
         };
     }
 
+    /** @param {number} x @param {number} y @returns {Point} */
     _applyWorld(x, y) {
         return {
             x: x * this.worldM11 + y * this.worldM21 + this.worldDx,
