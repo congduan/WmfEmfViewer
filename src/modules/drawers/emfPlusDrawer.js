@@ -321,14 +321,113 @@ class EmfPlusDrawer {
     console.log('Processing EmfPlusFillPath');
   }
 
-  // 处理EMF+绘制图像记录
+  // 处理EMF+绘制图像记录（DrawImage = 目标矩形与源矩形相同；可引用嵌套 EMF / 位图对象）
   processEmfPlusDrawImage(flags, data) {
-    console.log('Processing EmfPlusDrawImage');
+    const img = this.emfPlusObjects[flags & 0xFF];
+    if (!img || data.length < 24) return;
+    // imageAttributesId(4) + sourceUnit(4) + srcRect(16)
+    const sx = this._emfPlusReadFloat(data, 8);
+    const sy = this._emfPlusReadFloat(data, 12);
+    const sw = this._emfPlusReadFloat(data, 16);
+    const sh = this._emfPlusReadFloat(data, 20);
+    this._drawImageObj(img, sx, sy, sx + sw, sy, sx, sy + sh);
   }
 
-  // 处理EMF+绘制图像点记录
+  // 处理EMF+绘制图像点记录（DrawImagePoints：三点定义目标平行四边形）
   processEmfPlusDrawImagePoints(flags, data) {
-    console.log('Processing EmfPlusDrawImagePoints');
+    const img = this.emfPlusObjects[flags & 0xFF];
+    if (!img || data.length < 28) return;
+    // imageAttributesId(4) + sourceUnit(4) + srcRect(16) + count(4) + points[3]
+    const count = this._emfPlusReadInt32(data, 24);
+    if (count !== 3) return;
+    const pts = [];
+    for (let i = 0; i < 3; i++) {
+      const o = 28 + i * 8;
+      if (o + 8 > data.length) return;
+      pts.push({ x: this._emfPlusReadPointX(flags, data, o), y: this._emfPlusReadPointY(flags, data, o) });
+    }
+    // pts: 左上 / 右上 / 左下（EMF+ page 单位）
+    this._drawImageObj(img, pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
+  }
+
+  _emfPlusReadInt32(data, offset) {
+    if (offset + 4 > data.length) return 0;
+    const b = data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24);
+    return b | 0;
+  }
+
+  // 读取点坐标（flags 0x4000=压缩坐标时用 int16/4096）
+  _emfPlusReadPointX(flags, data, o) {
+    if (flags & 0x4000) {
+      const v = (data[o] | (data[o + 1] << 8)) << 16 >> 16;
+      return v / 4096;
+    }
+    return this._emfPlusReadFloat(data, o);
+  }
+  _emfPlusReadPointY(flags, data, o) {
+    if (flags & 0x4000) {
+      const v = (data[o + 2] | (data[o + 3] << 8)) << 16 >> 16;
+      return v / 4096;
+    }
+    return this._emfPlusReadFloat(data, o + 4);
+  }
+
+  // 渲染嵌套 EMF / 位图对象到指定平行四边形（3 点：左上 / 右上 / 左下）
+  _drawImageObj(img, x1, y1, x2, y2, x3, y3) {
+    try {
+      if (img.type === 'imageData') {
+        // 原生 PNG/JPEG 位图
+        this.ctx.rawPush('<image x="' + Math.min(x1, x2, x3) + '" y="' + Math.min(y1, y2, y3) + '" width="' +
+          Math.abs(Math.max(x1, x2, x3) - Math.min(x1, x2, x3)) + '" height="' +
+          Math.abs(Math.max(y1, y2, y3) - Math.min(y1, y2, y3)) + '" href="' + img.href + '" preserveAspectRatio="none" />');
+        return;
+      }
+      if (img.type !== 'imageEmf') return;
+      const nested = this._renderNestedEmf(img.data);
+      if (!nested) return;
+      const W = nested.width || 1;
+      const H = nested.height || 1;
+      // source 空间 (0,0)-(W,H) → dest 由 3 点定义的仿射
+      const a = (x2 - x1) / W, b = (y2 - y1) / W;
+      const c = (x3 - x1) / H, d = (y3 - y1) / H;
+      const body = nested.nodes.join('\n');
+      const defs = nested.defs.length ? '<defs>' + nested.defs.join('') + '</defs>' : '';
+      this.ctx.rawPush(
+        '<g transform="matrix(' + this._fmtN(a) + ' ' + this._fmtN(b) + ' ' + this._fmtN(c) + ' ' + this._fmtN(d) + ' ' + this._fmtN(x1) + ' ' + this._fmtN(y1) + ')">' +
+        defs + body + '</g>'
+      );
+    } catch (e) {
+      console.log('EMF+ DrawImage failed:', e.message);
+    }
+  }
+
+  _fmtN(v) {
+    return Math.round(v * 100) / 100;
+  }
+
+  // 用同一渲染管线把嵌套 EMF 渲染为独立节点列表（递归播放，支持 EMF+ 内嵌）
+  _renderNestedEmf(bytes) {
+    try {
+      const MetafileParserCtor = require('../../utils/metafileParser.js');
+      const EmfDrawerCtor = require('./emfDrawer.js');
+      const SvgContextCtor = require('../svgContext.js');
+      const parser = new MetafileParserCtor(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+      const result = parser.parse();
+      if (!result || result.error || !result.records) return null;
+      const subCtx = new SvgContextCtor();
+      const drawer = new EmfDrawerCtor(subCtx);
+      drawer.draw(result, { viewWidth: 800, viewHeight: 600 });
+      // 嵌套 EMF 画布尺寸（bounds）作为源坐标空间
+      let W = 800, H = 600;
+      if (result.header && result.header.bounds) {
+        W = Math.abs(result.header.bounds.right - result.header.bounds.left);
+        H = Math.abs(result.header.bounds.bottom - result.header.bounds.top);
+      }
+      return { nodes: subCtx.nodes, defs: subCtx.defs, width: W || 1, height: H || 1 };
+    } catch (e) {
+      console.log('EMF+ nested EMF render failed:', e.message);
+      return null;
+    }
   }
 
   // 处理EMF+绘制字符串记录
@@ -573,31 +672,61 @@ class EmfPlusDrawer {
     console.log('Processing EmfPlusGetDC');
   }
 
-  // EmfPlusObject：ObjectId = flags & 0xFF；data = ObjectType(4) + ObjectData
+  // EmfPlusObject：ObjectId = flags & 0xFF；ObjectType 位于 flags 位 8..14（0x7f00）
+  //  0x0100=Brush 0x0200=Pen 0x0300=Path 0x0500=Image ...
+  // data 起点即对象内容（Image/metafile 等从 data 直接解析）。
   processEmfPlusObject(flags, data) {
-    if (data.length < 4) return;
     const objectId = flags & 0xFF;
-    const objectType = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
-    // ObjectType：0x01 = SolidBrush，0x07 = Pen
-    if (objectType === 0x01 && data.length >= 8) {
-      // EmfPlusSolidBrushData = ARGB(4)
-      const argb = this._emfPlusReadArgb(data, 4);
-      this.emfPlusObjects[objectId] = { type: 'solidBrush', color: this._emfPlusArgbToColor(argb) };
-      console.log('EMF+ SolidBrush #' + objectId, this.emfPlusObjects[objectId].color);
-    } else if (objectType === 0x07 && data.length >= 12) {
-      // EmfPlusPenData：PenDataFlags(4) + PenUnit(4) + PenWidth(4 float) + [可选]
-      const penDataFlags = (data[4] & 0xFF) | ((data[5] & 0xFF) << 8) | ((data[6] & 0xFF) << 16) | ((data[7] & 0xFF) << 24);
-      const penWidth = this._emfPlusReadFloat(data, 12);
-      let color = '#000000';
-      // PenDataSolidBrush 标志位 = 0x4：其后紧跟 EmfPlusSolidBrushData（ARGB）
-      if (penDataFlags & 0x4 && data.length >= 16) {
-        const argb = this._emfPlusReadArgb(data, 16);
-        color = this._emfPlusArgbToColor(argb);
+    const objectType = flags & 0x7F00;
+    if (objectType === 0x0100) { // EmfPlusBrush
+      if (data.length < 8) return;
+      const brushType = this._emfPlusReadInt32(data, 0);
+      if (brushType === 0) { // Solid: EmfPlusSolidBrushData = ARGB
+        const argb = this._emfPlusReadArgb(data, 4);
+        this.emfPlusObjects[objectId] = { type: 'solidBrush', color: this._emfPlusArgbToColor(argb) };
       }
-      this.emfPlusObjects[objectId] = { type: 'pen', color, width: penWidth || 1 };
-      console.log('EMF+ Pen #' + objectId, color, 'width:', penWidth);
+      // Hatch/Texture/PathGradient 后续扩展
+    } else if (objectType === 0x0200 && data.length >= 8) { // EmfPlusPen
+      // EmfPlusPen: PenDataFlags(4) + PenUnit(4) + PenWidth(float, 若 PenDataTransformable?) 简化：
+      const penUnit = this._emfPlusReadInt32(data, 4);
+      let color = '#000000';
+      let width = 1;
+      const flagsD = this._emfPlusReadInt32(data, 0);
+      if ((flagsD & 0x4) && data.length >= 16) { // PenDataSolidBrush：其后为 ARGB
+        const argb = this._emfPlusReadArgb(data, 12);
+        color = this._emfPlusArgbToColor(argb);
+        if (data.length >= 12) width = this._emfPlusReadFloat(data, 8) || 1;
+      } else if (data.length >= 12) {
+        width = this._emfPlusReadFloat(data, 8) || 1;
+        // 定位 solid brush 颜色（若有）
+        if (data.length >= 20) { const argb = this._emfPlusReadArgb(data, 12); color = this._emfPlusArgbToColor(argb); }
+      }
+      this.emfPlusObjects[objectId] = { type: 'pen', color, width, penUnit };
+    } else if (objectType === 0x0300) { // EmfPlusPath —— 暂存原始数据（FillPath 等使用时解析）
+      this.emfPlusObjects[objectId] = { type: 'path', data };
+    } else if (objectType === 0x0500) { // EmfPlusImage
+      if (data.length < 8) return;
+      const type = this._emfPlusReadInt32(data, 4);
+      if (type === 1) { // bitmap
+        // width(8) height(12) stride(16) pixelFormat(20) bitmapType(24)
+        const bitmapType = data.length >= 28 ? this._emfPlusReadInt32(data, 24) : 0;
+        if ((bitmapType === 1 || bitmapType === 2) && data.length > 28) {
+          // PNG / JPEG 原生编码直接引用
+          const mime = bitmapType === 1 ? 'image/png' : 'image/jpeg';
+          const b64 = Buffer.from(data.slice(28)).toString('base64');
+          this.emfPlusObjects[objectId] = { type: 'imageData', href: 'data:' + mime + ';base64,' + b64 };
+        } else {
+          // 原生像素格式（BITMAPINFO + 像素）后续扩展
+        }
+      } else if (type === 2) { // metafile（内嵌 EMF/WMF）
+        const mfType = data.length >= 16 ? this._emfPlusReadInt32(data, 8) : 0;
+        const mfSize = data.length >= 16 ? this._emfPlusReadInt32(data, 12) : 0;
+        if (mfType === 3 && mfSize > 0 && 16 + mfSize <= data.length) {
+          this.emfPlusObjects[objectId] = { type: 'imageEmf', data: data.slice(16, 16 + mfSize) };
+        }
+      }
     } else {
-      console.log('EMF+ Object #' + objectId, 'type 0x' + objectType.toString(16));
+      console.log('EMF+ Object #' + objectId, 'objType 0x' + objectType.toString(16));
     }
   }
 

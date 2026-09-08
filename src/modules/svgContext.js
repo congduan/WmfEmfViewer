@@ -438,7 +438,64 @@ class SvgContext {
         );
     }
 
+    // 直接注入一段 SVG（用于嵌套 EMF 的 <g transform> 包装）与额外 defs
+    rawPush(svgFragment) {
+        if (svgFragment) this._nodes.push(svgFragment);
+    }
+
+    defsPush(defFragment) {
+        if (defFragment) this._defs.push(defFragment);
+    }
+
+    get nodes() { return this._nodes; }
+    get defs() { return this._defs; }
+
     // ---- 序列化 ----
+    /**
+     * 注册 DIB 图案刷（EMR_CREATEDIBPATTERNBRUSHPT）。
+     * @param {{width:number,height:number,data:Uint8ClampedArray}} dib RGBA 像素（height 可正负，负=top-down）
+     * @param {{orgX?:number,orgY?:number}} [opts] 画刷原点（用于图案平移对齐）
+     * @returns {string} 形如 "url(#pat-3)"，作为 fillStyle 即可平铺填充
+     */
+    addPattern(dib, opts) {
+        const { width, height, data } = dib;
+        if (!width || !height || !data) return null;
+        const absH = Math.abs(height);
+        // 已有复用：相同尺寸+像素内容则复用（高频重复 DIB 减少 SVG 体积）
+        const key = width + 'x' + absH + ':' + data.length;
+        if (this._patternCache && this._patternCache.key === key) {
+            return this._patternCache.url;
+        }
+        const id = 'pat-' + (this._patternSeq = (this._patternSeq || 0) + 1);
+        // 翻转 top-down → bottom-up，使 SVG patternContentUnits 默认 image-y-down 正确
+        const finalData = height < 0 ? data : this._flipV(data, width, absH);
+        const href = this._pngBase64({ width, height: absH, data: finalData });
+        const ox = (opts && opts.orgX) || 0;
+        const oy = (opts && opts.orgY) || 0;
+        const def = '<pattern id="' + id + '" patternUnits="userSpaceOnUse" ' +
+            'x="' + this._fmt(ox) + '" y="' + this._fmt(oy) + '" ' +
+            'width="' + this._fmt(width) + '" height="' + this._fmt(absH) + '">' +
+            '<image x="0" y="0" width="' + this._fmt(width) + '" height="' + this._fmt(absH) + '" ' +
+            'preserveAspectRatio="none" href="' + href + '"/>' +
+            '</pattern>';
+        this._defs.push(def);
+        const url = 'url(#' + id + ')';
+        this._patternCache = { key, url };
+        return url;
+    }
+
+    // 垂直翻转 RGBA 像素（top-down → bottom-up 或反向）
+    _flipV(data, width, height) {
+        const row = width * 4;
+        const out = new Uint8ClampedArray(data.length);
+        for (let y = 0; y < height; y++) {
+            const src = (height - 1 - y) * row;
+            const dst = y * row;
+            out.set(data.subarray(src, src + row), dst);
+        }
+        return out;
+    }
+
     getSvg() {
         // 位图节点先于其他节点尾部输出（保持绘制顺序：putImageData 发生在绘制流中，
         // 简化处理为按调用顺序追加，与 _nodes 交织会有细微差异，位图记录通常独立成块）

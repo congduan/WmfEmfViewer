@@ -78,6 +78,16 @@ class CoordinateTransformer {
         this.worldM11 = 1; this.worldM12 = 0;
         this.worldM21 = 0; this.worldM22 = 1;
         this.worldDx = 0; this.worldDy = 0;
+        // device→canvas 平移：把 header rclBounds 原点（内容在设备空间的位置）
+        // 平移到画布 (0,0)，使内容铺满 canvas 且不超界（与各参考实现一致）。
+        this.deviceOrgX = 0;
+        this.deviceOrgY = 0;
+    }
+
+    /** @param {number} x @param {number} y 设置 device→canvas 平移 */
+    setDeviceOrg(x, y) {
+        this.deviceOrgX = x || 0;
+        this.deviceOrgY = y || 0;
     }
 
     /** 设置世界变换（MWT_SET / EMR_SETWORLDTRANSFORM） */
@@ -226,7 +236,7 @@ class CoordinateTransformer {
         }
 
         // WMF/EMF坐标系与Canvas一致（Y轴向下），无需翻转
-        return { x: cx, y: cy };
+        return { x: cx - this.deviceOrgX, y: cy - this.deviceOrgY };
     }
 
     /** @param {number} mode */

@@ -37,6 +37,7 @@ const EMF_RECORD_HANDLERS = {
   0x0000003C: 'processEmfEndPath',          // EMR_ENDPATH
   0x0000003D: 'processEmfCloseFigure',      // EMR_CLOSEFIGURE
   0x0000003E: 'processEmfFillPath',         // EMR_FILLPATH
+  0x0000005E: 'processEmfCreateDibPatternBrushPT', // EMR_CREATEDIBPATTERNBRUSHPT
   0x0000003F: 'processEmfStrokeAndFillPath', // EMR_STROKEANDFILLPATH
   0x00000040: 'processEmfStrokePath',       // EMR_STROKEPATH
   0x00000041: 'processEmfFlattenPath',      // EMR_FLATTENPATH
@@ -145,6 +146,9 @@ class EmfDrawer {
     this.strokeColor = '#000000'; // 默认描边颜色
     this.lineWidth = 1; // 默认线宽
     this.arcDirection = 0x01; // 弧方向：默认 AD_COUNTERCLOCKWISE (1)
+    this._penIsBlack = true;    // 当前是否默认黑色 pen（未显式选彩色笔）
+    this._penStockBlack = true; // 是否 stock BLACK_PEN（1px）：fill 形状用同色描边
+    this._penNull = false;      // NULL_PEN 不描边
     this.textColor = '#000000'; // 文本颜色（SetTextColor）
     this.dcStateStack = []; // SaveDC/RestoreDC 状态栈
     this.currentPos = { x: 0, y: 0 }; // 当前位置（逻辑/窗口坐标），MoveToEx/LineTo/Poly*To 使用
@@ -160,30 +164,30 @@ class EmfDrawer {
     const viewHeight = options.viewHeight || 600;
 
     // 设置Canvas大小和坐标转换
-    // 设备空间模型
-    //  canvas = EMF 设备坐标系（header rclBounds 给出内容设备包围盒）。
-    //  坐标经 window→viewport 仿射映射（若文件声明了 SETMAPMODE/EXT/ORG）进入该空间，
-    //  不再 scaleToFit 放大——外部 rsvg/view 按需缩放显示，1px 描边在任一端恒定 1px。
+    // 设备空间模型：canvas = EMF 设备坐标系（header rclBounds 内容设备包围盒）。
+    // 坐标经 window→viewport 仿射映射（若文件声明了 SETMAPMODE/EXT/ORG）进入该空间，
+    // 不再 scaleToFit 放大——外部 rsvg/view 按需缩放显示，1px 描边在任一端恒定 1px。
     let canvasWidth, canvasHeight;
     if (metafileData.header.bounds) {
       const bounds = metafileData.header.bounds;
-      const width = bounds.right - bounds.left;
-      const height = bounds.bottom - bounds.top;
-      canvasWidth = Math.max(1, Math.round(Math.abs(width)));
-      canvasHeight = Math.max(1, Math.round(Math.abs(height)));
+      const bW = Math.abs(bounds.right - bounds.left);
+      const bH = Math.abs(bounds.bottom - bounds.top);
+      canvasWidth = Math.max(1, Math.round(bW));
+      canvasHeight = Math.max(1, Math.round(bH));
+      // device→canvas：header rclBounds 原点平移到画布 (0,0)，使内容铺满 canvas
+      //（各参考实现均在根层 translate(-bounds.left, -bounds.top)）
+      this.coordinateTransformer.setDeviceOrg(bounds.left, bounds.top);
       // 初始 window/viewport 均视为 identity（1:1 设备），随后若文件有
       // SETWINDOWEXTEX / SETVIEWPORTEXTEX 记录会覆盖为文件的 window/viewport 映射。
-      this.coordinateTransformer.setWindowOrg(bounds.left, bounds.top);
+      this.coordinateTransformer.setWindowOrg(0, 0);
       this.coordinateTransformer.setWindowExt(canvasWidth, canvasHeight);
       this.coordinateTransformer.setViewportOrg(0, 0);
       this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
-      // 记录文件初始 window 范围（后续 SETWINDOWEXTEX 会再覆盖，作为兜底基准）
       this._fileWindowExtX = canvasWidth;
       this._fileWindowExtY = canvasHeight;
       this._fileViewportExtX = canvasWidth;
       this._fileViewportExtY = canvasHeight;
-      console.log('Window:', { org: [bounds.left, bounds.top], ext: [canvasWidth, canvasHeight] });
-      console.log('Viewport:', { org: [0, 0], ext: [canvasWidth, canvasHeight] });
+      console.log('Canvas(device):', canvasWidth, 'x', canvasHeight);
     } else {
       canvasWidth = viewWidth;
       canvasHeight = viewHeight;
@@ -224,10 +228,10 @@ class EmfDrawer {
     this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
     console.log('Canvas cleared');
 
-    // 设置默认绘制样式
+    // 设置默认绘制样式（GDI 默认：BLACK_PEN = 1px 黑色，WHITE_BRUSH 填充）
     this.ctx.strokeStyle = '#000000'; // 黑色描边
     this.ctx.fillStyle = '#ffffff'; // 白色填充
-    this.ctx.lineWidth = 2;
+    this.ctx.lineWidth = 1;
     this.fillColor = '#ffffff';
     this.strokeColor = '#000000';
     console.log('Drawing styles set');
@@ -297,6 +301,10 @@ class EmfDrawer {
     if (obj.type === 'pen') {
       // PS_NULL(5)/NULL_PEN：不描边
       const isNullPen = obj.style === 5 || obj.color === 'transparent';
+      this._penNull = isNullPen;
+      this._penIsBlack = isNullPen || /^(#000000|#000|black)$/i.test(obj.color || '');
+      // 显式创建的笔（非 stock）：不再视为"默认黑笔"
+      if (!obj._isStockPen) this._penStockBlack = false;
       this.ctx.strokeStyle = isNullPen ? 'transparent' : obj.color;
       if (!isNullPen) {
         // 线宽按当前 window→viewport 缩放换算到像素；cosmetic(PS_COSMETIC=0x10) 固定 1px
@@ -317,8 +325,8 @@ class EmfDrawer {
         if (typeof this.ctx.setLineDash === 'function') this.ctx.setLineDash([]);
       }
     } else if (obj.type === 'brush') {
-      // BS_NULL/BS_HOLLOW(1) 或显式 transparent：填充透明
-      this.ctx.fillStyle = obj.color === 'transparent' ? 'transparent' : obj.color;
+      // DIB Pattern Brush（BS_PATTERN/BS_DIBPATTERN）以 url(...) 形式 fill
+      this.ctx.fillStyle = obj.url || (obj.color === 'transparent' ? 'transparent' : obj.color);
     } else if (obj.type === 'font' && obj.faceName) {
       // 字体对象：构建 canvas font 字符串（尺寸按缩放换算）
       const scale = this.coordinateTransformer.getScale();
@@ -326,6 +334,24 @@ class EmfDrawer {
       const weight = (obj.weight || 400) >= 700 ? 'bold ' : '';
       const italic = obj.italic ? 'italic ' : '';
       this.ctx.font = `${italic}${weight}${size}px "${obj.faceName || 'sans-serif'}"`;
+    }
+  }
+
+  // 填充形状收尾：fill 后描边。默认黑色 1px pen（Excel 色块场景）时改为填充同色
+  // 1px 描边（对齐参考实现：彩色 fill 边缘无黑框）；显式彩色/宽笔保持原样描边。
+  _afterFillShape() {
+    if (this._penNull) return;
+    if (this._penStockBlack) {
+      const f = this.ctx.fillStyle;
+      const s = this.ctx.strokeStyle;
+      const w = this.ctx.lineWidth;
+      this.ctx.strokeStyle = f;
+      this.ctx.lineWidth = 1;
+      this.ctx.stroke();
+      this.ctx.strokeStyle = s;
+      this.ctx.lineWidth = w;
+    } else {
+      this.ctx.stroke();
     }
   }
 
@@ -347,6 +373,8 @@ class EmfDrawer {
 
     const obj = stockObjects[handle];
     if (obj) {
+      if (obj.type === 'pen') this._penStockBlack = obj.width === 1 && /^(#000000|black)$/i.test(obj.color || '');
+      obj._isStockPen = true;
       this.applyGdiObject(obj);
     }
   }
@@ -412,7 +440,7 @@ class EmfDrawer {
     }
     this.ctx.closePath();
     this.ctx.fill();
-    this.ctx.stroke();
+    this._afterFillShape();
   }
 
   processEmfPolyline(data) {
@@ -581,7 +609,7 @@ class EmfDrawer {
       }
       this.ctx.closePath();
       this.ctx.fill();
-      this.ctx.stroke();
+      this._afterFillShape();
     }
   }
 
@@ -630,7 +658,7 @@ class EmfDrawer {
     points.forEach((p, i) => (i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
     this.ctx.closePath();
     this.ctx.fill();
-    this.ctx.stroke();
+    this._afterFillShape();
   }
 
   processEmfPolyline16(data) {
@@ -712,7 +740,7 @@ class EmfDrawer {
       points.forEach((p, j) => (j === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
       this.ctx.closePath();
       this.ctx.fill();
-      this.ctx.stroke();
+      this._afterFillShape();
     }
   }
 
@@ -1149,17 +1177,17 @@ class EmfDrawer {
   processEmfExtCreateFontIndirectW(data) {
     if (data.length < 12) return;
     // EMR_EXTCREATEFONTINDIRECTW (MS-EMF 2.3.5.7):
-    //   ihFont(0) + offString(4) + LOGFONTW(从 offString 起)
+    //   EMR(8) + ihFont(DWORD) + LOGFONTW(直接跟随 ihFont)
     // LOGFONTW: lfHeight(0,LONG) lfWidth(4) lfEscapement(8) lfOrientation(12)
     //           lfWeight(16,LONG) lfItalic(20,BYTE) lfUnderline(21) lfStrikeOut(22) lfCharSet(23)
     //           lfFaceName(28, 32xUTF-16)
     const ihFont = this.readDwordFromData(data, 0);
     if ((ihFont & 0x80000000) !== 0) return;
-    const offString = this.readDwordFromData(data, 4);
-    const lfOff = offString - 8; // offString 相对记录起始（含 8 字节 EMR 头）
-    if (lfOff < 0 || lfOff + 92 > data.length) return;
+    const lfOff = 4; // LOGFONTW 直接跟随 ihFont（data 内偏移 4）
+    if (lfOff + 92 > data.length) return;
 
     const height = this.readLongFromData(data, lfOff);
+    const width = this.readLongFromData(data, lfOff + 4);
     const weight = this.readLongFromData(data, lfOff + 16);
     const italic = data[lfOff + 20];
     const underline = data[lfOff + 21];
@@ -1171,9 +1199,9 @@ class EmfDrawer {
       if (ch === 0) break;
       faceName += String.fromCharCode(ch);
     }
-    console.log('EMF ExtCreateFontIndirectW: ih=', ihFont, 'height:', height, 'weight:', weight, 'face:', faceName);
+    console.log('EMF ExtCreateFontIndirectW: ih=', ihFont, 'height:', height, 'width:', width, 'weight:', weight, 'face:', faceName);
     this.gdiObjectManager.createObjectAt(ihFont, {
-      type: 'font', height, width: 0, weight, italic, underline, strikeOut, faceName, charset
+      type: 'font', height, width, weight, italic, underline, strikeOut, faceName, charset
     });
   }
 
@@ -2104,6 +2132,33 @@ class EmfDrawer {
       }
     }
     this.ctx.stroke();
+  }
+
+  // EMR_CREATEDIBPATTERNBRUSHPT (0x5E, MS-EMF 2.3.5.4)：
+  //   EMR(8) | ihBrush(4) | iUsage(4) | offBmi(4) | cbBmi(4) | offBits(4) | cbBits(4) | <DIB>
+  // 解析 DIB 为 RGBA 位图并注册为 SVG <pattern>，使 poly fill 走 pattern 填充（对齐参考）。
+  processEmfCreateDibPatternBrushPT(data) {
+    if (data.length < 24) return;
+    const ihBrush = this.readDwordFromData(data, 0);
+    if ((ihBrush & 0x80000000) !== 0) return;
+    const iUsage = this.readDwordFromData(data, 4);
+    const offBmi = this.readDwordFromData(data, 8);
+    const cbBmi = this.readDwordFromData(data, 12);
+    const offBits = this.readDwordFromData(data, 16);
+    const cbBits = this.readDwordFromData(data, 20);
+    if (!offBmi || !cbBmi || !offBits || !cbBits) return;
+    // DIB 调色板颜色转换：iUsage=0 (RGB) 由 _decodeDib 内部直接读 0x00BBGGRR
+    // iUsage=1 (PAL_COLORS) 调色板是 16-bit 索引到逻辑调色板
+    // iUsage=2 (PAL_INDICES) 同 16-bit 索引
+    const dib = this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage });
+    if (!dib) {
+      console.log('EMF CreateDibPatternBrushPT: DIB decode failed');
+      return;
+    }
+    const url = this.ctx.addPattern(dib, { orgX: 0, orgY: 0 });
+    if (!url) return;
+    this.gdiObjectManager.createObjectAt(ihBrush, { type: 'pattern', url, width: dib.width, height: Math.abs(dib.height) });
+    console.log('EMF CreateDibPatternBrushPT: ih=', ihBrush, 'size=', dib.width, 'x', dib.height);
   }
 
   processEmfSetArcDirection(data) {
