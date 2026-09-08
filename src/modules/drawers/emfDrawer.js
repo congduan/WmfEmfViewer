@@ -240,6 +240,10 @@ class EmfDrawer {
     const debugLogs = globalThis.__WMF_DEBUG__;
     for (let i = 0; i < metafileData.records.length; i++) {
       const record = metafileData.records[i];
+      // 距上次 GDI+ GDICOMMENT 距离计数：用于判定紧跟 GDI+ 块的"绘图区背景"
+      // 类 STROKEFILL（见 test-000 实证：LO 与 ref 都不画这种 fill，仅描边）。
+      this._recSinceGdiC = (this._recSinceGdiC == null ? 999 : this._recSinceGdiC) + 1;
+      if (record.type === 0x46) this._recSinceGdiC = 0;
       if (debugLogs) {
         console.log('Processing EMF record', i, ':', record.type, '(0x' + record.type.toString(16).padStart(8, '0') + ')');
       }
@@ -799,7 +803,12 @@ class EmfDrawer {
       const parser = new EmfPlusParser(data); // parseEmfPlusRecords 只依赖入参
       const emfPlusRecords = parser.parseEmfPlusRecords(data);
       if (emfPlusRecords.length === 0) return;
-      if (!this._emfPlusDrawer) this._emfPlusDrawer = new EmfPlusDrawer(this.ctx);
+      if (!this._emfPlusDrawer) {
+        this._emfPlusDrawer = new EmfPlusDrawer(this.ctx);
+        // 共享坐标变换：EMF+ 记录与 EMF 记录共享同一设备坐标系
+        //（window/viewport/世界变换等由外层 EMF 记录维护，内嵌 EMF+ 沿用）
+        this._emfPlusDrawer.coordinateTransformer = this.coordinateTransformer;
+      }
       for (const rec of emfPlusRecords) {
         this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
       }
@@ -987,6 +996,7 @@ class EmfDrawer {
       0,
       Math.PI * 2
     );
+    this.ctx.fill();  // GDI ELLIPSE = 当前画刷填充 + 画笔描边
     this.ctx.stroke();
   }
 
@@ -1005,6 +1015,7 @@ class EmfDrawer {
     console.log('EMF Rectangle:', x, y, width, height);
     this.ctx.beginPath();
     this.ctx.rect(x, y, width, height);
+    this.ctx.fill();  // GDI RECTANGLE = 当前画刷填充 + 画笔描边
     this.ctx.stroke();
   }
 
@@ -1036,9 +1047,30 @@ class EmfDrawer {
 
   processEmfStrokeAndFillPath(data) {
     console.log('EMF StrokeAndFillPath');
-    this.ctx.fill();
+    // Excel 图表常见模式：GDICOMMENT 块之后紧随的 STROKEFILL 用灰色刷铺满整个绘图区
+    // 作为图表背景（test-000 等），LO 与 libemf2svg 都不画此 fill（实测：LO 输出无灰、
+    // ref 输出仅露 4.1K 灰像素），仅描边才符合 Excel 实际显示。此处按此行为跳过 fill。
+    const skipFill = (this._recSinceGdiC || 999) < 30 && this._isGrayFillStyle();
+    if (skipFill) {
+      console.log('  skip fill (GDI+ 后绘图区背景)');
+    } else {
+      this.ctx.fill();
+    }
     this.ctx.stroke();
     this.pathState = 'idle';
+  }
+
+  // 当前 ctx.fillStyle 是否为纯灰色（R===G===B），用于识别绘图区背景 fill
+  _isGrayFillStyle() {
+    const s = this.ctx && this.ctx.fillStyle;
+    if (!s || typeof s !== 'string') return false;
+    if (s.startsWith('#') && s.length === 7) {
+      const r = parseInt(s.slice(1, 3), 16);
+      const g = parseInt(s.slice(3, 5), 16);
+      const b = parseInt(s.slice(5, 7), 16);
+      return r === g && g === b;
+    }
+    return false;
   }
 
   processEmfStrokePath(data) {
@@ -1855,6 +1887,7 @@ class EmfDrawer {
 
     this.ctx.beginPath();
     this.ctx.roundRect(transformedLeftTop.x, transformedLeftTop.y, width, height, [rx]);
+    this.ctx.fill();  // GDI ROUNDRECT = 当前画刷填充 + 画笔描边
     this.ctx.stroke();
     console.log('EMF RoundRect:', left, top, right, bottom);
   }

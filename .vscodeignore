@@ -29,7 +29,6 @@ AGENTS.md
 README.md
 
 # ── out/ 白名单：只保留运行时必需的编译产物 ──
-# out 下的 emf-diff-valid / compare-libreoffice 等目录是回归测试的
 # SVG/PNG 输出（数百 MB），与扩展运行无关，必须排除。
 out/**
 !out/extension.js

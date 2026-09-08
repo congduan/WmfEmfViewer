@@ -271,14 +271,16 @@ class EmfPlusDrawer {
 
   // 处理EMF+填充多边形记录：BrushId(4) + Count(4) + PointF[Count](8 each)
   processEmfPlusFillPolygon(flags, data) {
-    if (data.length < 8) return;
-    const brushId = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
-    const count = (data[4] & 0xFF) | ((data[5] & 0xFF) << 8) | ((data[6] & 0xFF) << 16) | ((data[7] & 0xFF) << 24);
+    if (data.length < 4) return;
+    const brushId = flags & 0xFF;
+    const count = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
+    if (count > 65536) return;
     const color = this._emfPlusResolveBrush(flags, brushId);
+    if (!color) return;
     this.ctx.fillStyle = color;
     this.ctx.beginPath();
     for (let i = 0; i < count; i++) {
-      const o = 8 + i * 8;
+      const o = 4 + i * 8;
       if (o + 8 > data.length) break;
       const x = this._emfPlusReadFloat(data, o);
       const y = this._emfPlusReadFloat(data, o + 4);
@@ -336,15 +338,17 @@ class EmfPlusDrawer {
 
   // 处理EMF+绘制多线段记录：PenId(4) + Count(4) + PointF[Count](8 each)
   processEmfPlusDrawLines(flags, data) {
-    if (data.length < 8) return;
-    const penId = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
-    const count = (data[4] & 0xFF) | ((data[5] & 0xFF) << 8) | ((data[6] & 0xFF) << 16) | ((data[7] & 0xFF) << 24);
+    if (data.length < 4) return;
+    const penId = flags & 0xFF;
+    const count = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
+    if (count > 65536) return;
     const pen = this._emfPlusResolvePen(penId);
+    if (!pen || !pen.color) return;
     this.ctx.strokeStyle = pen.color;
     this.ctx.lineWidth = pen.width;
     this.ctx.beginPath();
     for (let i = 0; i < count; i++) {
-      const o = 8 + i * 8;
+      const o = 4 + i * 8;
       if (o + 8 > data.length) break;
       const x = this._emfPlusReadFloat(data, o);
       const y = this._emfPlusReadFloat(data, o + 4);
@@ -366,13 +370,12 @@ class EmfPlusDrawer {
 
   // 处理EMF+绘制椭圆记录：PenId(4) + RectF(16)
   processEmfPlusDrawEllipse(flags, data) {
-    if (data.length < 20) return;
-    const penId = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
-    const pen = this._emfPlusResolvePen(penId);
-    const x = this._emfPlusReadFloat(data, 4);
-    const y = this._emfPlusReadFloat(data, 8);
-    const w = this._emfPlusReadFloat(data, 12);
-    const h = this._emfPlusReadFloat(data, 16);
+    if (data.length < 16) return;
+    const pen = this._emfPlusResolvePen(flags & 0xFF);
+    const x = this._emfPlusReadFloat(data, 0);
+    const y = this._emfPlusReadFloat(data, 4);
+    const w = this._emfPlusReadFloat(data, 8);
+    const h = this._emfPlusReadFloat(data, 12);
     const tl = this._emfPlusMapPoint(x, y);
     const br = this._emfPlusMapPoint(x + w, y + h);
     const cx = (tl.x + br.x) / 2;
@@ -390,12 +393,14 @@ class EmfPlusDrawer {
 
   // 处理EMF+填充椭圆记录：BrushId(4) + RectF(16)
   processEmfPlusFillEllipse(flags, data) {
-    if (data.length < 20) return;
-    const brushId = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
-    const x = this._emfPlusReadFloat(data, 4);
-    const y = this._emfPlusReadFloat(data, 8);
-    const w = this._emfPlusReadFloat(data, 12);
-    const h = this._emfPlusReadFloat(data, 16);
+    if (data.length < 16) return;
+    const brushId = flags & 0xFF;
+    const color = this._emfPlusResolveBrush(flags, brushId);
+    if (!color) return;
+    const x = this._emfPlusReadFloat(data, 0);
+    const y = this._emfPlusReadFloat(data, 4);
+    const w = this._emfPlusReadFloat(data, 8);
+    const h = this._emfPlusReadFloat(data, 12);
     const tl = this._emfPlusMapPoint(x, y);
     const br = this._emfPlusMapPoint(x + w, y + h);
     const cx = (tl.x + br.x) / 2;
@@ -606,15 +611,17 @@ class EmfPlusDrawer {
     console.log('EMF+ Clear:', color);
   }
 
-  // EmfPlusFillRects：BrushId(4) + Count(4) + RectF[Count](16 each)
+  // EmfPlusFillRects：body = Count(4) + RectF[Count](16 each)；笔刷由 flags 低字节(ObjectId)指定
   processEmfPlusFillRectangles(flags, data) {
-    if (data.length < 8) return;
-    const brushId = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
-    const count = (data[4] & 0xFF) | ((data[5] & 0xFF) << 8) | ((data[6] & 0xFF) << 16) | ((data[7] & 0xFF) << 24);
+    if (data.length < 4) return;
+    const brushId = flags & 0xFF;
+    const count = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
+    if (count > 4096) return; // 防异常计数
     const color = this._emfPlusResolveBrush(flags, brushId);
+    if (!color) return;
     this.ctx.fillStyle = color;
     for (let i = 0; i < count; i++) {
-      const o = 8 + i * 16;
+      const o = 4 + i * 16;
       if (o + 16 > data.length) break;
       const x = this._emfPlusReadFloat(data, o);
       const y = this._emfPlusReadFloat(data, o + 4);
@@ -627,16 +634,18 @@ class EmfPlusDrawer {
     console.log('EMF+ FillRects:', count, '个矩形');
   }
 
-  // EmfPlusDrawRects：PenId(4) + Count(4) + RectF[Count]
+  // EmfPlusDrawRects：body = Count(4) + RectF[Count]；画笔由 flags 低字节指定
   processEmfPlusDrawRectangles(flags, data) {
-    if (data.length < 8) return;
-    const penId = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
-    const count = (data[4] & 0xFF) | ((data[5] & 0xFF) << 8) | ((data[6] & 0xFF) << 16) | ((data[7] & 0xFF) << 24);
+    if (data.length < 4) return;
+    const penId = flags & 0xFF;
+    const count = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
+    if (count > 4096) return;
     const pen = this._emfPlusResolvePen(penId);
+    if (!pen || !pen.color) return;
     this.ctx.strokeStyle = pen.color;
     this.ctx.lineWidth = pen.width;
     for (let i = 0; i < count; i++) {
-      const o = 8 + i * 16;
+      const o = 4 + i * 16;
       if (o + 16 > data.length) break;
       const x = this._emfPlusReadFloat(data, o);
       const y = this._emfPlusReadFloat(data, o + 4);

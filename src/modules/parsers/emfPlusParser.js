@@ -67,79 +67,17 @@ class EmfPlusParser extends BaseParser {
         super(data);
     }
 
-    // 解析EMF+记录
-    // 根据MS-EMFPLUS规范 2.3.1 EMF+ Records
-    // EMF+记录嵌入在EMF记录中，通过EMR_COMMENT_EMFPLUS记录(类型0x00000046)传递
+    // EMF+ 记录头结构（MS-EMFPLUS 2.3.1，共 12 字节）：
+    // Type(2) + Flags(2) + Size(4，含 12 字节头的记录总大小) + DataSize(4，数据字节数)
     parseEmfPlusRecord(emfRecordData) {
-        let offset = 0;
-        
-        // EMF+ Comment记录数据结构:
-        // DataSize (DWORD) - 实际EMF+数据大小
-        // CommentIdentifier (DWORD) - 必须为0x2B464D45 ("EMF+")
-        // EMF+记录数据
-        
-        if (emfRecordData.length < 8) {
-            return null;
-        }
-        
-        // 读取DataSize
-        const dataSize = (emfRecordData[offset] & 0xFF) |
-                        ((emfRecordData[offset + 1] & 0xFF) << 8) |
-                        ((emfRecordData[offset + 2] & 0xFF) << 16) |
-                        ((emfRecordData[offset + 3] & 0xFF) << 24);
-        offset += 4;
-        
-        // 读取CommentIdentifier并验证
-        const commentId = (emfRecordData[offset] & 0xFF) |
-                         ((emfRecordData[offset + 1] & 0xFF) << 8) |
-                         ((emfRecordData[offset + 2] & 0xFF) << 16) |
-                         ((emfRecordData[offset + 3] & 0xFF) << 24);
-        offset += 4;
-        
-        // 验证EMF+ Comment标识符
-        if (commentId !== 0x2B464D45) {
-            return null; // 不是EMF+记录
-        }
-        
-        // EMF+记录头结构（MS-EMFPLUS 2.3.4.1，共 8 字节）：
-        // Type (WORD) - 记录类型
-        // Flags (WORD) - 标志（低字节通常为 ObjectId）
-        // Size (DWORD) - 记录总大小（含 8 字节头）
-        // 数据长度为 Size - 8
-        if (offset + 8 > emfRecordData.length) {
-            return null;
-        }
-        
-        const type = (emfRecordData[offset] & 0xFF) | ((emfRecordData[offset + 1] & 0xFF) << 8);
-        offset += 2;
-        
-        const flags = (emfRecordData[offset] & 0xFF) | ((emfRecordData[offset + 1] & 0xFF) << 8);
-        offset += 2;
-        
-        const size = (emfRecordData[offset] & 0xFF) |
-                    ((emfRecordData[offset + 1] & 0xFF) << 8) |
-                    ((emfRecordData[offset + 2] & 0xFF) << 16) |
-                    ((emfRecordData[offset + 3] & 0xFF) << 24);
-        offset += 4;
-
-        const recordDataSize = size - 8;
-        
-        // 读取记录数据
-        const recordData = emfRecordData.slice(offset, offset + recordDataSize);
-
-        return {
-            type,
-            typeName: EMFPLUS_FUNCTIONS[type] || 'Unknown',
-            flags,
-            size,
-            dataSize: recordDataSize,
-            data: recordData
-        };
+        const list = this.parseEmfPlusRecords(emfRecordData);
+        return list.length ? list[0] : null;
     }
 
     // 解析同一 EMR_COMMENT 载荷中的全部 EMF+ 记录。
-    // [MS-EMFPLUS] 2.1.2：一个 Comment 的 Data 区可包含多条连续 EMF+ 记录，
-    // 旧实现仅取第一条，导致同一 Comment 中的后续记录全部丢失。
+    // [MS-EMFPLUS] 2.3.1：EMF+ 记录头为 12 字节——
+    //   Type(2) + Flags(2) + Size(4，含 12 字节头的记录总大小) + DataSize(4，数据字节数)
+    // 旧实现按 8 字节头读取，把 DataSize 误当记录体首字段，整条流错位 4 字节。
     parseEmfPlusRecords(emfRecordData) {
         const results = [];
         if (emfRecordData.length < 16) return results;
@@ -153,19 +91,23 @@ class EmfPlusParser extends BaseParser {
         // EMF+ 记录流起始于偏移 8（DataSize + 'EMF+' 之后），总长受 DataSize 约束
         const end = Math.min(8 + dataSize, emfRecordData.length);
         let offset = 8;
-        while (offset + 8 <= end) {
+        while (offset + 12 <= end) {
             const type = (emfRecordData[offset] & 0xFF) | ((emfRecordData[offset + 1] & 0xFF) << 8);
             const flags = (emfRecordData[offset + 2] & 0xFF) | ((emfRecordData[offset + 3] & 0xFF) << 8);
             const size = (emfRecordData[offset + 4] & 0xFF) | ((emfRecordData[offset + 5] & 0xFF) << 8) |
                          ((emfRecordData[offset + 6] & 0xFF) << 16) | ((emfRecordData[offset + 7] & 0xFF) << 24);
-            if (size < 8 || offset + size > end) break;
-            const recordData = emfRecordData.slice(offset + 8, offset + size);
+            const bodySize = (emfRecordData[offset + 8] & 0xFF) | ((emfRecordData[offset + 9] & 0xFF) << 8) |
+                             ((emfRecordData[offset + 10] & 0xFF) << 16) | ((emfRecordData[offset + 11] & 0xFF) << 24);
+            if (size < 12 || offset + size > end) break;
+            // 记录体：紧随 12 字节头，长度 DataSize（兜底不超过 size-12）
+            const dataLen = Math.max(0, Math.min(bodySize, size - 12, end - offset - 12));
+            const recordData = emfRecordData.slice(offset + 12, offset + 12 + dataLen);
             results.push({
                 type,
                 typeName: EMFPLUS_FUNCTIONS[type] || 'Unknown',
                 flags,
                 size,
-                dataSize: size - 8,
+                dataSize: dataLen,
                 data: recordData
             });
             offset += size;
