@@ -18,6 +18,55 @@ A Visual Studio Code extension for previewing **WMF** (Windows Metafile), **EMF*
 - Explorer context menu integration
 - Zero runtime dependencies
 
+### Supported Functionality
+
+**Formats**
+
+| Format | Detection | Rendering |
+|---|---|---|
+| WMF (standard) | ✅ | ✅ |
+| Placeable WMF (22-byte prefix header) | ✅ | ✅ |
+| EMF | ✅ | ✅ |
+| EMF+ (within EMF, incl. dual-mode) | ✅ | ✅ |
+
+**Coordinate systems & transforms**
+
+- Window/Viewport mapping with all `SetMapMode` units (`MM_TEXT`, `MM_LO/HIMETRIC`, `MM_LO/HIENGLISH`, `MM_TWIPS`, `MM_ISOTROPIC`, `MM_ANISOTROPIC`)
+- World transform (`SetWorldTransform` / `ModifyWorldTransform` with `MWT_IDENTITY`, `MWT_LEFTMULTIPLY`, `MWT_RIGHTMULTIPLY`, `MWT_SET`), plus EMF+ world/container transforms (translate / rotate / scale / multiply / reset)
+- DC state stack (`SaveDC` / `RestoreDC`), clipping via `IntersectClipRect` / `ExcludeClipRect` / `OffsetClipRgn` / `SelectClipPath` and EMF+ clip rect/path/region
+
+**Drawing primitives (WMF + EMF)**
+
+- Lines & curves: `MoveToEx`, `LineTo`, `Polyline(To)`, `Bezier(To)`, `PolyDraw`, `Arc`, `ArcTo`, `AngleArc`, `Chord`, `Pie` (all in 16-bit and 32-bit variants where applicable)
+- Shapes: `Rectangle`, `RoundRect`, `Ellipse`, `Polygon`, `PolyPolygon`, `PolyPolyline`
+- Paths: `BeginPath` / `EndPath`, `FillPath`, `StrokePath`, `StrokeAndFillPath`, `FlattenPath`, `WidenPath`, `AbortPath`
+- Fills: `ExtFloodFill`, `SetPixelV`, poly-fill mode (`ALTERNATE` / `WINDING`), ROP2 background/foreground mix, arc direction
+
+**GDI objects**
+
+- Pens: `CreatePen`, `ExtCreatePen` (cosmetic/geometric, dash styles), brushes: `CreateBrushIndirect` (solid / null / hatched), `CreateMonoBrush`, palettes (`CreatePalette`, `SetPaletteEntries`, `ResizePalette`, `RealizePalette`), fonts: `ExtCreateFontIndirectW`
+- Object handles stored by handle map (producer-assigned, reusable after delete); text attributes (`SetTextColor`, `SetBkColor`, `SetBkMode`, `SetTextAlign`, `SetMiterLimit`, `SetMapperFlags`, color adjustment)
+
+**Raster operations / bitmaps**
+
+- `BitBlt`, `StretchBlt`, `StretchDIBits`, `AlphaBlend`, `TransparentBlt`
+- DIB decoding: 1/4/8/16/24/32 bpp, `BI_RGB` / `BI_RLE8` / `BI_RLE4`, top-down and bottom-up, color-key transparency and alpha channels
+
+**Text**
+
+- `TextOut`, `ExtTextOutA/W`, `EMR_SMALLTEXTOUT`, `EMR_TEXT` (with `offDx` inter-character spacing), EMF+ `DrawString` / `DrawDriverString`
+
+**EMF+ objects & properties** (GDI+ surface style)
+
+- Pens, brushes (solid / texture / hatch / path-gradient / linear-gradient), images, fonts, string formats, regions
+- Rendering properties: anti-alias, text rendering hint, compositing mode/quality, interpolation mode, pixel offset mode, page transform, containers (`Begin/EndContainer`), save/restore
+
+**Known limitations**
+
+- Records embedded as EMF+ inside `EMR_GDI_COMMENT` of a pure-EMF file are only partially rendered
+- Some region records (`EMR_FILLRGN` / `EMR_FRAMERGN`) and advanced region clipping fall back to approximations
+- Font metrics are approximated (no system font matching); text may deviate slightly in layout-sensitive metafiles
+
 ## Quick Start
 
 ```bash

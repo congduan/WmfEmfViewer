@@ -152,6 +152,107 @@ class EmfPlusDrawer {
     return t;
   }
 
+  // EmfPlusPath (MS-EMFPLUS 2.2.1.6) 解析：data 起点（已跳过 EmfPlusObject 的 GraphicsVersion）
+// 实际 layout: PathPointCount(4) + PathPointFlags(4) + PathPoints(Count × stride) + PathPointTypes(Count if non-RLE) + AlignmentPadding(0..3)
+// 注意：graphicsVersion 是 EmfPlusPath 自身 Version 字段（spec 2.2.1.6）；POI 的 EmfPlusObject.init 先读 graphicsVersion 后再传给 EmfPlusPath.init
+// PathPointFlags:
+//   0x0800 RELATIVE_POSITION — 坐标相对于前一点（PathPointR，否则 PathPoint/PathPointF）
+//   0x1000 RLE_COMPRESSED    — PathPointTypes 为 RLE 编码
+//   0x4000 FORMAT_COMPRESSED — 坐标为 int16（否则 float32）
+// PathPointType 字节：低 4 位 (0x0F): 0=Start, 1=Line, 3=Bezier；高 4 位 0x10=Dashed, 0x20=Marker, 0x80=CloseSubpath
+  _emfPlusParsePath(data) {
+    if (!data || data.length < 8) return null;
+    const count = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
+    const pointFlags = (data[4] & 0xFF) | ((data[5] & 0xFF) << 8) | ((data[6] & 0xFF) << 16) | ((data[7] & 0xFF) << 24);
+    const compressed = (pointFlags & 0x4000) !== 0;
+    const rle = (pointFlags & 0x1000) !== 0;
+    const relative = (pointFlags & 0x0800) !== 0;
+    if (!this._dbgPath) this._dbgPath = { count: 0, big: 0, fail: 0 };
+    if (count > 100) { this._dbgPath.big++; console.log('[BIG] count='+count,'flags=0x'+pointFlags.toString(16),'C='+(compressed?'Y':'N'),'RLE='+(rle?'Y':'N'),'R='+(relative?'Y':'N'),'len='+data.length,'first4=['+[data[0],data[1],data[2],data[3]].map(x=>x.toString(16).padStart(2,'0')).join(',')+']'); }
+    process.stdout.write('[ParsePath] count='+count+' flags=0x'+pointFlags.toString(16)+' C='+(compressed?'Y':'N')+' RLE='+(rle?'Y':'N')+' R='+(relative?'Y':'N')+' len='+data.length+' first5bytes=['+[data[0],data[1],data[2],data[3],data[4]].map(x=>x.toString(16).padStart(2,'0')).join(',')+']\n');
+    this._dbgPath.count++;
+
+    // PathPoints 在前（spec 2.2.1.6 字段顺序）：起点 offset=8
+    let offset = 8;
+    const points = [];
+    const stride = compressed ? 4 : 8;
+    for (let i = 0; i < count; i++) {
+      if (offset + stride > data.length) break;
+      let x, y;
+      if (compressed) {
+        x = (data[offset] & 0xFF) | ((data[offset + 1] & 0xFF) << 8);
+        if (x & 0x8000) x |= 0xFFFF0000;
+        y = (data[offset + 2] & 0xFF) | ((data[offset + 3] & 0xFF) << 8);
+        if (y & 0x8000) y |= 0xFFFF0000;
+      } else {
+        x = this._emfPlusReadFloat(data, offset);
+        y = this._emfPlusReadFloat(data, offset + 4);
+      }
+      points.push({ x, y });
+      offset += stride;
+    }
+    // PathPointTypes 在 PathPoints 之后：RLE=0 时每点 1 字节，RLE=1 时按 RLE 编码
+    const pointTypes = new Uint8Array(count);
+    if (rle) {
+      let i = 0;
+      while (i < count && offset + 2 <= data.length) {
+        const header = data[offset] & 0xFF;
+        const t = data[offset + 1] & 0xFF;
+        offset += 2;
+        const runCount = header & 0x3F;
+        const actual = Math.min(runCount, count - i);
+        for (let k = 0; k < actual; k++) pointTypes[i + k] = t;
+        i += actual;
+      }
+    } else {
+      for (let i = 0; i < count && offset < data.length; i++) {
+        pointTypes[i] = data[offset++] & 0xFF;
+      }
+    }
+    return { count, pointTypes, points, compressed, rle, relative };
+  }
+
+  // 在 ctx 上构造 Path 命令（按 PathPointType 序列 moveTo/lineTo/bezier/closePath）
+  // 由调用方在 fill()/stroke() 之前调用
+  _emfPlusTracePath(pathObj) {
+    if (!pathObj || !pathObj.pointTypes || pathObj.count === 0) return;
+    const ctx = this.ctx;
+    let bezierBuf = [];
+    let prevX = 0, prevY = 0;
+    let started = false;
+    for (let i = 0; i < pathObj.count; i++) {
+      const t = pathObj.pointTypes[i];
+      const p = pathObj.points[i];
+      if (!p) continue;
+      let x = p.x, y = p.y;
+      if (pathObj.relative) { x += prevX; y += prevY; }
+      const mapped = this._emfPlusMapPoint(x, y);
+      const type = t & 0x0F;
+      const closed = (t & 0x80) !== 0;
+      if (type === 0) { // Start
+        if (started) ctx.closePath();
+        ctx.beginPath();
+        ctx.moveTo(mapped.x, mapped.y);
+        started = true;
+        bezierBuf = [];
+      } else if (type === 1) { // Line
+        if (!started) { ctx.beginPath(); ctx.moveTo(mapped.x, mapped.y); started = true; }
+        ctx.lineTo(mapped.x, mapped.y);
+        bezierBuf = [];
+      } else if (type === 3) { // Bezier
+        if (!started) { ctx.beginPath(); ctx.moveTo(mapped.x, mapped.y); started = true; }
+        bezierBuf.push(mapped);
+        if (bezierBuf.length === 3) {
+          ctx.bezierCurveTo(bezierBuf[0].x, bezierBuf[0].y, bezierBuf[1].x, bezierBuf[1].y, bezierBuf[2].x, bezierBuf[2].y);
+          bezierBuf = [];
+        }
+      }
+      if (closed && bezierBuf.length === 0) ctx.closePath();
+      prevX = x; prevY = y;
+    }
+    if (started) ctx.closePath();
+  }
+
   draw(metafileData, options = {}) {
     console.log('Drawing EMF+ with header:', metafileData.header);
     console.log('Number of records:', metafileData.records.length);
@@ -311,14 +412,44 @@ class EmfPlusDrawer {
     console.log('Processing EmfPlusDrawClosedCurve');
   }
 
-  // 处理EMF+绘制路径记录
-  processEmfPlusDrawPath(flags, data) {
-    console.log('Processing EmfPlusDrawPath');
+  // EmfPlusFillPath (0x4014, MS-EMFPLUS 2.3.4.17)：flags[7..0]=pathId, flags[15]=S(ARGB 直传), data[0..3]=brushId/ARGB
+  processEmfPlusFillPath(flags, data) {
+    if (data.length < 4) return;
+    const pathId = flags & 0xFF;
+    const solid = (flags & 0x8000) !== 0;
+    const brushId = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
+    if (!this._dbgFP) this._dbgFP = { hit: 0, miss: 0 };
+    const path = this.emfPlusObjects[pathId];
+    if (!path || path.type !== 'path') { this._dbgFP.miss++; if (this._dbgFP.miss < 4) console.log('[FillPath MISS] pathId='+pathId,'solid='+solid,'brushId=0x'+brushId.toString(16),'objExists='+!!path,'objType='+(path&&path.type)); return; }
+    this._dbgFP.hit++;
+    process.stdout.write('[FillPath HIT] pathId='+pathId+' count='+path.count+' firstPt='+JSON.stringify(path.points[0])+' compressed='+path.compressed+' relative='+path.relative+' lastPt='+JSON.stringify(path.points[path.points.length-1])+' pointsLen='+path.points.length+'\n');
+    if (!path || path.type !== 'path') return;
+    const color = solid ? this._emfPlusArgbToColor(brushId) : this._emfPlusResolveBrush(0, brushId);
+    if (!color) return;
+    this.ctx.fillStyle = color;
+    this._emfPlusTracePath(path);
+    this.ctx.fill();
   }
 
-  // 处理EMF+填充路径记录
-  processEmfPlusFillPath(flags, data) {
-    console.log('Processing EmfPlusFillPath');
+  // EmfPlusDrawPath (0x4015, MS-EMFPLUS 2.3.4.18)：flags[7..0]=pathId, flags[15]=S, data[0..3]=penId/ARGB
+  processEmfPlusDrawPath(flags, data) {
+    if (data.length < 4) return;
+    const pathId = flags & 0xFF;
+    const solid = (flags & 0x8000) !== 0;
+    const penId = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
+    const path = this.emfPlusObjects[pathId];
+    if (!path || path.type !== 'path') return;
+    let color = '#000000', width = 1;
+    if (solid) {
+      color = this._emfPlusArgbToColor(penId);
+    } else {
+      const pen = this.emfPlusObjects[penId];
+      if (pen && pen.type === 'pen') { color = pen.color; width = pen.width || 1; }
+    }
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = width;
+    this._emfPlusTracePath(path);
+    this.ctx.stroke();
   }
 
   // 处理EMF+绘制图像记录（DrawImage = 目标矩形与源矩形相同；可引用嵌套 EMF / 位图对象）
@@ -729,6 +860,11 @@ class EmfPlusDrawer {
   processEmfPlusObject(flags, data) {
     const objectId = flags & 0xFF;
     const objectType = flags & 0x7F00;
+    // EmfPlusObject record 数据起点：EmfPlusGraphicsVersion (4 bytes, signature 0xDBC01001) + object-specific data
+    // POI HemfPlusObject.init 先读 graphicsVersion 后再传给 EmfPlusObjectData.init
+    if (data.length >= 4) data = data.slice(4);
+    if (!this._objTypeStats) this._objTypeStats = {};
+    this._objTypeStats['0x'+objectType.toString(16)] = (this._objTypeStats['0x'+objectType.toString(16)]||0)+1;
     if (objectType === 0x0100) { // EmfPlusBrush
       if (data.length < 8) return;
       const brushType = this._emfPlusReadInt32(data, 0);
@@ -773,8 +909,13 @@ class EmfPlusDrawer {
       const families = ['serif', 'sans-serif', 'monospace', 'sans-serif', 'cursive', 'fantasy', 'monospace'];
       const face = families[family] || 'sans-serif';
       this.emfPlusObjects[objectId] = { type: 'font', emSize, weight, italic, face };
-    } else if (objectType === 0x0300) { // EmfPlusPath —— 暂存原始数据（FillPath 等使用时解析）
-      this.emfPlusObjects[objectId] = { type: 'path', data };
+    } else if (objectType === 0x0300) { // EmfPlusPath —— 解析后存为 { pointTypes, points, ... }
+      const parsed = this._emfPlusParsePath(data);
+      if (parsed) {
+        this.emfPlusObjects[objectId] = { type: 'path', ...parsed };
+      } else {
+        this.emfPlusObjects[objectId] = { type: 'path', data };
+      }
     } else if (objectType === 0x0500) { // EmfPlusImage
       if (data.length < 8) return;
       const type = this._emfPlusReadInt32(data, 4);
