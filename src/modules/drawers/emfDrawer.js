@@ -214,6 +214,15 @@ class EmfDrawer {
     this._fileViewportExtX = _initW;
     this._fileViewportExtY = _initH;
 
+    // 计算 pxPerMm（来自 EMF header.szlDevice / szlMillimeters），
+    // 供 MM_LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS 等固定比例模式使用。
+    // GDI 默认：1 inch = 25.4 mm, 1 mm = pxPerMm 像素。
+    if (metafileData.header.szlDevice && metafileData.header.szlMillimeters) {
+      const mmX = metafileData.header.szlMillimeters.cx || metafileData.header.szlMillimeters.cy || 1;
+      const pxX = metafileData.header.szlDevice.cx || metafileData.header.szlDevice.cy || 1;
+      this.coordinateTransformer.setPxPerMm(pxX / mmX);
+    }
+
     // 设置 CSS 显示尺寸（逻辑像素）
     this.ctx.canvas.style.width = canvasWidth + 'px';
     this.ctx.canvas.style.height = canvasHeight + 'px';

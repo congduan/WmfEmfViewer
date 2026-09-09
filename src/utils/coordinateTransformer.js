@@ -73,6 +73,13 @@ class CoordinateTransformer {
         this.viewportExtX = 800;
         /** @type {number} 视口范围Y（设备单位） */
         this.viewportExtY = 600;
+        /**
+         * 每毫米的设备像素数（来自 EMF header.szlDevice.cx / szlMillimeters.cx）
+         * 仅用于 MM_LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS 这五个固定比例模式；
+         * 默认 3.7795（约 96 DPI），调用方应在解析 EMF 头后用 setPxPerMm 覆盖。
+         * @type {number}
+         */
+        this.pxPerMm = 96 / 25.4;
         // 世界变换（GM_ADVANCED / EMR_SETWORLDTRANSFORM），行向量约定 [x y 1] * M：
         // x' = x*eM11 + y*eM21 + eDx; y' = x*eM12 + y*eM22 + eDy
         this.worldM11 = 1; this.worldM12 = 0;
@@ -205,25 +212,40 @@ class CoordinateTransformer {
                     cy = cy * scaleY + this.viewportOrgY;
                 }
                 break;
-            case MAP_MODE.MM_LOMETRIC:
-                cx = cx * 0.1;
-                cy = cy * 0.1;
+            case MAP_MODE.MM_LOMETRIC: // 0.1 mm
+                {
+                    const f = this.pxPerMm * 0.1;
+                    cx = cx * f + this.viewportOrgX;
+                    cy = -cy * f + this.viewportOrgY; // GDI Y 向上，需翻转
+                }
                 break;
-            case MAP_MODE.MM_HIMETRIC:
-                cx = cx * 0.01;
-                cy = cy * 0.01;
+            case MAP_MODE.MM_HIMETRIC: // 0.01 mm
+                {
+                    const f = this.pxPerMm * 0.01;
+                    cx = cx * f + this.viewportOrgX;
+                    cy = -cy * f + this.viewportOrgY;
+                }
                 break;
-            case MAP_MODE.MM_LOENGLISH:
-                cx = cx * 0.254;
-                cy = cy * 0.254;
+            case MAP_MODE.MM_LOENGLISH: // 0.01 in
+                {
+                    const f = this.pxPerMm * 25.4 * 0.01;
+                    cx = cx * f + this.viewportOrgX;
+                    cy = -cy * f + this.viewportOrgY;
+                }
                 break;
-            case MAP_MODE.MM_HIENGLISH:
-                cx = cx * 0.0254;
-                cy = cy * 0.0254;
+            case MAP_MODE.MM_HIENGLISH: // 0.001 in
+                {
+                    const f = this.pxPerMm * 25.4 * 0.001;
+                    cx = cx * f + this.viewportOrgX;
+                    cy = -cy * f + this.viewportOrgY;
+                }
                 break;
-            case MAP_MODE.MM_TWIPS:
-                cx = cx * (1.0 / 1440.0);
-                cy = cy * (1.0 / 1440.0);
+            case MAP_MODE.MM_TWIPS: // 1/1440 in
+                {
+                    const f = this.pxPerMm * 25.4 / 1440;
+                    cx = cx * f + this.viewportOrgX;
+                    cy = -cy * f + this.viewportOrgY;
+                }
                 break;
             default:
                 // 默认使用viewport/window转换
@@ -242,6 +264,15 @@ class CoordinateTransformer {
     /** @param {number} mode */
     setMapMode(mode) {
         this.mapMode = mode;
+    }
+
+    /**
+     * 设置每毫米的设备像素数（来自 EMF header.szlDevice.cx / szlMillimeters.cx）。
+     * 仅影响 MM_LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS 固定比例模式。
+     * @param {number} px
+     */
+    setPxPerMm(px) {
+        if (px && px > 0) this.pxPerMm = px;
     }
 
     /** @param {number} x @param {number} y */
