@@ -968,8 +968,9 @@ class EmfDrawer {
     const obj = this.gdiObjectManager.selectObject(objectHandle);
     if (obj) {
       this.applyGdiObject(obj);
-    } else if (objectHandle >= 0x80000000) {
-      this.applyStockObject(objectHandle);
+    } else if ((objectHandle >>> 0) >= 0x80000000) {
+      // readDwordFromData 返回 signed int32；stock 句柄高位 0x80000000+ 会变负，需无符号化比较
+      this.applyStockObject(objectHandle >>> 0);
     }
   }
 

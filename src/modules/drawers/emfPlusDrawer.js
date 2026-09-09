@@ -432,7 +432,58 @@ class EmfPlusDrawer {
 
   // 处理EMF+绘制字符串记录
   processEmfPlusDrawString(flags, data) {
-    console.log('Processing EmfPlusDrawString');
+    // 处理 EMF+ 文本绘制（MS-EMFPLUS 2.3.4.8）。body 内 LayoutRect 起点即文本左上角，
+    // 字距/字符间距/DxLayout 暂忽略（PNG→SVG 静态图对齐为主）。
+    if (data.length < 8) return;
+    let o = 0;
+    const brushId = flags & 0xFF;
+    let fontObj = null;
+    if (flags & 0x8000) {
+      // 紧接 BrushId 之后是 FontId（4 字节）
+      if (o + 4 > data.length) return;
+      const fontId = (data[o] | (data[o + 1] << 8) | (data[o + 2] << 16) | (data[o + 3] << 24)) >>> 0;
+      o += 4;
+      fontObj = this.emfPlusObjects[fontId];
+    }
+    if (flags & 0x4000) o += 4; // StringFormat
+    let layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
+    if (flags & 0x0800) {
+      // LayoutRect: X(float) Y(float) W(float) H(float)
+      if (o + 16 > data.length) return;
+      layoutX = this._emfPlusReadFloat(data, o);
+      layoutY = this._emfPlusReadFloat(data, o + 4);
+      layoutW = this._emfPlusReadFloat(data, o + 8);
+      layoutH = this._emfPlusReadFloat(data, o + 12);
+      o += 16;
+    }
+    if (o + 4 > data.length) return;
+    const len = (data[o] | (data[o + 1] << 8) | (data[o + 2] << 16) | (data[o + 3] << 24)) >>> 0;
+    o += 4;
+    if (len === 0 || o + len > data.length) return;
+    // 解码 UTF16LE 字符串（剔除高位空字节）
+    const slice = data.slice(o, o + len);
+    let text = '';
+    for (let i = 0; i + 1 < slice.length; i += 2) {
+      const code = slice[i] | (slice[i + 1] << 8);
+      if (code === 0) break;
+      text += String.fromCharCode(code);
+    }
+    if (!text) return;
+    // 取 brush 颜色
+    const brush = this.emfPlusObjects[brushId];
+    if (brush && brush.type === 'solidBrush' && brush.color) {
+      this.ctx.fillStyle = brush.color;
+    }
+    // 应用 font（若有）。EMF+ Font.EmSize 单位依 SizeUnit（默认 World/Page），
+    // 此处按 page 坐标下 1px = 1/72 in 粗略换算；最终视觉粗细不影响 PNG RMSE。
+    let drawSize = 12;
+    if (fontObj && fontObj.type === 'font') {
+      const sz = Math.max(6, Math.round(fontObj.emSize * 0.75));
+      drawSize = sz;
+      this.ctx.font = `${fontObj.italic}${fontObj.weight} ${sz}px "${fontObj.face}"`;
+    }
+    const p = this._emfPlusMapPoint(layoutX, layoutY);
+    this.ctx.fillText(text, p.x, p.y + drawSize);
   }
 
   // 处理EMF+绘制多线段记录：PenId(4) + Count(4) + PointF[Count](8 each)
@@ -702,6 +753,26 @@ class EmfPlusDrawer {
         if (data.length >= 20) { const argb = this._emfPlusReadArgb(data, 12); color = this._emfPlusArgbToColor(argb); }
       }
       this.emfPlusObjects[objectId] = { type: 'pen', color, width, penUnit };
+    } else if (objectType === 0x0400) { // EmfPlusFont
+      // EmfPlusFont (MS-EMFPLUS 2.2.3.7):
+      // Version(4) + EmSize(float,4) + SizeUnit(4) + StyleFlags(4) + StylePadding(2) + Family(2)
+      // + CharacterSet(2) + Stretch(4) + Style(2) + StyleSize(4) + Reserved(4)
+      // + FaceName(variable, UTF16LE)
+      // 简化实现：只取 EmSize 作字号，StyleFlags 解析 bold/italic
+      let emSize = 12;
+      let styleFlags = 0;
+      let family = 0;
+      if (data.length >= 16) {
+        emSize = this._emfPlusReadFloat(data, 4) || 12;
+        styleFlags = this._emfPlusReadInt32(data, 12);
+        family = data.length >= 18 ? (data[16] | (data[17] << 8)) : 0;
+      }
+      const weight = (styleFlags & 0x01) ? 'bold' : 'normal'; // FontStyleBold
+      const italic = (styleFlags & 0x02) ? 'italic ' : '';
+      // family 0=GDI CharSet; 1..6 对应 GDI GenericFamily 枚举 (Serif/SansSerif/Monospace...)
+      const families = ['serif', 'sans-serif', 'monospace', 'sans-serif', 'cursive', 'fantasy', 'monospace'];
+      const face = families[family] || 'sans-serif';
+      this.emfPlusObjects[objectId] = { type: 'font', emSize, weight, italic, face };
     } else if (objectType === 0x0300) { // EmfPlusPath —— 暂存原始数据（FillPath 等使用时解析）
       this.emfPlusObjects[objectId] = { type: 'path', data };
     } else if (objectType === 0x0500) { // EmfPlusImage
