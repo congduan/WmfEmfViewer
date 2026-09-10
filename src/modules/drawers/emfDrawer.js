@@ -1198,6 +1198,8 @@ class EmfDrawer {
 
     const height = this.readLongFromData(data, lfOff);
     const width = this.readLongFromData(data, lfOff + 4);
+    const escapement = this.readLongFromData(data, lfOff + 8);
+    const orientation = this.readLongFromData(data, lfOff + 12);
     const weight = this.readLongFromData(data, lfOff + 16);
     const italic = data[lfOff + 20];
     const underline = data[lfOff + 21];
@@ -1209,9 +1211,10 @@ class EmfDrawer {
       if (ch === 0) break;
       faceName += String.fromCharCode(ch);
     }
-    console.log('EMF ExtCreateFontIndirectW: ih=', ihFont, 'height:', height, 'width:', width, 'weight:', weight, 'face:', faceName);
+    console.log('EMF ExtCreateFontIndirectW: ih=', ihFont, 'height:', height, 'width:', width, 'weight:', weight, 'face:', faceName, 'escapement:', escapement);
     this.gdiObjectManager.createObjectAt(ihFont, {
-      type: 'font', height, width, weight, italic, underline, strikeOut, faceName, charset
+      type: 'font', height, width, weight, italic, underline, strikeOut, faceName, charset,
+      escapement, orientation,
     });
   }
 
@@ -1264,7 +1267,6 @@ class EmfDrawer {
 
         // 绘制文本
         if (text.length > 0) {
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
           const savedFillStyle = this.ctx.fillStyle;
 
           // ETO_OPAQUE (0x0002)：用背景色（SetBkColor 设置的 fillColor）填充 rcl 矩形
@@ -1287,7 +1289,44 @@ class EmfDrawer {
 
           // 文本使用 SetTextColor 设置的颜色
           this.ctx.fillStyle = this.textColor;
-          this.ctx.fillText(text, transformed.x, transformed.y);
+          // 文字渲染对齐参考实现：用「原始逻辑坐标 + 原始字号 + transform 矩阵」，
+          // 缩放/平移/旋转统一由 SVG transform 承担（而非预乘进坐标与字号）。
+          // 这样世界变换矩阵、window→viewport 缩放、lfEscapement 旋转都能正确作用于文字。
+          const curFont = this.gdiObjectManager && this.gdiObjectManager.currentFont;
+          const rawHeight = curFont && curFont.height ? Math.abs(curFont.height) : 12;
+          const escapement = curFont && curFont.escapement ? curFont.escapement : 0; // 0.1°
+          // 用原始字号覆盖 ctx.font（applyGdiObject 设置的是已乘 scale 的字号，matrix 模式下需还原）
+          const savedFont = this.ctx.font;
+          {
+            const weight = (curFont && curFont.weight >= 700) ? 'bold ' : '';
+            const italic = (curFont && curFont.italic) ? 'italic ' : '';
+            const face = (curFont && curFont.faceName) ? curFont.faceName : 'sans-serif';
+            this.ctx.font = `${italic}${weight}${rawHeight}px "${face}"`;
+          }
+          // 完整变换矩阵（world × viewport × device），叠加 lfEscapement 旋转（绕逻辑参考点）。
+          let matrix = this.coordinateTransformer.getSvgMatrix();
+          if (escapement !== 0) {
+            // GDI lfEscapement：单位 0.1°，正值对应 SVG 顺时针（ref 输出 rotate(-escapement/10)）。
+            const deg = -escapement / 10;
+            const rad = deg * Math.PI / 180;
+            const cos = Math.cos(rad), sin = Math.sin(rad);
+            // 先绕逻辑参考点 (x, y) 旋转，再套 matrix（列向量约定：rot 先应用，故 R * M 顺序为 matrix 后乘）。
+            // 旋转（绕原点，列向量）R = [cos -sin; sin cos]；绕 (px,py) = translate(px,py)·R·translate(-px,-py)。
+            const px = x, py = y;
+            // rotAround 矩阵（列向量）：x' = cos*(x-px) - sin*(y-py) + px
+            const r = { a: cos, b: sin, c: -sin, d: cos, e: px - px * cos + py * sin, f: py - px * sin - py * cos };
+            // 合成：先 rotAround（R），再 matrix（M）=> 最终 = M · R
+            matrix = {
+              a: matrix.a * r.a + matrix.c * r.b,
+              b: matrix.b * r.a + matrix.d * r.b,
+              c: matrix.a * r.c + matrix.c * r.d,
+              d: matrix.b * r.c + matrix.d * r.d,
+              e: matrix.a * r.e + matrix.c * r.f + matrix.e,
+              f: matrix.b * r.e + matrix.d * r.f + matrix.f,
+            };
+          }
+          this.ctx.fillText(text, x, y, matrix);
+          this.ctx.font = savedFont;
           this.ctx.fillStyle = savedFillStyle;
           console.log('  Rendered text:', text.substring(0, 50));
         }

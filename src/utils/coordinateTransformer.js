@@ -201,64 +201,87 @@ class CoordinateTransformer {
         let cy = y - this.windowOrgY;
 
         // 根据映射模式调整缩放
-        switch (this.mapMode) {
-            case MAP_MODE.MM_TEXT: // 使用viewport/window转换
-            case MAP_MODE.MM_ISOTROPIC:
-            case MAP_MODE.MM_ANISOTROPIC:
-                if (this.windowExtX !== 0 && this.windowExtY !== 0) {
-                    const scaleX = this.viewportExtX / this.windowExtX;
-                    const scaleY = this.viewportExtY / this.windowExtY;
-                    cx = cx * scaleX + this.viewportOrgX;
-                    cy = cy * scaleY + this.viewportOrgY;
-                }
-                break;
-            case MAP_MODE.MM_LOMETRIC: // 0.1 mm
-                {
-                    const f = this.pxPerMm * 0.1;
-                    cx = cx * f + this.viewportOrgX;
-                    cy = -cy * f + this.viewportOrgY; // GDI Y 向上，需翻转
-                }
-                break;
-            case MAP_MODE.MM_HIMETRIC: // 0.01 mm
-                {
-                    const f = this.pxPerMm * 0.01;
-                    cx = cx * f + this.viewportOrgX;
-                    cy = -cy * f + this.viewportOrgY;
-                }
-                break;
-            case MAP_MODE.MM_LOENGLISH: // 0.01 in
-                {
-                    const f = this.pxPerMm * 25.4 * 0.01;
-                    cx = cx * f + this.viewportOrgX;
-                    cy = -cy * f + this.viewportOrgY;
-                }
-                break;
-            case MAP_MODE.MM_HIENGLISH: // 0.001 in
-                {
-                    const f = this.pxPerMm * 25.4 * 0.001;
-                    cx = cx * f + this.viewportOrgX;
-                    cy = -cy * f + this.viewportOrgY;
-                }
-                break;
-            case MAP_MODE.MM_TWIPS: // 1/1440 in
-                {
-                    const f = this.pxPerMm * 25.4 / 1440;
-                    cx = cx * f + this.viewportOrgX;
-                    cy = -cy * f + this.viewportOrgY;
-                }
-                break;
-            default:
-                // 默认使用viewport/window转换
-                if (this.windowExtX !== 0 && this.windowExtY !== 0) {
-                    const scaleX = this.viewportExtX / this.windowExtX;
-                    const scaleY = this.viewportExtY / this.windowExtY;
-                    cx = cx * scaleX + this.viewportOrgX;
-                    cy = cy * scaleY + this.viewportOrgY;
-                }
-        }
+        const vp = this._getViewportScale();
+        cx = cx * vp.sx + this.viewportOrgX;
+        cy = cy * vp.sy + this.viewportOrgY;
 
         // WMF/EMF坐标系与Canvas一致（Y轴向下），无需翻转
         return { x: cx - this.deviceOrgX, y: cy - this.deviceOrgY };
+    }
+
+    /**
+     * 计算 window→viewport 的缩放因子（sx/sy）。
+     * MM_TEXT/ISOTROPIC/ANISOTROPIC 用 viewportExt/windowExt 比值；
+     * 固定比例模式（LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS）用 pxPerMm 换算，
+     * 且 Y 轴在固定比例模式下向上（负缩放，GDI 语义）。
+     * @returns {{sx: number, sy: number}}
+     */
+    _getViewportScale() {
+        switch (this.mapMode) {
+            case MAP_MODE.MM_TEXT:
+            case MAP_MODE.MM_ISOTROPIC:
+            case MAP_MODE.MM_ANISOTROPIC:
+                if (this.windowExtX !== 0 && this.windowExtY !== 0) {
+                    return {
+                        sx: this.viewportExtX / this.windowExtX,
+                        sy: this.viewportExtY / this.windowExtY
+                    };
+                }
+                return { sx: 1, sy: 1 };
+            case MAP_MODE.MM_LOMETRIC: {
+                const f = this.pxPerMm * 0.1;
+                return { sx: f, sy: -f };
+            }
+            case MAP_MODE.MM_HIMETRIC: {
+                const f = this.pxPerMm * 0.01;
+                return { sx: f, sy: -f };
+            }
+            case MAP_MODE.MM_LOENGLISH: {
+                const f = this.pxPerMm * 25.4 * 0.01;
+                return { sx: f, sy: -f };
+            }
+            case MAP_MODE.MM_HIENGLISH: {
+                const f = this.pxPerMm * 25.4 * 0.001;
+                return { sx: f, sy: -f };
+            }
+            case MAP_MODE.MM_TWIPS: {
+                const f = this.pxPerMm * 25.4 / 1440;
+                return { sx: f, sy: -f };
+            }
+            default:
+                if (this.windowExtX !== 0 && this.windowExtY !== 0) {
+                    return {
+                        sx: this.viewportExtX / this.windowExtX,
+                        sy: this.viewportExtY / this.windowExtY
+                    };
+                }
+                return { sx: 1, sy: 1 };
+        }
+    }
+
+    /**
+     * 返回把“逻辑坐标 → 设备坐标（canvas）”的完整仿射变换，按 SVG `matrix(a b c d e f)`
+     * 列向量约定输出（x' = a*x + c*y + e, y' = b*x + d*y + f）。
+     * 合成顺序：先世界变换（world，行向量 [x y 1]·M），再 window→viewport 缩放/平移，
+     * 最后减 deviceOrg（把 header rclBounds 原点平移到画布原点）。
+     * 供文字渲染等需要“原始逻辑坐标 + 原始字号 + transform 矩阵”对齐参考实现的场景使用。
+     * @returns {{a:number,b:number,c:number,d:number,e:number,f:number}}
+     */
+    getSvgMatrix() {
+        const vp = this._getViewportScale();
+        const sx = vp.sx, sy = vp.sy;
+        // world（行向量）：x1 = x*m11 + y*m21 + dx; y1 = x*m12 + y*m22 + dy
+        // 再 viewport：x2 = x1*sx + viewportOrgX; y2 = y1*sy + viewportOrgY
+        // 再减 deviceOrg。合并为列向量矩阵 [a c e; b d f]：
+        //   x' = x*(m11*sx) + y*(m21*sx) + (dx*sx + viewportOrgX - deviceOrgX - windowOrgX*sx)
+        // 注意 viewport 映射是 (x - windowOrg)*sx + viewportOrg，故常量项含 -windowOrg*sx。
+        const a = this.worldM11 * sx;
+        const b = this.worldM12 * sy;
+        const c = this.worldM21 * sx;
+        const d = this.worldM22 * sy;
+        const e = this.worldDx * sx + this.viewportOrgX - this.deviceOrgX - this.windowOrgX * sx;
+        const f = this.worldDy * sy + this.viewportOrgY - this.deviceOrgY - this.windowOrgY * sy;
+        return { a, b, c, d, e, f };
     }
 
     /** @param {number} mode */

@@ -55,8 +55,18 @@ class GdiObjectManager {
     }
 
     selectObject(handle) {
-        return this.objectTable.get(handle);
+        const obj = this.objectTable.get(handle);
+        if (obj) {
+            // 记录当前各类型对象，便于 processEmfTextOut 等查询（避免全文扫表）
+            if (obj.type === 'font') this._currentFont = obj;
+            else if (obj.type === 'pen') this._currentPen = obj;
+            else if (obj.type === 'brush') this._currentBrush = obj;
+        }
+        return obj;
     }
+
+    /** 当前选中的字体对象（processEmfTextOut 用于读取 lfEscapement/lfOrientation 做文字旋转） */
+    get currentFont() { return this._currentFont; }
 
     deleteObject(handle) {
         this.objectTable.delete(handle);

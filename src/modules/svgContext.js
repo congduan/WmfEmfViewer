@@ -299,15 +299,25 @@ class SvgContext {
         return { width: size * 0.6 * String(text).length };
     }
 
-    fillText(text, x, y) {
+    fillText(text, x, y, transformMatrix) {
         const f = this._parseFont();
         const anchor = this.textAlign === 'right' ? 'end' : this.textAlign === 'center' ? 'middle' : 'start';
         const baseline = this.textBaseline === 'top' ? 'text-before-edge' : this.textBaseline === 'bottom' ? 'text-after-edge' : 'alphabetic';
+        // 可选的仿射变换（SVG matrix(a b c d e f)，列向量约定）。
+        // 文字渲染时传入 world×viewport×device 的合成矩阵，使 x/y/font-size 保持原始逻辑值，
+        // 缩放/平移/旋转统一由 transform 承担（对齐参考实现 libemf2svg 的 <g transform="matrix(...)">）。
+        let xform = '';
+        if (transformMatrix) {
+            const m = transformMatrix;
+            xform = ' transform="matrix(' + this._fmt(m.a) + ' ' + this._fmt(m.b) + ' ' +
+                this._fmt(m.c) + ' ' + this._fmt(m.d) + ' ' +
+                this._fmt(m.e) + ' ' + this._fmt(m.f) + ')"';
+        }
         this._nodes.push(
             '<text x="' + this._fmt(x) + '" y="' + this._fmt(y) + '" font-family="' + f.family + '" font-size="' + f.size + '"' +
             ' font-style="' + f.style + '" font-weight="' + f.weight + '"' +
             ' text-anchor="' + anchor + '" dominant-baseline="' + baseline + '"' +
-            ' fill="' + SvgContext._esc(this.fillStyle) + '" stroke="none" ' + this._attr() + '>' + SvgContext._esc(text) + '</text>'
+            ' fill="' + SvgContext._esc(this.fillStyle) + '" stroke="none" ' + this._attr() + xform + '>' + SvgContext._esc(text) + '</text>'
         );
     }
 
