@@ -126,6 +126,7 @@ var require_coordinateTransformer = __commonJS({
         this.viewportOrgY = 0;
         this.viewportExtX = 800;
         this.viewportExtY = 600;
+        this.pxPerMm = 96 / 25.4;
         this.worldM11 = 1;
         this.worldM12 = 0;
         this.worldM21 = 0;
@@ -248,51 +249,90 @@ var require_coordinateTransformer = __commonJS({
         }
         let cx = x - this.windowOrgX;
         let cy = y - this.windowOrgY;
+        const vp = this._getViewportScale();
+        cx = cx * vp.sx + this.viewportOrgX;
+        cy = cy * vp.sy + this.viewportOrgY;
+        return { x: cx - this.deviceOrgX, y: cy - this.deviceOrgY };
+      }
+      /**
+       * 计算 window→viewport 的缩放因子（sx/sy）。
+       * MM_TEXT/ISOTROPIC/ANISOTROPIC 用 viewportExt/windowExt 比值；
+       * 固定比例模式（LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS）用 pxPerMm 换算，
+       * 且 Y 轴在固定比例模式下向上（负缩放，GDI 语义）。
+       * @returns {{sx: number, sy: number}}
+       */
+      _getViewportScale() {
         switch (this.mapMode) {
           case MAP_MODE.MM_TEXT:
-          // 使用viewport/window转换
           case MAP_MODE.MM_ISOTROPIC:
           case MAP_MODE.MM_ANISOTROPIC:
             if (this.windowExtX !== 0 && this.windowExtY !== 0) {
-              const scaleX = this.viewportExtX / this.windowExtX;
-              const scaleY = this.viewportExtY / this.windowExtY;
-              cx = cx * scaleX + this.viewportOrgX;
-              cy = cy * scaleY + this.viewportOrgY;
+              return {
+                sx: this.viewportExtX / this.windowExtX,
+                sy: this.viewportExtY / this.windowExtY
+              };
             }
-            break;
-          case MAP_MODE.MM_LOMETRIC:
-            cx = cx * 0.1;
-            cy = cy * 0.1;
-            break;
-          case MAP_MODE.MM_HIMETRIC:
-            cx = cx * 0.01;
-            cy = cy * 0.01;
-            break;
-          case MAP_MODE.MM_LOENGLISH:
-            cx = cx * 0.254;
-            cy = cy * 0.254;
-            break;
-          case MAP_MODE.MM_HIENGLISH:
-            cx = cx * 0.0254;
-            cy = cy * 0.0254;
-            break;
-          case MAP_MODE.MM_TWIPS:
-            cx = cx * (1 / 1440);
-            cy = cy * (1 / 1440);
-            break;
+            return { sx: 1, sy: 1 };
+          case MAP_MODE.MM_LOMETRIC: {
+            const f = this.pxPerMm * 0.1;
+            return { sx: f, sy: -f };
+          }
+          case MAP_MODE.MM_HIMETRIC: {
+            const f = this.pxPerMm * 0.01;
+            return { sx: f, sy: -f };
+          }
+          case MAP_MODE.MM_LOENGLISH: {
+            const f = this.pxPerMm * 25.4 * 0.01;
+            return { sx: f, sy: -f };
+          }
+          case MAP_MODE.MM_HIENGLISH: {
+            const f = this.pxPerMm * 25.4 * 1e-3;
+            return { sx: f, sy: -f };
+          }
+          case MAP_MODE.MM_TWIPS: {
+            const f = this.pxPerMm * 25.4 / 1440;
+            return { sx: f, sy: -f };
+          }
           default:
             if (this.windowExtX !== 0 && this.windowExtY !== 0) {
-              const scaleX = this.viewportExtX / this.windowExtX;
-              const scaleY = this.viewportExtY / this.windowExtY;
-              cx = cx * scaleX + this.viewportOrgX;
-              cy = cy * scaleY + this.viewportOrgY;
+              return {
+                sx: this.viewportExtX / this.windowExtX,
+                sy: this.viewportExtY / this.windowExtY
+              };
             }
+            return { sx: 1, sy: 1 };
         }
-        return { x: cx - this.deviceOrgX, y: cy - this.deviceOrgY };
+      }
+      /**
+       * 返回把“逻辑坐标 → 设备坐标（canvas）”的完整仿射变换，按 SVG `matrix(a b c d e f)`
+       * 列向量约定输出（x' = a*x + c*y + e, y' = b*x + d*y + f）。
+       * 合成顺序：先世界变换（world，行向量 [x y 1]·M），再 window→viewport 缩放/平移，
+       * 最后减 deviceOrg（把 header rclBounds 原点平移到画布原点）。
+       * 供文字渲染等需要“原始逻辑坐标 + 原始字号 + transform 矩阵”对齐参考实现的场景使用。
+       * @returns {{a:number,b:number,c:number,d:number,e:number,f:number}}
+       */
+      getSvgMatrix() {
+        const vp = this._getViewportScale();
+        const sx = vp.sx, sy = vp.sy;
+        const a = this.worldM11 * sx;
+        const b = this.worldM12 * sy;
+        const c = this.worldM21 * sx;
+        const d = this.worldM22 * sy;
+        const e = this.worldDx * sx + this.viewportOrgX - this.deviceOrgX - this.windowOrgX * sx;
+        const f = this.worldDy * sy + this.viewportOrgY - this.deviceOrgY - this.windowOrgY * sy;
+        return { a, b, c, d, e, f };
       }
       /** @param {number} mode */
       setMapMode(mode) {
         this.mapMode = mode;
+      }
+      /**
+       * 设置每毫米的设备像素数（来自 EMF header.szlDevice.cx / szlMillimeters.cx）。
+       * 仅影响 MM_LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS 固定比例模式。
+       * @param {number} px
+       */
+      setPxPerMm(px) {
+        if (px && px > 0) this.pxPerMm = px;
       }
       /** @param {number} x @param {number} y */
       setWindowOrg(x, y) {
@@ -621,7 +661,17 @@ var require_gdiObjectManager = __commonJS({
         return handle;
       }
       selectObject(handle) {
-        return this.objectTable.get(handle);
+        const obj = this.objectTable.get(handle);
+        if (obj) {
+          if (obj.type === "font") this._currentFont = obj;
+          else if (obj.type === "pen") this._currentPen = obj;
+          else if (obj.type === "brush") this._currentBrush = obj;
+        }
+        return obj;
+      }
+      /** 当前选中的字体对象（processEmfTextOut 用于读取 lfEscapement/lfOrientation 做文字旋转） */
+      get currentFont() {
+        return this._currentFont;
       }
       deleteObject(handle) {
         this.objectTable.delete(handle);
@@ -2123,6 +2173,11 @@ var require_emfDrawer = __commonJS({
         this._fileWindowExtY = _initH;
         this._fileViewportExtX = _initW;
         this._fileViewportExtY = _initH;
+        if (metafileData.header.szlDevice && metafileData.header.szlMillimeters) {
+          const mmX = metafileData.header.szlMillimeters.cx || metafileData.header.szlMillimeters.cy || 1;
+          const pxX = metafileData.header.szlDevice.cx || metafileData.header.szlDevice.cy || 1;
+          this.coordinateTransformer.setPxPerMm(pxX / mmX);
+        }
         this.ctx.canvas.style.width = canvasWidth + "px";
         this.ctx.canvas.style.height = canvasHeight + "px";
         this.ctx.scale(dpr, dpr);
@@ -2742,8 +2797,8 @@ var require_emfDrawer = __commonJS({
         const obj = this.gdiObjectManager.selectObject(objectHandle);
         if (obj) {
           this.applyGdiObject(obj);
-        } else if (objectHandle >= 2147483648) {
-          this.applyStockObject(objectHandle);
+        } else if (objectHandle >>> 0 >= 2147483648) {
+          this.applyStockObject(objectHandle >>> 0);
         }
       }
       processEmfCreatePen(data) {
@@ -2919,6 +2974,8 @@ var require_emfDrawer = __commonJS({
         if (lfOff + 92 > data.length) return;
         const height = this.readLongFromData(data, lfOff);
         const width = this.readLongFromData(data, lfOff + 4);
+        const escapement = this.readLongFromData(data, lfOff + 8);
+        const orientation = this.readLongFromData(data, lfOff + 12);
         const weight = this.readLongFromData(data, lfOff + 16);
         const italic = data[lfOff + 20];
         const underline = data[lfOff + 21];
@@ -2930,7 +2987,7 @@ var require_emfDrawer = __commonJS({
           if (ch === 0) break;
           faceName += String.fromCharCode(ch);
         }
-        __wmfEmfRendererLog("EMF ExtCreateFontIndirectW: ih=", ihFont, "height:", height, "width:", width, "weight:", weight, "face:", faceName);
+        __wmfEmfRendererLog("EMF ExtCreateFontIndirectW: ih=", ihFont, "height:", height, "width:", width, "weight:", weight, "face:", faceName, "escapement:", escapement);
         this.gdiObjectManager.createObjectAt(ihFont, {
           type: "font",
           height,
@@ -2940,7 +2997,9 @@ var require_emfDrawer = __commonJS({
           underline,
           strikeOut,
           faceName,
-          charset
+          charset,
+          escapement,
+          orientation
         });
       }
       processEmfExtTextOutA(data) {
@@ -2974,7 +3033,6 @@ var require_emfDrawer = __commonJS({
               }
             }
             if (text.length > 0) {
-              const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
               const savedFillStyle = this.ctx.fillStyle;
               if ((options & 2) !== 0 && data.length >= 64) {
                 const rclLeft = this.readLongFromData(data, 48);
@@ -2993,7 +3051,34 @@ var require_emfDrawer = __commonJS({
                 }
               }
               this.ctx.fillStyle = this.textColor;
-              this.ctx.fillText(text, transformed.x, transformed.y);
+              const curFont = this.gdiObjectManager && this.gdiObjectManager.currentFont;
+              const rawHeight = curFont && curFont.height ? Math.abs(curFont.height) : 12;
+              const escapement = curFont && curFont.escapement ? curFont.escapement : 0;
+              const savedFont = this.ctx.font;
+              {
+                const weight = curFont && curFont.weight >= 700 ? "bold " : "";
+                const italic = curFont && curFont.italic ? "italic " : "";
+                const face = curFont && curFont.faceName ? curFont.faceName : "sans-serif";
+                this.ctx.font = `${italic}${weight}${rawHeight}px "${face}"`;
+              }
+              let matrix = this.coordinateTransformer.getSvgMatrix();
+              if (escapement !== 0) {
+                const deg = -escapement / 10;
+                const rad = deg * Math.PI / 180;
+                const cos = Math.cos(rad), sin = Math.sin(rad);
+                const px = x, py = y;
+                const r = { a: cos, b: sin, c: -sin, d: cos, e: px - px * cos + py * sin, f: py - px * sin - py * cos };
+                matrix = {
+                  a: matrix.a * r.a + matrix.c * r.b,
+                  b: matrix.b * r.a + matrix.d * r.b,
+                  c: matrix.a * r.c + matrix.c * r.d,
+                  d: matrix.b * r.c + matrix.d * r.d,
+                  e: matrix.a * r.e + matrix.c * r.f + matrix.e,
+                  f: matrix.b * r.e + matrix.d * r.f + matrix.f
+                };
+              }
+              this.ctx.fillText(text, x, y, matrix);
+              this.ctx.font = savedFont;
               this.ctx.fillStyle = savedFillStyle;
               __wmfEmfRendererLog("  Rendered text:", text.substring(0, 50));
             }
@@ -4115,12 +4200,17 @@ var require_svgContext = __commonJS({
         const size = m ? parseFloat(m[1]) : 12;
         return { width: size * 0.6 * String(text).length };
       }
-      fillText(text, x, y) {
+      fillText(text, x, y, transformMatrix) {
         const f = this._parseFont();
         const anchor = this.textAlign === "right" ? "end" : this.textAlign === "center" ? "middle" : "start";
         const baseline = this.textBaseline === "top" ? "text-before-edge" : this.textBaseline === "bottom" ? "text-after-edge" : "alphabetic";
+        let xform = "";
+        if (transformMatrix) {
+          const m = transformMatrix;
+          xform = ' transform="matrix(' + this._fmt(m.a) + " " + this._fmt(m.b) + " " + this._fmt(m.c) + " " + this._fmt(m.d) + " " + this._fmt(m.e) + " " + this._fmt(m.f) + ')"';
+        }
         this._nodes.push(
-          '<text x="' + this._fmt(x) + '" y="' + this._fmt(y) + '" font-family="' + f.family + '" font-size="' + f.size + '" font-style="' + f.style + '" font-weight="' + f.weight + '" text-anchor="' + anchor + '" dominant-baseline="' + baseline + '" fill="' + _SvgContext._esc(this.fillStyle) + '" stroke="none" ' + this._attr() + ">" + _SvgContext._esc(text) + "</text>"
+          '<text x="' + this._fmt(x) + '" y="' + this._fmt(y) + '" font-family="' + f.family + '" font-size="' + f.size + '" font-style="' + f.style + '" font-weight="' + f.weight + '" text-anchor="' + anchor + '" dominant-baseline="' + baseline + '" fill="' + _SvgContext._esc(this.fillStyle) + '" stroke="none" ' + this._attr() + xform + ">" + _SvgContext._esc(text) + "</text>"
         );
       }
       // ---- 裁剪 ----
@@ -4508,6 +4598,117 @@ var require_emfPlusDrawer = __commonJS({
         const t = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
         return t;
       }
+      // EmfPlusPath (MS-EMFPLUS 2.2.1.6) 解析：data 起点（已跳过 EmfPlusObject 的 GraphicsVersion）
+      // 实际 layout: PathPointCount(4) + PathPointFlags(4) + PathPoints(Count × stride) + PathPointTypes(Count if non-RLE) + AlignmentPadding(0..3)
+      // 注意：graphicsVersion 是 EmfPlusPath 自身 Version 字段（spec 2.2.1.6）；POI 的 EmfPlusObject.init 先读 graphicsVersion 后再传给 EmfPlusPath.init
+      // PathPointFlags:
+      //   0x0800 RELATIVE_POSITION — 坐标相对于前一点（PathPointR，否则 PathPoint/PathPointF）
+      //   0x1000 RLE_COMPRESSED    — PathPointTypes 为 RLE 编码
+      //   0x4000 FORMAT_COMPRESSED — 坐标为 int16（否则 float32）
+      // PathPointType 字节：低 4 位 (0x0F): 0=Start, 1=Line, 3=Bezier；高 4 位 0x10=Dashed, 0x20=Marker, 0x80=CloseSubpath
+      _emfPlusParsePath(data) {
+        if (!data || data.length < 8) return null;
+        const count = data[0] & 255 | (data[1] & 255) << 8 | (data[2] & 255) << 16 | (data[3] & 255) << 24;
+        const pointFlags = data[4] & 255 | (data[5] & 255) << 8 | (data[6] & 255) << 16 | (data[7] & 255) << 24;
+        const compressed = (pointFlags & 16384) !== 0;
+        const rle = (pointFlags & 4096) !== 0;
+        const relative = (pointFlags & 2048) !== 0;
+        if (!this._dbgPath) this._dbgPath = { count: 0, big: 0, fail: 0 };
+        if (count > 100) {
+          this._dbgPath.big++;
+          __wmfEmfRendererLog("[BIG] count=" + count, "flags=0x" + pointFlags.toString(16), "C=" + (compressed ? "Y" : "N"), "RLE=" + (rle ? "Y" : "N"), "R=" + (relative ? "Y" : "N"), "len=" + data.length, "first4=[" + [data[0], data[1], data[2], data[3]].map((x) => x.toString(16).padStart(2, "0")).join(",") + "]");
+        }
+        process.stdout.write("[ParsePath] count=" + count + " flags=0x" + pointFlags.toString(16) + " C=" + (compressed ? "Y" : "N") + " RLE=" + (rle ? "Y" : "N") + " R=" + (relative ? "Y" : "N") + " len=" + data.length + " first5bytes=[" + [data[0], data[1], data[2], data[3], data[4]].map((x) => x.toString(16).padStart(2, "0")).join(",") + "]\n");
+        this._dbgPath.count++;
+        let offset = 8;
+        const points = [];
+        const stride = compressed ? 4 : 8;
+        for (let i = 0; i < count; i++) {
+          if (offset + stride > data.length) break;
+          let x, y;
+          if (compressed) {
+            x = data[offset] & 255 | (data[offset + 1] & 255) << 8;
+            if (x & 32768) x |= 4294901760;
+            y = data[offset + 2] & 255 | (data[offset + 3] & 255) << 8;
+            if (y & 32768) y |= 4294901760;
+          } else {
+            x = this._emfPlusReadFloat(data, offset);
+            y = this._emfPlusReadFloat(data, offset + 4);
+          }
+          points.push({ x, y });
+          offset += stride;
+        }
+        const pointTypes = new Uint8Array(count);
+        if (rle) {
+          let i = 0;
+          while (i < count && offset + 2 <= data.length) {
+            const header = data[offset] & 255;
+            const t = data[offset + 1] & 255;
+            offset += 2;
+            const runCount = header & 63;
+            const actual = Math.min(runCount, count - i);
+            for (let k = 0; k < actual; k++) pointTypes[i + k] = t;
+            i += actual;
+          }
+        } else {
+          for (let i = 0; i < count && offset < data.length; i++) {
+            pointTypes[i] = data[offset++] & 255;
+          }
+        }
+        return { count, pointTypes, points, compressed, rle, relative };
+      }
+      // 在 ctx 上构造 Path 命令（按 PathPointType 序列 moveTo/lineTo/bezier/closePath）
+      // 由调用方在 fill()/stroke() 之前调用
+      _emfPlusTracePath(pathObj) {
+        if (!pathObj || !pathObj.pointTypes || pathObj.count === 0) return;
+        const ctx = this.ctx;
+        let bezierBuf = [];
+        let prevX = 0, prevY = 0;
+        let started = false;
+        for (let i = 0; i < pathObj.count; i++) {
+          const t = pathObj.pointTypes[i];
+          const p = pathObj.points[i];
+          if (!p) continue;
+          let x = p.x, y = p.y;
+          if (pathObj.relative) {
+            x += prevX;
+            y += prevY;
+          }
+          const mapped = this._emfPlusMapPoint(x, y);
+          const type = t & 15;
+          const closed = (t & 128) !== 0;
+          if (type === 0) {
+            if (started) ctx.closePath();
+            ctx.beginPath();
+            ctx.moveTo(mapped.x, mapped.y);
+            started = true;
+            bezierBuf = [];
+          } else if (type === 1) {
+            if (!started) {
+              ctx.beginPath();
+              ctx.moveTo(mapped.x, mapped.y);
+              started = true;
+            }
+            ctx.lineTo(mapped.x, mapped.y);
+            bezierBuf = [];
+          } else if (type === 3) {
+            if (!started) {
+              ctx.beginPath();
+              ctx.moveTo(mapped.x, mapped.y);
+              started = true;
+            }
+            bezierBuf.push(mapped);
+            if (bezierBuf.length === 3) {
+              ctx.bezierCurveTo(bezierBuf[0].x, bezierBuf[0].y, bezierBuf[1].x, bezierBuf[1].y, bezierBuf[2].x, bezierBuf[2].y);
+              bezierBuf = [];
+            }
+          }
+          if (closed && bezierBuf.length === 0) ctx.closePath();
+          prevX = x;
+          prevY = y;
+        }
+        if (started) ctx.closePath();
+      }
       draw(metafileData, options = {}) {
         __wmfEmfRendererLog("Drawing EMF+ with header:", metafileData.header);
         __wmfEmfRendererLog("Number of records:", metafileData.records.length);
@@ -4629,13 +4830,50 @@ var require_emfPlusDrawer = __commonJS({
       processEmfPlusDrawClosedCurve(flags, data) {
         __wmfEmfRendererLog("Processing EmfPlusDrawClosedCurve");
       }
-      // 处理EMF+绘制路径记录
-      processEmfPlusDrawPath(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusDrawPath");
-      }
-      // 处理EMF+填充路径记录
+      // EmfPlusFillPath (0x4014, MS-EMFPLUS 2.3.4.17)：flags[7..0]=pathId, flags[15]=S(ARGB 直传), data[0..3]=brushId/ARGB
       processEmfPlusFillPath(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusFillPath");
+        if (data.length < 4) return;
+        const pathId = flags & 255;
+        const solid = (flags & 32768) !== 0;
+        const brushId = data[0] & 255 | (data[1] & 255) << 8 | (data[2] & 255) << 16 | (data[3] & 255) << 24;
+        if (!this._dbgFP) this._dbgFP = { hit: 0, miss: 0 };
+        const path = this.emfPlusObjects[pathId];
+        if (!path || path.type !== "path") {
+          this._dbgFP.miss++;
+          if (this._dbgFP.miss < 4) __wmfEmfRendererLog("[FillPath MISS] pathId=" + pathId, "solid=" + solid, "brushId=0x" + brushId.toString(16), "objExists=" + !!path, "objType=" + (path && path.type));
+          return;
+        }
+        this._dbgFP.hit++;
+        process.stdout.write("[FillPath HIT] pathId=" + pathId + " count=" + path.count + " firstPt=" + JSON.stringify(path.points[0]) + " compressed=" + path.compressed + " relative=" + path.relative + " lastPt=" + JSON.stringify(path.points[path.points.length - 1]) + " pointsLen=" + path.points.length + "\n");
+        if (!path || path.type !== "path") return;
+        const color = solid ? this._emfPlusArgbToColor(brushId) : this._emfPlusResolveBrush(0, brushId);
+        if (!color) return;
+        this.ctx.fillStyle = color;
+        this._emfPlusTracePath(path);
+        this.ctx.fill();
+      }
+      // EmfPlusDrawPath (0x4015, MS-EMFPLUS 2.3.4.18)：flags[7..0]=pathId, flags[15]=S, data[0..3]=penId/ARGB
+      processEmfPlusDrawPath(flags, data) {
+        if (data.length < 4) return;
+        const pathId = flags & 255;
+        const solid = (flags & 32768) !== 0;
+        const penId = data[0] & 255 | (data[1] & 255) << 8 | (data[2] & 255) << 16 | (data[3] & 255) << 24;
+        const path = this.emfPlusObjects[pathId];
+        if (!path || path.type !== "path") return;
+        let color = "#000000", width = 1;
+        if (solid) {
+          color = this._emfPlusArgbToColor(penId);
+        } else {
+          const pen = this.emfPlusObjects[penId];
+          if (pen && pen.type === "pen") {
+            color = pen.color;
+            width = pen.width || 1;
+          }
+        }
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = width;
+        this._emfPlusTracePath(path);
+        this.ctx.stroke();
       }
       // 处理EMF+绘制图像记录（DrawImage = 目标矩形与源矩形相同；可引用嵌套 EMF / 位图对象）
       processEmfPlusDrawImage(flags, data) {
@@ -4732,7 +4970,50 @@ var require_emfPlusDrawer = __commonJS({
       }
       // 处理EMF+绘制字符串记录
       processEmfPlusDrawString(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusDrawString");
+        if (data.length < 8) return;
+        let o = 0;
+        const brushId = flags & 255;
+        let fontObj = null;
+        if (flags & 32768) {
+          if (o + 4 > data.length) return;
+          const fontId = (data[o] | data[o + 1] << 8 | data[o + 2] << 16 | data[o + 3] << 24) >>> 0;
+          o += 4;
+          fontObj = this.emfPlusObjects[fontId];
+        }
+        if (flags & 16384) o += 4;
+        let layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
+        if (flags & 2048) {
+          if (o + 16 > data.length) return;
+          layoutX = this._emfPlusReadFloat(data, o);
+          layoutY = this._emfPlusReadFloat(data, o + 4);
+          layoutW = this._emfPlusReadFloat(data, o + 8);
+          layoutH = this._emfPlusReadFloat(data, o + 12);
+          o += 16;
+        }
+        if (o + 4 > data.length) return;
+        const len = (data[o] | data[o + 1] << 8 | data[o + 2] << 16 | data[o + 3] << 24) >>> 0;
+        o += 4;
+        if (len === 0 || o + len > data.length) return;
+        const slice = data.slice(o, o + len);
+        let text = "";
+        for (let i = 0; i + 1 < slice.length; i += 2) {
+          const code = slice[i] | slice[i + 1] << 8;
+          if (code === 0) break;
+          text += String.fromCharCode(code);
+        }
+        if (!text) return;
+        const brush = this.emfPlusObjects[brushId];
+        if (brush && brush.type === "solidBrush" && brush.color) {
+          this.ctx.fillStyle = brush.color;
+        }
+        let drawSize = 12;
+        if (fontObj && fontObj.type === "font") {
+          const sz = Math.max(6, Math.round(fontObj.emSize * 0.75));
+          drawSize = sz;
+          this.ctx.font = `${fontObj.italic}${fontObj.weight} ${sz}px "${fontObj.face}"`;
+        }
+        const p = this._emfPlusMapPoint(layoutX, layoutY);
+        this.ctx.fillText(text, p.x, p.y + drawSize);
       }
       // 处理EMF+绘制多线段记录：PenId(4) + Count(4) + PointF[Count](8 each)
       processEmfPlusDrawLines(flags, data) {
@@ -4941,6 +5222,9 @@ var require_emfPlusDrawer = __commonJS({
       processEmfPlusObject(flags, data) {
         const objectId = flags & 255;
         const objectType = flags & 32512;
+        if (data.length >= 4) data = data.slice(4);
+        if (!this._objTypeStats) this._objTypeStats = {};
+        this._objTypeStats["0x" + objectType.toString(16)] = (this._objTypeStats["0x" + objectType.toString(16)] || 0) + 1;
         if (objectType === 256) {
           if (data.length < 8) return;
           const brushType = this._emfPlusReadInt32(data, 0);
@@ -4965,8 +5249,27 @@ var require_emfPlusDrawer = __commonJS({
             }
           }
           this.emfPlusObjects[objectId] = { type: "pen", color, width, penUnit };
+        } else if (objectType === 1024) {
+          let emSize = 12;
+          let styleFlags = 0;
+          let family = 0;
+          if (data.length >= 16) {
+            emSize = this._emfPlusReadFloat(data, 4) || 12;
+            styleFlags = this._emfPlusReadInt32(data, 12);
+            family = data.length >= 18 ? data[16] | data[17] << 8 : 0;
+          }
+          const weight = styleFlags & 1 ? "bold" : "normal";
+          const italic = styleFlags & 2 ? "italic " : "";
+          const families = ["serif", "sans-serif", "monospace", "sans-serif", "cursive", "fantasy", "monospace"];
+          const face = families[family] || "sans-serif";
+          this.emfPlusObjects[objectId] = { type: "font", emSize, weight, italic, face };
         } else if (objectType === 768) {
-          this.emfPlusObjects[objectId] = { type: "path", data };
+          const parsed = this._emfPlusParsePath(data);
+          if (parsed) {
+            this.emfPlusObjects[objectId] = { type: "path", ...parsed };
+          } else {
+            this.emfPlusObjects[objectId] = { type: "path", data };
+          }
         } else if (objectType === 1280) {
           if (data.length < 8) return;
           const type = this._emfPlusReadInt32(data, 4);

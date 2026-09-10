@@ -167,10 +167,6 @@ class EmfPlusDrawer {
     const compressed = (pointFlags & 0x4000) !== 0;
     const rle = (pointFlags & 0x1000) !== 0;
     const relative = (pointFlags & 0x0800) !== 0;
-    if (!this._dbgPath) this._dbgPath = { count: 0, big: 0, fail: 0 };
-    if (count > 100) { this._dbgPath.big++; console.log('[BIG] count='+count,'flags=0x'+pointFlags.toString(16),'C='+(compressed?'Y':'N'),'RLE='+(rle?'Y':'N'),'R='+(relative?'Y':'N'),'len='+data.length,'first4=['+[data[0],data[1],data[2],data[3]].map(x=>x.toString(16).padStart(2,'0')).join(',')+']'); }
-    process.stdout.write('[ParsePath] count='+count+' flags=0x'+pointFlags.toString(16)+' C='+(compressed?'Y':'N')+' RLE='+(rle?'Y':'N')+' R='+(relative?'Y':'N')+' len='+data.length+' first5bytes=['+[data[0],data[1],data[2],data[3],data[4]].map(x=>x.toString(16).padStart(2,'0')).join(',')+']\n');
-    this._dbgPath.count++;
 
     // PathPoints 在前（spec 2.2.1.6 字段顺序）：起点 offset=8
     let offset = 8;
@@ -418,11 +414,7 @@ class EmfPlusDrawer {
     const pathId = flags & 0xFF;
     const solid = (flags & 0x8000) !== 0;
     const brushId = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
-    if (!this._dbgFP) this._dbgFP = { hit: 0, miss: 0 };
     const path = this.emfPlusObjects[pathId];
-    if (!path || path.type !== 'path') { this._dbgFP.miss++; if (this._dbgFP.miss < 4) console.log('[FillPath MISS] pathId='+pathId,'solid='+solid,'brushId=0x'+brushId.toString(16),'objExists='+!!path,'objType='+(path&&path.type)); return; }
-    this._dbgFP.hit++;
-    process.stdout.write('[FillPath HIT] pathId='+pathId+' count='+path.count+' firstPt='+JSON.stringify(path.points[0])+' compressed='+path.compressed+' relative='+path.relative+' lastPt='+JSON.stringify(path.points[path.points.length-1])+' pointsLen='+path.points.length+'\n');
     if (!path || path.type !== 'path') return;
     const color = solid ? this._emfPlusArgbToColor(brushId) : this._emfPlusResolveBrush(0, brushId);
     if (!color) return;
