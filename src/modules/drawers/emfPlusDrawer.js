@@ -120,8 +120,28 @@ class EmfPlusDrawer {
       ((data[offset + 3] & 0xFF) << 24);
   }
 
+  // 启发式：提取渐变刷（Linear/PathGradient/Hatch）的主色。
+  // GDI+ 写出的这类刷子里 StartColor/EndColor（或 ForeColor/BackColor）总是相邻的两个
+  // alpha=0xFF 的 dword（实测 Excel/Office 产出均如此），故优先找相邻对，取前者作主色；
+  // 找不到相邻对时退化为首个 alpha=0xFF 的 dword。
+  _emfPlusFirstOpaqueArgb(data, offset) {
+    const argb = o => (o + 4 <= data.length ? this._emfPlusReadArgb(data, o) >>> 0 : 0);
+    const opaque = v => ((v >>> 24) & 0xFF) === 0xFF && (v & 0x00FFFFFF) !== 0;
+    for (let o = offset; o + 8 <= data.length; o += 4) {
+      const v1 = argb(o), v2 = argb(o + 4);
+      if (opaque(v1) && opaque(v2)) return this._emfPlusArgbToColor(v1);
+    }
+    for (let o = offset; o + 4 <= data.length; o += 4) {
+      const v = argb(o);
+      if (opaque(v)) return this._emfPlusArgbToColor(v);
+    }
+    return null;
+  }
+
   // 根据 flags 与 BrushId 解析画刷颜色：
-  // flags 的 0x8000 位为 1 时 BrushId 直接是 ARGB 颜色，否则是对象表索引
+  // flags 的 0x8000 位（U_PPF_B）为 1 时 BrushId 直接是 ARGB 颜色，否则是对象表索引。
+  // 参考实现（libemf2svg U_PMR_FILLRECTS_get）对损坏文件的容错：
+  //   非 solid 模式下 BrushId > 63 时按 ARGB 颜色处理（对象表索引只有 0-63）。
   _emfPlusResolveBrush(flags, brushId, data, offset) {
     if (flags & 0x8000) {
       return this._emfPlusArgbToColor(brushId);
@@ -130,8 +150,8 @@ class EmfPlusDrawer {
     if (obj && obj.type === 'solidBrush') {
       return obj.color;
     }
-    // 兜底：若 BrushId 明显是颜色值则直接转换
-    if (brushId >= 0x01000000 || brushId === 0) {
+    // 兜底（对齐参考实现的容错）：BrushId 超出对象表范围则视为 ARGB 颜色直传
+    if (brushId > 63 || brushId >= 0x01000000) {
       return this._emfPlusArgbToColor(brushId);
     }
     return '#000000';
@@ -366,18 +386,19 @@ class EmfPlusDrawer {
     console.log('Processing EmfPlusDrawLine');
   }
 
-  // 处理EMF+填充多边形记录：BrushId(4) + Count(4) + PointF[Count](8 each)
+  // 处理EMF+填充多边形记录：data = BrushId(4) + Count(4) + PointF[Count](8 each)
+  // （对齐 libemf2svg U_PMR_FILLPOLYGON_get：BrushId 在 data 首字段）
   processEmfPlusFillPolygon(flags, data) {
-    if (data.length < 4) return;
-    const brushId = flags & 0xFF;
-    const count = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
-    if (count > 65536) return;
+    if (data.length < 8) return;
+    const brushId = this._emfPlusReadInt32(data, 0);
+    const count = this._emfPlusReadInt32(data, 4);
+    if (count < 1 || count > 65536) return;
     const color = this._emfPlusResolveBrush(flags, brushId);
     if (!color) return;
     this.ctx.fillStyle = color;
     this.ctx.beginPath();
     for (let i = 0; i < count; i++) {
-      const o = 4 + i * 8;
+      const o = 8 + i * 8;
       if (o + 8 > data.length) break;
       const x = this._emfPlusReadFloat(data, o);
       const y = this._emfPlusReadFloat(data, o + 4);
@@ -479,6 +500,32 @@ class EmfPlusDrawer {
     return b | 0;
   }
 
+  // 有符号 int16 小端（U_PPF_C 压缩矩形/点坐标用）
+  _emfPlusReadInt16(data, offset) {
+    if (offset + 2 > data.length) return 0;
+    return ((data[offset] | (data[offset + 1] << 8)) << 16) >> 16;
+  }
+
+  // EMF+ 页面单位 -> 画布像素的比例（用当前坐标变换实测 100 单位的水平跨度）
+  _emfPlusUnitsToPx() {
+    try {
+      const a = this._emfPlusMapPoint(0, 0);
+      const b = this._emfPlusMapPoint(100, 0);
+      const s = Math.abs(b.x - a.x) / 100;
+      return s > 0 ? s : 1;
+    } catch (e) {
+      return 1;
+    }
+  }
+
+  // 字体名 -> CSS 通用字体族（EMF+ FaceName 常见字体映射）
+  _emfPlusFontFamilyFromName(name) {
+    const n = (name || '').toLowerCase();
+    if (/courier|consol|mono|menlo/.test(n)) return 'monospace';
+    if (/times|georgia|garamond|cambria|book|roman|serif|minion/.test(n)) return 'serif';
+    return 'sans-serif';
+  }
+
   // 读取点坐标（flags 0x4000=压缩坐标时用 int16/4096）
   _emfPlusReadPointX(flags, data, o) {
     if (flags & 0x4000) {
@@ -553,38 +600,21 @@ class EmfPlusDrawer {
     }
   }
 
-  // 处理EMF+绘制字符串记录
+  // EmfPlusDrawString（0x401C，MS-EMFPLUS 2.3.4.14 / libemf2svg U_PMR_DRAWSTRING_get）：
+  // FontId = flags 低字节；data = BrushId(4) + FormatId(4) + Length(4) + RectF(16) + UTF16LE[Length]
+  // 字距/字符间距暂忽略（PNG→SVG 静态图对齐为主）。
   processEmfPlusDrawString(flags, data) {
-    // 处理 EMF+ 文本绘制（MS-EMFPLUS 2.3.4.8）。body 内 LayoutRect 起点即文本左上角，
-    // 字距/字符间距/DxLayout 暂忽略（PNG→SVG 静态图对齐为主）。
-    if (data.length < 8) return;
-    let o = 0;
-    const brushId = flags & 0xFF;
-    let fontObj = null;
-    if (flags & 0x8000) {
-      // 紧接 BrushId 之后是 FontId（4 字节）
-      if (o + 4 > data.length) return;
-      const fontId = (data[o] | (data[o + 1] << 8) | (data[o + 2] << 16) | (data[o + 3] << 24)) >>> 0;
-      o += 4;
-      fontObj = this.emfPlusObjects[fontId];
-    }
-    if (flags & 0x4000) o += 4; // StringFormat
-    let layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
-    if (flags & 0x0800) {
-      // LayoutRect: X(float) Y(float) W(float) H(float)
-      if (o + 16 > data.length) return;
-      layoutX = this._emfPlusReadFloat(data, o);
-      layoutY = this._emfPlusReadFloat(data, o + 4);
-      layoutW = this._emfPlusReadFloat(data, o + 8);
-      layoutH = this._emfPlusReadFloat(data, o + 12);
-      o += 16;
-    }
-    if (o + 4 > data.length) return;
-    const len = (data[o] | (data[o + 1] << 8) | (data[o + 2] << 16) | (data[o + 3] << 24)) >>> 0;
-    o += 4;
-    if (len === 0 || o + len > data.length) return;
-    // 解码 UTF16LE 字符串（剔除高位空字节）
-    const slice = data.slice(o, o + len);
+    if (data.length < 28) return;
+    const fontId = flags & 0xFF;
+    const brushId = this._emfPlusReadInt32(data, 0);
+    const len = this._emfPlusReadInt32(data, 8);
+    if (len < 1 || len > 65536) return;
+    const layoutX = this._emfPlusReadFloat(data, 12);
+    const layoutY = this._emfPlusReadFloat(data, 16);
+    const strOff = 28;
+    if (strOff + len * 2 > data.length) return;
+    // 解码 UTF16LE 字符串
+    const slice = data.slice(strOff, strOff + len * 2);
     let text = '';
     for (let i = 0; i + 1 < slice.length; i += 2) {
       const code = slice[i] | (slice[i + 1] << 8);
@@ -592,16 +622,16 @@ class EmfPlusDrawer {
       text += String.fromCharCode(code);
     }
     if (!text) return;
-    // 取 brush 颜色
-    const brush = this.emfPlusObjects[brushId];
-    if (brush && brush.type === 'solidBrush' && brush.color) {
-      this.ctx.fillStyle = brush.color;
-    }
-    // 应用 font（若有）。EMF+ Font.EmSize 单位依 SizeUnit（默认 World/Page），
-    // 此处按 page 坐标下 1px = 1/72 in 粗略换算；最终视觉粗细不影响 PNG RMSE。
+    // 取 brush 颜色（BrushId 为 ARGB 直传或对象表索引）
+    const color = this._emfPlusResolveBrush(flags, brushId);
+    if (color) this.ctx.fillStyle = color;
+    // 应用 font（若有）。EmSize 单位依 SizeUnit，多数文件为页面单位：
+    // 按当前坐标变换把 EmSize 换算成画布像素（与 LayoutRect 的映射一致）。
+    const fontObj = this.emfPlusObjects[fontId];
     let drawSize = 12;
     if (fontObj && fontObj.type === 'font') {
-      const sz = Math.max(6, Math.round(fontObj.emSize * 0.75));
+      const scale = this._emfPlusUnitsToPx();
+      const sz = Math.max(4, Math.round(fontObj.emSize * scale));
       drawSize = sz;
       this.ctx.font = `${fontObj.italic}${fontObj.weight} ${sz}px "${fontObj.face}"`;
     }
@@ -664,16 +694,17 @@ class EmfPlusDrawer {
     console.log('EMF+ DrawEllipse');
   }
 
-  // 处理EMF+填充椭圆记录：BrushId(4) + RectF(16)
+  // 处理EMF+填充椭圆记录：data = BrushId(4) + RectF(16)
+  // （对齐 libemf2svg U_PMR_FILLELLIPSE_get：BrushId 在 data 首字段）
   processEmfPlusFillEllipse(flags, data) {
-    if (data.length < 16) return;
-    const brushId = flags & 0xFF;
+    if (data.length < 20) return;
+    const brushId = this._emfPlusReadInt32(data, 0);
     const color = this._emfPlusResolveBrush(flags, brushId);
     if (!color) return;
-    const x = this._emfPlusReadFloat(data, 0);
-    const y = this._emfPlusReadFloat(data, 4);
-    const w = this._emfPlusReadFloat(data, 8);
-    const h = this._emfPlusReadFloat(data, 12);
+    const x = this._emfPlusReadFloat(data, 4);
+    const y = this._emfPlusReadFloat(data, 8);
+    const w = this._emfPlusReadFloat(data, 12);
+    const h = this._emfPlusReadFloat(data, 16);
     const tl = this._emfPlusMapPoint(x, y);
     const br = this._emfPlusMapPoint(x + w, y + h);
     const cx = (tl.x + br.x) / 2;
@@ -681,7 +712,7 @@ class EmfPlusDrawer {
     const rx = Math.abs(br.x - tl.x) / 2;
     const ry = Math.abs(br.y - tl.y) / 2;
     if (rx === 0 || ry === 0) return;
-    this.ctx.fillStyle = this._emfPlusResolveBrush(flags, brushId);
+    this.ctx.fillStyle = color;
     this.ctx.beginPath();
     this.ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
     this.ctx.closePath();
@@ -694,9 +725,36 @@ class EmfPlusDrawer {
     console.log('Processing EmfPlusDrawArc');
   }
 
-  // 处理EMF+填充饼图记录
+  // 处理EMF+填充饼图记录：data = BrushId(4) + StartAngle(float) + SweepAngle(float) + RectF(16)
+  // （对齐 libemf2svg U_PMR_FILLPIE_get；角度为度，顺时针自 3 点方向）
   processEmfPlusFillPie(flags, data) {
-    console.log('Processing EmfPlusFillPie');
+    if (data.length < 28) return;
+    const brushId = this._emfPlusReadInt32(data, 0);
+    const color = this._emfPlusResolveBrush(flags, brushId);
+    if (!color) return;
+    const start = this._emfPlusReadFloat(data, 4);
+    const sweep = this._emfPlusReadFloat(data, 8);
+    const x = this._emfPlusReadFloat(data, 12);
+    const y = this._emfPlusReadFloat(data, 16);
+    const w = this._emfPlusReadFloat(data, 20);
+    const h = this._emfPlusReadFloat(data, 24);
+    if (w === 0 || h === 0 || sweep === 0) return;
+    const tl = this._emfPlusMapPoint(x, y);
+    const br = this._emfPlusMapPoint(x + w, y + h);
+    const cx = (tl.x + br.x) / 2;
+    const cy = (tl.y + br.y) / 2;
+    const rx = Math.abs(br.x - tl.x) / 2;
+    const ry = Math.abs(br.y - tl.y) / 2;
+    if (rx === 0 || ry === 0) return;
+    const a0 = start * Math.PI / 180;
+    const a1 = (start + sweep) * Math.PI / 180;
+    this.ctx.fillStyle = color;
+    this.ctx.beginPath();
+    this.ctx.moveTo(cx, cy);
+    this.ctx.ellipse(cx, cy, rx, ry, 0, a0, a1, sweep < 0);
+    this.ctx.closePath();
+    this.ctx.fill();
+    console.log('EMF+ FillPie');
   }
 
   // 处理EMF+绘制饼图记录
@@ -863,8 +921,13 @@ class EmfPlusDrawer {
       if (brushType === 0) { // Solid: EmfPlusSolidBrushData = ARGB
         const argb = this._emfPlusReadArgb(data, 4);
         this.emfPlusObjects[objectId] = { type: 'solidBrush', color: this._emfPlusArgbToColor(argb) };
+      } else if (brushType === 1 || brushType === 3 || brushType === 4) {
+        // Hatch/PathGradient/LinearGradient：完整解析较复杂（可选字段随 BrushDataFlags 变化），
+        // 这里启发式提取首个不透明（alpha>=0x80）ARGB 作为主色——对静态渲染已足够接近。
+        const color = this._emfPlusFirstOpaqueArgb(data, 4);
+        if (color) this.emfPlusObjects[objectId] = { type: 'solidBrush', color };
       }
-      // Hatch/Texture/PathGradient 后续扩展
+      // Texture 后续扩展
     } else if (objectType === 0x0200 && data.length >= 8) { // EmfPlusPen
       // EmfPlusPen: PenDataFlags(4) + PenUnit(4) + PenWidth(float, 若 PenDataTransformable?) 简化：
       const penUnit = this._emfPlusReadInt32(data, 4);
@@ -881,26 +944,36 @@ class EmfPlusDrawer {
         if (data.length >= 20) { const argb = this._emfPlusReadArgb(data, 12); color = this._emfPlusArgbToColor(argb); }
       }
       this.emfPlusObjects[objectId] = { type: 'pen', color, width, penUnit };
-    } else if (objectType === 0x0400) { // EmfPlusFont
-      // EmfPlusFont (MS-EMFPLUS 2.2.3.7):
-      // Version(4) + EmSize(float,4) + SizeUnit(4) + StyleFlags(4) + StylePadding(2) + Family(2)
-      // + CharacterSet(2) + Stretch(4) + Style(2) + StyleSize(4) + Reserved(4)
-      // + FaceName(variable, UTF16LE)
-      // 简化实现：只取 EmSize 作字号，StyleFlags 解析 bold/italic
+    } else if (objectType === 0x0600) { // EmfPlusFont（U_OT_Font=6）
+      // EmfPlusFont（data 已剥离 GraphicsVersion，MS-EMFPLUS 2.2.1.3）：
+      // EmSize(float,4) + SizeUnit(4) + StyleFlags(4) + 保留(4，实测为 FaceName 字符数)
+      // + FaceName(variable, UTF16LE)。实测 Excel/Office 产出：偏移 16 处 dword = 字体名长度，
+      // 如 11 + "Courier New"。
+      // 简化实现：取 EmSize 作字号，StyleFlags 解析 bold/italic，字体名映射到通用族。
       let emSize = 12;
       let styleFlags = 0;
-      let family = 0;
-      if (data.length >= 16) {
-        emSize = this._emfPlusReadFloat(data, 4) || 12;
-        styleFlags = this._emfPlusReadInt32(data, 12);
-        family = data.length >= 18 ? (data[16] | (data[17] << 8)) : 0;
+      let face = 'sans-serif';
+      if (data.length >= 12) {
+        emSize = this._emfPlusReadFloat(data, 0) || 12;
+        styleFlags = this._emfPlusReadInt32(data, 8);
+        if (data.length >= 20) {
+          const nameLen = this._emfPlusReadInt32(data, 16);
+          if (nameLen > 0 && nameLen < 64 && 20 + nameLen * 2 <= data.length) {
+            let name = '';
+            for (let i = 0; i < nameLen; i++) {
+              const c = data[20 + i * 2] | (data[21 + i * 2] << 8);
+              if (!c) break;
+              name += String.fromCharCode(c);
+            }
+            face = this._emfPlusFontFamilyFromName(name);
+          }
+        }
       }
       const weight = (styleFlags & 0x01) ? 'bold' : 'normal'; // FontStyleBold
       const italic = (styleFlags & 0x02) ? 'italic ' : '';
-      // family 0=GDI CharSet; 1..6 对应 GDI GenericFamily 枚举 (Serif/SansSerif/Monospace...)
-      const families = ['serif', 'sans-serif', 'monospace', 'sans-serif', 'cursive', 'fantasy', 'monospace'];
-      const face = families[family] || 'sans-serif';
       this.emfPlusObjects[objectId] = { type: 'font', emSize, weight, italic, face };
+    } else if (objectType === 0x0400) { // EmfPlusRegion —— 裁剪区域，暂不处理
+      // Region 对象（U_OT_Region=4）暂不支持，忽略即可
     } else if (objectType === 0x0300) { // EmfPlusPath —— 解析后存为 { pointTypes, points, ... }
       const parsed = this._emfPlusParsePath(data);
       if (parsed) {
@@ -944,22 +1017,26 @@ class EmfPlusDrawer {
     console.log('EMF+ Clear:', color);
   }
 
-  // EmfPlusFillRects：body = Count(4) + RectF[Count](16 each)；笔刷由 flags 低字节(ObjectId)指定
+  // EmfPlusFillRects（0x400A，MS-EMFPLUS 2.3.4.20 / libemf2svg U_PMR_FILLRECTS_get）：
+  // data = BrushId(4) + Count(4) + Rect[Count]。BrushId 为 ARGB（flags&0x8000）或对象表索引；
+  // flags&0x4000（U_PPF_C）为 1 时矩形是 4×int16（8 字节），否则 4×float32（16 字节）。
   processEmfPlusFillRectangles(flags, data) {
-    if (data.length < 4) return;
-    const brushId = flags & 0xFF;
-    const count = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
-    if (count > 4096) return; // 防异常计数
+    if (data.length < 8) return;
+    const brushId = this._emfPlusReadInt32(data, 0);
+    const count = this._emfPlusReadInt32(data, 4);
+    if (count < 1 || count > 4096) return; // 防异常计数
     const color = this._emfPlusResolveBrush(flags, brushId);
     if (!color) return;
+    const int16 = (flags & 0x4000) !== 0;
+    const step = int16 ? 8 : 16;
     this.ctx.fillStyle = color;
     for (let i = 0; i < count; i++) {
-      const o = 4 + i * 16;
-      if (o + 16 > data.length) break;
-      const x = this._emfPlusReadFloat(data, o);
-      const y = this._emfPlusReadFloat(data, o + 4);
-      const w = this._emfPlusReadFloat(data, o + 8);
-      const h = this._emfPlusReadFloat(data, o + 12);
+      const o = 8 + i * step;
+      if (o + step > data.length) break;
+      const x = int16 ? this._emfPlusReadInt16(data, o) : this._emfPlusReadFloat(data, o);
+      const y = int16 ? this._emfPlusReadInt16(data, o + 2) : this._emfPlusReadFloat(data, o + 4);
+      const w = int16 ? this._emfPlusReadInt16(data, o + 4) : this._emfPlusReadFloat(data, o + 8);
+      const h = int16 ? this._emfPlusReadInt16(data, o + 6) : this._emfPlusReadFloat(data, o + 12);
       const tl = this._emfPlusMapPoint(x, y);
       const br = this._emfPlusMapPoint(x + w, y + h);
       this.ctx.fillRect(tl.x, tl.y, Math.abs(br.x - tl.x), Math.abs(br.y - tl.y));

@@ -77,6 +77,14 @@ const input = process.argv[2];
 const outDir = process.argv[3] || path.join(__dirname, '..', 'out', 'emf-diff');
 fs.mkdirSync(outDir, { recursive: true });
 
+// 参考实现（libemf2svg）已知缺陷样本：其 ref 渲染本身错误（如整幅全黑/全白），
+// 用它做基准会得出负面的假 RMSE。这些样本仍渲染/对比（便于人工复核），
+// 但在汇总统计中排除，不拉低平均分。新增项须经人工目检确认 ref 确为缺陷。
+const REF_DEFECTS = new Set([
+  'test-065', // ref 输出整幅纯黑（矩形填充溢出），ours 的"方框+对角线"才是正确的
+  'test-038', // ref 输出整幅空白（libUEMF 测试文件，ref 未渲染任何内容）；ours 能画出完整图形
+]);
+
 let files = fs.statSync(input).isDirectory()
   ? fs.readdirSync(input).filter(f => /\.(emf|wmf)$/i.test(f)).map(f => path.join(input, f))
   : [input];
@@ -84,26 +92,27 @@ let files = fs.statSync(input).isDirectory()
 const results = [];
 for (const f of files) {
   const base = path.basename(f, path.extname(f));
+  const excluded = REF_DEFECTS.has(base);
   const oursSvg = path.join(outDir, base + '.ours.svg');
   const refSvg = path.join(outDir, base + '.ref.svg');
   const oursPng = path.join(outDir, base + '.ours.png');
   const refPng = path.join(outDir, base + '.ref.png');
 
   const ours = renderOurs(f);
-  if (!ours || ours.error) { results.push({ base, rmse: 'N/A', note: 'ours-fail: ' + (ours && ours.error) }); continue; }
+  if (!ours || ours.error) { results.push({ base, rmse: 'N/A', note: 'ours-fail: ' + (ours && ours.error), excluded }); continue; }
   fs.writeFileSync(oursSvg, ours.svg);
 
   let refOk = true;
   try {
     execFileSync(EMF2SVG, ['-i', f, '-o', refSvg], { stdio: 'ignore', timeout: 30000 });
   } catch (e) { refOk = false; }
-  if (!refOk || !fs.existsSync(refSvg)) { results.push({ base, rmse: 'N/A', note: 'ref-fail' }); continue; }
+  if (!refOk || !fs.existsSync(refSvg)) { results.push({ base, rmse: 'N/A', note: 'ref-fail', excluded }); continue; }
 
   if (!rasterize(oursSvg, oursPng) || !rasterize(refSvg, refPng)) {
-    results.push({ base, rmse: 'N/A', note: 'raster-fail' }); continue;
+    results.push({ base, rmse: 'N/A', note: 'raster-fail', excluded }); continue;
   }
   const rmse = compare(oursPng, refPng);
-  results.push({ base, rmse, note: ours.fileType + '/' + ours.records + 'rec' });
+  results.push({ base, rmse, note: ours.fileType + '/' + ours.records + 'rec' + (excluded ? ' [ref缺陷,排除]' : ''), excluded });
   // 保留中间 SVG 便于人工比对
 }
 
@@ -116,5 +125,16 @@ results.sort((a, b) => {
 
 console.log('\n文件\tRMSE(0=完全一致)\t备注');
 for (const r of results) console.log(`${r.base}\t${r.rmse}\t${r.note}`);
+
+// 汇总统计（排除 ref 缺陷样本）
+const valid = results.filter(r => !r.excluded && !isNaN(parseFloat(r.rmse))).map(r => parseFloat(r.rmse));
+if (valid.length) {
+  const avg = valid.reduce((s, v) => s + v, 0) / valid.length;
+  const cnt = t => valid.filter(v => v > t).length;
+  console.log('\n===== 汇总（排除 ref 缺陷样本 ' + results.filter(r => r.excluded).length + ' 个）=====');
+  console.log(`有效样本: ${valid.length}`);
+  console.log(`平均 RMSE: ${avg.toFixed(4)}`);
+  console.log(`>0.3: ${cnt(0.3)}   >0.2: ${cnt(0.2)}   >0.1: ${cnt(0.1)}   >0.05: ${cnt(0.05)}`);
+}
 fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify(results, null, 2));
 console.log('\n输出目录:', outDir);

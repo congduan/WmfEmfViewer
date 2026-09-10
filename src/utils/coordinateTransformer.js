@@ -200,21 +200,24 @@ class CoordinateTransformer {
         let cx = x - this.windowOrgX;
         let cy = y - this.windowOrgY;
 
-        // 根据映射模式调整缩放
+        // 根据映射模式调整缩放（apply=false 表示 windowExt 退化，按原语义完全跳过缩放与 viewportOrg）
         const vp = this._getViewportScale();
-        cx = cx * vp.sx + this.viewportOrgX;
-        cy = cy * vp.sy + this.viewportOrgY;
+        if (vp.apply) {
+            cx = cx * vp.sx + this.viewportOrgX;
+            cy = cy * vp.sy + this.viewportOrgY;
+        }
 
         // WMF/EMF坐标系与Canvas一致（Y轴向下），无需翻转
         return { x: cx - this.deviceOrgX, y: cy - this.deviceOrgY };
     }
 
     /**
-     * 计算 window→viewport 的缩放因子（sx/sy）。
-     * MM_TEXT/ISOTROPIC/ANISOTROPIC 用 viewportExt/windowExt 比值；
+     * 计算 window→viewport 的缩放因子（sx/sy）与是否应用 viewportOrg。
+     * MM_TEXT/ISOTROPIC/ANISOTROPIC 用 viewportExt/windowExt 比值；当 windowExt 任一分量为 0 时，
+     * 原语义为“完全不应用缩放，也不加 viewportOrg”，故 apply=false。
      * 固定比例模式（LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS）用 pxPerMm 换算，
-     * 且 Y 轴在固定比例模式下向上（负缩放，GDI 语义）。
-     * @returns {{sx: number, sy: number}}
+     * 且 Y 轴在固定比例模式下向上（负缩放，GDI 语义），始终应用 viewportOrg。
+     * @returns {{sx: number, sy: number, apply: boolean}}
      */
     _getViewportScale() {
         switch (this.mapMode) {
@@ -224,38 +227,40 @@ class CoordinateTransformer {
                 if (this.windowExtX !== 0 && this.windowExtY !== 0) {
                     return {
                         sx: this.viewportExtX / this.windowExtX,
-                        sy: this.viewportExtY / this.windowExtY
+                        sy: this.viewportExtY / this.windowExtY,
+                        apply: true
                     };
                 }
-                return { sx: 1, sy: 1 };
+                return { sx: 1, sy: 1, apply: false };
             case MAP_MODE.MM_LOMETRIC: {
                 const f = this.pxPerMm * 0.1;
-                return { sx: f, sy: -f };
+                return { sx: f, sy: -f, apply: true };
             }
             case MAP_MODE.MM_HIMETRIC: {
                 const f = this.pxPerMm * 0.01;
-                return { sx: f, sy: -f };
+                return { sx: f, sy: -f, apply: true };
             }
             case MAP_MODE.MM_LOENGLISH: {
                 const f = this.pxPerMm * 25.4 * 0.01;
-                return { sx: f, sy: -f };
+                return { sx: f, sy: -f, apply: true };
             }
             case MAP_MODE.MM_HIENGLISH: {
                 const f = this.pxPerMm * 25.4 * 0.001;
-                return { sx: f, sy: -f };
+                return { sx: f, sy: -f, apply: true };
             }
             case MAP_MODE.MM_TWIPS: {
                 const f = this.pxPerMm * 25.4 / 1440;
-                return { sx: f, sy: -f };
+                return { sx: f, sy: -f, apply: true };
             }
             default:
                 if (this.windowExtX !== 0 && this.windowExtY !== 0) {
                     return {
                         sx: this.viewportExtX / this.windowExtX,
-                        sy: this.viewportExtY / this.windowExtY
+                        sy: this.viewportExtY / this.windowExtY,
+                        apply: true
                     };
                 }
-                return { sx: 1, sy: 1 };
+                return { sx: 1, sy: 1, apply: false };
         }
     }
 
@@ -270,6 +275,16 @@ class CoordinateTransformer {
     getSvgMatrix() {
         const vp = this._getViewportScale();
         const sx = vp.sx, sy = vp.sy;
+        // apply=false（windowExt 退化）时按 transform() 的原语义：跳过缩放与 viewportOrg，
+        // 只做 world → 减 windowOrg → 减 deviceOrg。
+        if (!vp.apply) {
+            return {
+                a: this.worldM11, b: this.worldM12,
+                c: this.worldM21, d: this.worldM22,
+                e: this.worldDx - this.windowOrgX - this.deviceOrgX,
+                f: this.worldDy - this.windowOrgY - this.deviceOrgY
+            };
+        }
         // world（行向量）：x1 = x*m11 + y*m21 + dx; y1 = x*m12 + y*m22 + dy
         // 再 viewport：x2 = x1*sx + viewportOrgX; y2 = y1*sy + viewportOrgY
         // 再减 deviceOrg。合并为列向量矩阵 [a c e; b d f]：

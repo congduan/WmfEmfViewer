@@ -598,11 +598,13 @@ class EmfDrawer {
       counts.push(this.readDwordFromData(data, 24 + i * 4));
     }
 
-    // 读取所有点并绘制每个多边形
+    // 读取所有点并绘制：所有子多边形合并到同一条 path（nonzero 填充规则下，
+    // 反向缠绕的内圈会形成"环"——这是 GDI 用 POLYPOLYGON 画同心环/带孔图形的标准手法）。
+    // 若逐个子多边形单独 fill，内圈会被实心覆盖，环消失。
     let pointOffset = 24 + numberOfPolygons * 4;
+    this.ctx.beginPath();
     for (let i = 0; i < numberOfPolygons; i++) {
       const count = counts[i];
-      this.ctx.beginPath();
 
       for (let j = 0; j < count; j++) {
         const x = this.readLongFromData(data, pointOffset);
@@ -617,9 +619,9 @@ class EmfDrawer {
         pointOffset += 8;
       }
       this.ctx.closePath();
-      this.ctx.fill();
-      this._afterFillShape();
     }
+    this.ctx.fill();
+    this._afterFillShape();
   }
 
   // ============ EMR_*16 系列（16 位坐标变体，MS-EMF 2.3.5）============
@@ -740,17 +742,19 @@ class EmfDrawer {
     const nPolys = this.readDwordFromData(data, 16);
     const cTotal = this.readDwordFromData(data, 20);
     if (data.length < 24 + nPolys * 4 + cTotal * 4) return;
+    // 所有子多边形合并到同一条 path（nonzero 填充，反向缠绕的内圈形成环）。
+    // 逐个子多边形单独 fill 会把内圈实心覆盖，导致同心环/带孔图形丢失。
     let pointOffset = 24 + nPolys * 4;
+    this.ctx.beginPath();
     for (let i = 0; i < nPolys; i++) {
       const count = this.readDwordFromData(data, 24 + i * 4);
       const points = this.readPoints16(data, pointOffset, count);
       pointOffset += count * 4;
-      this.ctx.beginPath();
       points.forEach((p, j) => (j === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
       this.ctx.closePath();
-      this.ctx.fill();
-      this._afterFillShape();
     }
+    this.ctx.fill();
+    this._afterFillShape();
   }
 
   processEmfPolyDraw16(data) {

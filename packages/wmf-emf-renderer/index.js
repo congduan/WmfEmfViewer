@@ -250,16 +250,19 @@ var require_coordinateTransformer = __commonJS({
         let cx = x - this.windowOrgX;
         let cy = y - this.windowOrgY;
         const vp = this._getViewportScale();
-        cx = cx * vp.sx + this.viewportOrgX;
-        cy = cy * vp.sy + this.viewportOrgY;
+        if (vp.apply) {
+          cx = cx * vp.sx + this.viewportOrgX;
+          cy = cy * vp.sy + this.viewportOrgY;
+        }
         return { x: cx - this.deviceOrgX, y: cy - this.deviceOrgY };
       }
       /**
-       * 计算 window→viewport 的缩放因子（sx/sy）。
-       * MM_TEXT/ISOTROPIC/ANISOTROPIC 用 viewportExt/windowExt 比值；
+       * 计算 window→viewport 的缩放因子（sx/sy）与是否应用 viewportOrg。
+       * MM_TEXT/ISOTROPIC/ANISOTROPIC 用 viewportExt/windowExt 比值；当 windowExt 任一分量为 0 时，
+       * 原语义为“完全不应用缩放，也不加 viewportOrg”，故 apply=false。
        * 固定比例模式（LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS）用 pxPerMm 换算，
-       * 且 Y 轴在固定比例模式下向上（负缩放，GDI 语义）。
-       * @returns {{sx: number, sy: number}}
+       * 且 Y 轴在固定比例模式下向上（负缩放，GDI 语义），始终应用 viewportOrg。
+       * @returns {{sx: number, sy: number, apply: boolean}}
        */
       _getViewportScale() {
         switch (this.mapMode) {
@@ -269,38 +272,40 @@ var require_coordinateTransformer = __commonJS({
             if (this.windowExtX !== 0 && this.windowExtY !== 0) {
               return {
                 sx: this.viewportExtX / this.windowExtX,
-                sy: this.viewportExtY / this.windowExtY
+                sy: this.viewportExtY / this.windowExtY,
+                apply: true
               };
             }
-            return { sx: 1, sy: 1 };
+            return { sx: 1, sy: 1, apply: false };
           case MAP_MODE.MM_LOMETRIC: {
             const f = this.pxPerMm * 0.1;
-            return { sx: f, sy: -f };
+            return { sx: f, sy: -f, apply: true };
           }
           case MAP_MODE.MM_HIMETRIC: {
             const f = this.pxPerMm * 0.01;
-            return { sx: f, sy: -f };
+            return { sx: f, sy: -f, apply: true };
           }
           case MAP_MODE.MM_LOENGLISH: {
             const f = this.pxPerMm * 25.4 * 0.01;
-            return { sx: f, sy: -f };
+            return { sx: f, sy: -f, apply: true };
           }
           case MAP_MODE.MM_HIENGLISH: {
             const f = this.pxPerMm * 25.4 * 1e-3;
-            return { sx: f, sy: -f };
+            return { sx: f, sy: -f, apply: true };
           }
           case MAP_MODE.MM_TWIPS: {
             const f = this.pxPerMm * 25.4 / 1440;
-            return { sx: f, sy: -f };
+            return { sx: f, sy: -f, apply: true };
           }
           default:
             if (this.windowExtX !== 0 && this.windowExtY !== 0) {
               return {
                 sx: this.viewportExtX / this.windowExtX,
-                sy: this.viewportExtY / this.windowExtY
+                sy: this.viewportExtY / this.windowExtY,
+                apply: true
               };
             }
-            return { sx: 1, sy: 1 };
+            return { sx: 1, sy: 1, apply: false };
         }
       }
       /**
@@ -314,6 +319,16 @@ var require_coordinateTransformer = __commonJS({
       getSvgMatrix() {
         const vp = this._getViewportScale();
         const sx = vp.sx, sy = vp.sy;
+        if (!vp.apply) {
+          return {
+            a: this.worldM11,
+            b: this.worldM12,
+            c: this.worldM21,
+            d: this.worldM22,
+            e: this.worldDx - this.windowOrgX - this.deviceOrgX,
+            f: this.worldDy - this.windowOrgY - this.deviceOrgY
+          };
+        }
         const a = this.worldM11 * sx;
         const b = this.worldM12 * sy;
         const c = this.worldM21 * sx;
@@ -2485,9 +2500,9 @@ var require_emfDrawer = __commonJS({
           counts.push(this.readDwordFromData(data, 24 + i * 4));
         }
         let pointOffset = 24 + numberOfPolygons * 4;
+        this.ctx.beginPath();
         for (let i = 0; i < numberOfPolygons; i++) {
           const count = counts[i];
-          this.ctx.beginPath();
           for (let j = 0; j < count; j++) {
             const x = this.readLongFromData(data, pointOffset);
             const y = this.readLongFromData(data, pointOffset + 4);
@@ -2500,9 +2515,9 @@ var require_emfDrawer = __commonJS({
             pointOffset += 8;
           }
           this.ctx.closePath();
-          this.ctx.fill();
-          this._afterFillShape();
         }
+        this.ctx.fill();
+        this._afterFillShape();
       }
       // ============ EMR_*16 系列（16 位坐标变体，MS-EMF 2.3.5）============
       // 与 32 位版本结构相同，区别仅在于 aPoints 每点 4 字节（x/y 为 16 位有符号整数）
@@ -2607,16 +2622,16 @@ var require_emfDrawer = __commonJS({
         const cTotal = this.readDwordFromData(data, 20);
         if (data.length < 24 + nPolys * 4 + cTotal * 4) return;
         let pointOffset = 24 + nPolys * 4;
+        this.ctx.beginPath();
         for (let i = 0; i < nPolys; i++) {
           const count = this.readDwordFromData(data, 24 + i * 4);
           const points = this.readPoints16(data, pointOffset, count);
           pointOffset += count * 4;
-          this.ctx.beginPath();
           points.forEach((p, j) => j === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
           this.ctx.closePath();
-          this.ctx.fill();
-          this._afterFillShape();
         }
+        this.ctx.fill();
+        this._afterFillShape();
       }
       processEmfPolyDraw16(data) {
         if (data.length < 20) return;
@@ -4570,8 +4585,27 @@ var require_emfPlusDrawer = __commonJS({
         if (offset + 4 > data.length) return 4294967295;
         return data[offset] & 255 | (data[offset + 1] & 255) << 8 | (data[offset + 2] & 255) << 16 | (data[offset + 3] & 255) << 24;
       }
+      // 启发式：提取渐变刷（Linear/PathGradient/Hatch）的主色。
+      // GDI+ 写出的这类刷子里 StartColor/EndColor（或 ForeColor/BackColor）总是相邻的两个
+      // alpha=0xFF 的 dword（实测 Excel/Office 产出均如此），故优先找相邻对，取前者作主色；
+      // 找不到相邻对时退化为首个 alpha=0xFF 的 dword。
+      _emfPlusFirstOpaqueArgb(data, offset) {
+        const argb = (o) => o + 4 <= data.length ? this._emfPlusReadArgb(data, o) >>> 0 : 0;
+        const opaque = (v) => (v >>> 24 & 255) === 255 && (v & 16777215) !== 0;
+        for (let o = offset; o + 8 <= data.length; o += 4) {
+          const v1 = argb(o), v2 = argb(o + 4);
+          if (opaque(v1) && opaque(v2)) return this._emfPlusArgbToColor(v1);
+        }
+        for (let o = offset; o + 4 <= data.length; o += 4) {
+          const v = argb(o);
+          if (opaque(v)) return this._emfPlusArgbToColor(v);
+        }
+        return null;
+      }
       // 根据 flags 与 BrushId 解析画刷颜色：
-      // flags 的 0x8000 位为 1 时 BrushId 直接是 ARGB 颜色，否则是对象表索引
+      // flags 的 0x8000 位（U_PPF_B）为 1 时 BrushId 直接是 ARGB 颜色，否则是对象表索引。
+      // 参考实现（libemf2svg U_PMR_FILLRECTS_get）对损坏文件的容错：
+      //   非 solid 模式下 BrushId > 63 时按 ARGB 颜色处理（对象表索引只有 0-63）。
       _emfPlusResolveBrush(flags, brushId, data, offset) {
         if (flags & 32768) {
           return this._emfPlusArgbToColor(brushId);
@@ -4580,7 +4614,7 @@ var require_emfPlusDrawer = __commonJS({
         if (obj && obj.type === "solidBrush") {
           return obj.color;
         }
-        if (brushId >= 16777216 || brushId === 0) {
+        if (brushId > 63 || brushId >= 16777216) {
           return this._emfPlusArgbToColor(brushId);
         }
         return "#000000";
@@ -4613,13 +4647,6 @@ var require_emfPlusDrawer = __commonJS({
         const compressed = (pointFlags & 16384) !== 0;
         const rle = (pointFlags & 4096) !== 0;
         const relative = (pointFlags & 2048) !== 0;
-        if (!this._dbgPath) this._dbgPath = { count: 0, big: 0, fail: 0 };
-        if (count > 100) {
-          this._dbgPath.big++;
-          __wmfEmfRendererLog("[BIG] count=" + count, "flags=0x" + pointFlags.toString(16), "C=" + (compressed ? "Y" : "N"), "RLE=" + (rle ? "Y" : "N"), "R=" + (relative ? "Y" : "N"), "len=" + data.length, "first4=[" + [data[0], data[1], data[2], data[3]].map((x) => x.toString(16).padStart(2, "0")).join(",") + "]");
-        }
-        process.stdout.write("[ParsePath] count=" + count + " flags=0x" + pointFlags.toString(16) + " C=" + (compressed ? "Y" : "N") + " RLE=" + (rle ? "Y" : "N") + " R=" + (relative ? "Y" : "N") + " len=" + data.length + " first5bytes=[" + [data[0], data[1], data[2], data[3], data[4]].map((x) => x.toString(16).padStart(2, "0")).join(",") + "]\n");
-        this._dbgPath.count++;
         let offset = 8;
         const points = [];
         const stride = compressed ? 4 : 8;
@@ -4792,18 +4819,19 @@ var require_emfPlusDrawer = __commonJS({
       processEmfPlusDrawLine(flags, data) {
         __wmfEmfRendererLog("Processing EmfPlusDrawLine");
       }
-      // 处理EMF+填充多边形记录：BrushId(4) + Count(4) + PointF[Count](8 each)
+      // 处理EMF+填充多边形记录：data = BrushId(4) + Count(4) + PointF[Count](8 each)
+      // （对齐 libemf2svg U_PMR_FILLPOLYGON_get：BrushId 在 data 首字段）
       processEmfPlusFillPolygon(flags, data) {
-        if (data.length < 4) return;
-        const brushId = flags & 255;
-        const count = data[0] & 255 | (data[1] & 255) << 8 | (data[2] & 255) << 16 | (data[3] & 255) << 24;
-        if (count > 65536) return;
+        if (data.length < 8) return;
+        const brushId = this._emfPlusReadInt32(data, 0);
+        const count = this._emfPlusReadInt32(data, 4);
+        if (count < 1 || count > 65536) return;
         const color = this._emfPlusResolveBrush(flags, brushId);
         if (!color) return;
         this.ctx.fillStyle = color;
         this.ctx.beginPath();
         for (let i = 0; i < count; i++) {
-          const o = 4 + i * 8;
+          const o = 8 + i * 8;
           if (o + 8 > data.length) break;
           const x = this._emfPlusReadFloat(data, o);
           const y = this._emfPlusReadFloat(data, o + 4);
@@ -4836,15 +4864,7 @@ var require_emfPlusDrawer = __commonJS({
         const pathId = flags & 255;
         const solid = (flags & 32768) !== 0;
         const brushId = data[0] & 255 | (data[1] & 255) << 8 | (data[2] & 255) << 16 | (data[3] & 255) << 24;
-        if (!this._dbgFP) this._dbgFP = { hit: 0, miss: 0 };
         const path = this.emfPlusObjects[pathId];
-        if (!path || path.type !== "path") {
-          this._dbgFP.miss++;
-          if (this._dbgFP.miss < 4) __wmfEmfRendererLog("[FillPath MISS] pathId=" + pathId, "solid=" + solid, "brushId=0x" + brushId.toString(16), "objExists=" + !!path, "objType=" + (path && path.type));
-          return;
-        }
-        this._dbgFP.hit++;
-        process.stdout.write("[FillPath HIT] pathId=" + pathId + " count=" + path.count + " firstPt=" + JSON.stringify(path.points[0]) + " compressed=" + path.compressed + " relative=" + path.relative + " lastPt=" + JSON.stringify(path.points[path.points.length - 1]) + " pointsLen=" + path.points.length + "\n");
         if (!path || path.type !== "path") return;
         const color = solid ? this._emfPlusArgbToColor(brushId) : this._emfPlusResolveBrush(0, brushId);
         if (!color) return;
@@ -4903,6 +4923,29 @@ var require_emfPlusDrawer = __commonJS({
         if (offset + 4 > data.length) return 0;
         const b = data[offset] | data[offset + 1] << 8 | data[offset + 2] << 16 | data[offset + 3] << 24;
         return b | 0;
+      }
+      // 有符号 int16 小端（U_PPF_C 压缩矩形/点坐标用）
+      _emfPlusReadInt16(data, offset) {
+        if (offset + 2 > data.length) return 0;
+        return (data[offset] | data[offset + 1] << 8) << 16 >> 16;
+      }
+      // EMF+ 页面单位 -> 画布像素的比例（用当前坐标变换实测 100 单位的水平跨度）
+      _emfPlusUnitsToPx() {
+        try {
+          const a = this._emfPlusMapPoint(0, 0);
+          const b = this._emfPlusMapPoint(100, 0);
+          const s = Math.abs(b.x - a.x) / 100;
+          return s > 0 ? s : 1;
+        } catch (e) {
+          return 1;
+        }
+      }
+      // 字体名 -> CSS 通用字体族（EMF+ FaceName 常见字体映射）
+      _emfPlusFontFamilyFromName(name) {
+        const n = (name || "").toLowerCase();
+        if (/courier|consol|mono|menlo/.test(n)) return "monospace";
+        if (/times|georgia|garamond|cambria|book|roman|serif|minion/.test(n)) return "serif";
+        return "sans-serif";
       }
       // 读取点坐标（flags 0x4000=压缩坐标时用 int16/4096）
       _emfPlusReadPointX(flags, data, o) {
@@ -4968,33 +5011,20 @@ var require_emfPlusDrawer = __commonJS({
           return null;
         }
       }
-      // 处理EMF+绘制字符串记录
+      // EmfPlusDrawString（0x401C，MS-EMFPLUS 2.3.4.14 / libemf2svg U_PMR_DRAWSTRING_get）：
+      // FontId = flags 低字节；data = BrushId(4) + FormatId(4) + Length(4) + RectF(16) + UTF16LE[Length]
+      // 字距/字符间距暂忽略（PNG→SVG 静态图对齐为主）。
       processEmfPlusDrawString(flags, data) {
-        if (data.length < 8) return;
-        let o = 0;
-        const brushId = flags & 255;
-        let fontObj = null;
-        if (flags & 32768) {
-          if (o + 4 > data.length) return;
-          const fontId = (data[o] | data[o + 1] << 8 | data[o + 2] << 16 | data[o + 3] << 24) >>> 0;
-          o += 4;
-          fontObj = this.emfPlusObjects[fontId];
-        }
-        if (flags & 16384) o += 4;
-        let layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
-        if (flags & 2048) {
-          if (o + 16 > data.length) return;
-          layoutX = this._emfPlusReadFloat(data, o);
-          layoutY = this._emfPlusReadFloat(data, o + 4);
-          layoutW = this._emfPlusReadFloat(data, o + 8);
-          layoutH = this._emfPlusReadFloat(data, o + 12);
-          o += 16;
-        }
-        if (o + 4 > data.length) return;
-        const len = (data[o] | data[o + 1] << 8 | data[o + 2] << 16 | data[o + 3] << 24) >>> 0;
-        o += 4;
-        if (len === 0 || o + len > data.length) return;
-        const slice = data.slice(o, o + len);
+        if (data.length < 28) return;
+        const fontId = flags & 255;
+        const brushId = this._emfPlusReadInt32(data, 0);
+        const len = this._emfPlusReadInt32(data, 8);
+        if (len < 1 || len > 65536) return;
+        const layoutX = this._emfPlusReadFloat(data, 12);
+        const layoutY = this._emfPlusReadFloat(data, 16);
+        const strOff = 28;
+        if (strOff + len * 2 > data.length) return;
+        const slice = data.slice(strOff, strOff + len * 2);
         let text = "";
         for (let i = 0; i + 1 < slice.length; i += 2) {
           const code = slice[i] | slice[i + 1] << 8;
@@ -5002,13 +5032,13 @@ var require_emfPlusDrawer = __commonJS({
           text += String.fromCharCode(code);
         }
         if (!text) return;
-        const brush = this.emfPlusObjects[brushId];
-        if (brush && brush.type === "solidBrush" && brush.color) {
-          this.ctx.fillStyle = brush.color;
-        }
+        const color = this._emfPlusResolveBrush(flags, brushId);
+        if (color) this.ctx.fillStyle = color;
+        const fontObj = this.emfPlusObjects[fontId];
         let drawSize = 12;
         if (fontObj && fontObj.type === "font") {
-          const sz = Math.max(6, Math.round(fontObj.emSize * 0.75));
+          const scale = this._emfPlusUnitsToPx();
+          const sz = Math.max(4, Math.round(fontObj.emSize * scale));
           drawSize = sz;
           this.ctx.font = `${fontObj.italic}${fontObj.weight} ${sz}px "${fontObj.face}"`;
         }
@@ -5067,16 +5097,17 @@ var require_emfPlusDrawer = __commonJS({
         this.ctx.stroke();
         __wmfEmfRendererLog("EMF+ DrawEllipse");
       }
-      // 处理EMF+填充椭圆记录：BrushId(4) + RectF(16)
+      // 处理EMF+填充椭圆记录：data = BrushId(4) + RectF(16)
+      // （对齐 libemf2svg U_PMR_FILLELLIPSE_get：BrushId 在 data 首字段）
       processEmfPlusFillEllipse(flags, data) {
-        if (data.length < 16) return;
-        const brushId = flags & 255;
+        if (data.length < 20) return;
+        const brushId = this._emfPlusReadInt32(data, 0);
         const color = this._emfPlusResolveBrush(flags, brushId);
         if (!color) return;
-        const x = this._emfPlusReadFloat(data, 0);
-        const y = this._emfPlusReadFloat(data, 4);
-        const w = this._emfPlusReadFloat(data, 8);
-        const h = this._emfPlusReadFloat(data, 12);
+        const x = this._emfPlusReadFloat(data, 4);
+        const y = this._emfPlusReadFloat(data, 8);
+        const w = this._emfPlusReadFloat(data, 12);
+        const h = this._emfPlusReadFloat(data, 16);
         const tl = this._emfPlusMapPoint(x, y);
         const br = this._emfPlusMapPoint(x + w, y + h);
         const cx = (tl.x + br.x) / 2;
@@ -5084,7 +5115,7 @@ var require_emfPlusDrawer = __commonJS({
         const rx = Math.abs(br.x - tl.x) / 2;
         const ry = Math.abs(br.y - tl.y) / 2;
         if (rx === 0 || ry === 0) return;
-        this.ctx.fillStyle = this._emfPlusResolveBrush(flags, brushId);
+        this.ctx.fillStyle = color;
         this.ctx.beginPath();
         this.ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
         this.ctx.closePath();
@@ -5095,9 +5126,36 @@ var require_emfPlusDrawer = __commonJS({
       processEmfPlusDrawArc(flags, data) {
         __wmfEmfRendererLog("Processing EmfPlusDrawArc");
       }
-      // 处理EMF+填充饼图记录
+      // 处理EMF+填充饼图记录：data = BrushId(4) + StartAngle(float) + SweepAngle(float) + RectF(16)
+      // （对齐 libemf2svg U_PMR_FILLPIE_get；角度为度，顺时针自 3 点方向）
       processEmfPlusFillPie(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusFillPie");
+        if (data.length < 28) return;
+        const brushId = this._emfPlusReadInt32(data, 0);
+        const color = this._emfPlusResolveBrush(flags, brushId);
+        if (!color) return;
+        const start = this._emfPlusReadFloat(data, 4);
+        const sweep = this._emfPlusReadFloat(data, 8);
+        const x = this._emfPlusReadFloat(data, 12);
+        const y = this._emfPlusReadFloat(data, 16);
+        const w = this._emfPlusReadFloat(data, 20);
+        const h = this._emfPlusReadFloat(data, 24);
+        if (w === 0 || h === 0 || sweep === 0) return;
+        const tl = this._emfPlusMapPoint(x, y);
+        const br = this._emfPlusMapPoint(x + w, y + h);
+        const cx = (tl.x + br.x) / 2;
+        const cy = (tl.y + br.y) / 2;
+        const rx = Math.abs(br.x - tl.x) / 2;
+        const ry = Math.abs(br.y - tl.y) / 2;
+        if (rx === 0 || ry === 0) return;
+        const a0 = start * Math.PI / 180;
+        const a1 = (start + sweep) * Math.PI / 180;
+        this.ctx.fillStyle = color;
+        this.ctx.beginPath();
+        this.ctx.moveTo(cx, cy);
+        this.ctx.ellipse(cx, cy, rx, ry, 0, a0, a1, sweep < 0);
+        this.ctx.closePath();
+        this.ctx.fill();
+        __wmfEmfRendererLog("EMF+ FillPie");
       }
       // 处理EMF+绘制饼图记录
       processEmfPlusDrawPie(flags, data) {
@@ -5231,6 +5289,9 @@ var require_emfPlusDrawer = __commonJS({
           if (brushType === 0) {
             const argb = this._emfPlusReadArgb(data, 4);
             this.emfPlusObjects[objectId] = { type: "solidBrush", color: this._emfPlusArgbToColor(argb) };
+          } else if (brushType === 1 || brushType === 3 || brushType === 4) {
+            const color = this._emfPlusFirstOpaqueArgb(data, 4);
+            if (color) this.emfPlusObjects[objectId] = { type: "solidBrush", color };
           }
         } else if (objectType === 512 && data.length >= 8) {
           const penUnit = this._emfPlusReadInt32(data, 4);
@@ -5249,20 +5310,30 @@ var require_emfPlusDrawer = __commonJS({
             }
           }
           this.emfPlusObjects[objectId] = { type: "pen", color, width, penUnit };
-        } else if (objectType === 1024) {
+        } else if (objectType === 1536) {
           let emSize = 12;
           let styleFlags = 0;
-          let family = 0;
-          if (data.length >= 16) {
-            emSize = this._emfPlusReadFloat(data, 4) || 12;
-            styleFlags = this._emfPlusReadInt32(data, 12);
-            family = data.length >= 18 ? data[16] | data[17] << 8 : 0;
+          let face = "sans-serif";
+          if (data.length >= 12) {
+            emSize = this._emfPlusReadFloat(data, 0) || 12;
+            styleFlags = this._emfPlusReadInt32(data, 8);
+            if (data.length >= 20) {
+              const nameLen = this._emfPlusReadInt32(data, 16);
+              if (nameLen > 0 && nameLen < 64 && 20 + nameLen * 2 <= data.length) {
+                let name = "";
+                for (let i = 0; i < nameLen; i++) {
+                  const c = data[20 + i * 2] | data[21 + i * 2] << 8;
+                  if (!c) break;
+                  name += String.fromCharCode(c);
+                }
+                face = this._emfPlusFontFamilyFromName(name);
+              }
+            }
           }
           const weight = styleFlags & 1 ? "bold" : "normal";
           const italic = styleFlags & 2 ? "italic " : "";
-          const families = ["serif", "sans-serif", "monospace", "sans-serif", "cursive", "fantasy", "monospace"];
-          const face = families[family] || "sans-serif";
           this.emfPlusObjects[objectId] = { type: "font", emSize, weight, italic, face };
+        } else if (objectType === 1024) {
         } else if (objectType === 768) {
           const parsed = this._emfPlusParsePath(data);
           if (parsed) {
@@ -5301,22 +5372,26 @@ var require_emfPlusDrawer = __commonJS({
         this.ctx.fillRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
         __wmfEmfRendererLog("EMF+ Clear:", color);
       }
-      // EmfPlusFillRects：body = Count(4) + RectF[Count](16 each)；笔刷由 flags 低字节(ObjectId)指定
+      // EmfPlusFillRects（0x400A，MS-EMFPLUS 2.3.4.20 / libemf2svg U_PMR_FILLRECTS_get）：
+      // data = BrushId(4) + Count(4) + Rect[Count]。BrushId 为 ARGB（flags&0x8000）或对象表索引；
+      // flags&0x4000（U_PPF_C）为 1 时矩形是 4×int16（8 字节），否则 4×float32（16 字节）。
       processEmfPlusFillRectangles(flags, data) {
-        if (data.length < 4) return;
-        const brushId = flags & 255;
-        const count = data[0] & 255 | (data[1] & 255) << 8 | (data[2] & 255) << 16 | (data[3] & 255) << 24;
-        if (count > 4096) return;
+        if (data.length < 8) return;
+        const brushId = this._emfPlusReadInt32(data, 0);
+        const count = this._emfPlusReadInt32(data, 4);
+        if (count < 1 || count > 4096) return;
         const color = this._emfPlusResolveBrush(flags, brushId);
         if (!color) return;
+        const int16 = (flags & 16384) !== 0;
+        const step = int16 ? 8 : 16;
         this.ctx.fillStyle = color;
         for (let i = 0; i < count; i++) {
-          const o = 4 + i * 16;
-          if (o + 16 > data.length) break;
-          const x = this._emfPlusReadFloat(data, o);
-          const y = this._emfPlusReadFloat(data, o + 4);
-          const w = this._emfPlusReadFloat(data, o + 8);
-          const h = this._emfPlusReadFloat(data, o + 12);
+          const o = 8 + i * step;
+          if (o + step > data.length) break;
+          const x = int16 ? this._emfPlusReadInt16(data, o) : this._emfPlusReadFloat(data, o);
+          const y = int16 ? this._emfPlusReadInt16(data, o + 2) : this._emfPlusReadFloat(data, o + 4);
+          const w = int16 ? this._emfPlusReadInt16(data, o + 4) : this._emfPlusReadFloat(data, o + 8);
+          const h = int16 ? this._emfPlusReadInt16(data, o + 6) : this._emfPlusReadFloat(data, o + 12);
           const tl = this._emfPlusMapPoint(x, y);
           const br = this._emfPlusMapPoint(x + w, y + h);
           this.ctx.fillRect(tl.x, tl.y, Math.abs(br.x - tl.x), Math.abs(br.y - tl.y));
