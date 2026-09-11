@@ -118,14 +118,17 @@ const EMF_RECORD_HANDLERS = {
 
   // ========== 裁剪记录 ==========
   0x00000043: 'processEmfSelectClipPath',   // EMR_SELECTCLIPPATH
-  0x0000004B: null,                         // EMR_EXTSELECTCLIPRGN（暂跳过）
+  0x0000004B: 'processEmfExtSelectClipRgn', // EMR_EXTSELECTCLIPRGN
+
+  // ========== 区域记录 (Region Records) ==========
+  0x00000047: 'processEmfFillRgn',          // EMR_FILLRGN
+  0x00000048: 'processEmfFrameRgn',         // EMR_FRAMERGN
+  0x0000004A: 'processEmfPaintRgn',         // EMR_PAINTRGN
+  // 0x49 EMR_INVERTRGN：像素取反需要读取背景，Canvas/SVG 无光栅反演，POI 亦未实现（暂跳过）
 
   // ========== 已识别但无需处理 ==========
   0x00000046: 'processEmfGdiComment', // EMR_GDICOMMENT（含 EMF+ 内嵌数据时派发）
-  0x00000047: null, // EMR_FILLRGN（区域绘制依赖 region 对象，暂跳过）
-  0x00000048: null, // EMR_FRAMERGN
-  0x00000049: null, // EMR_INVERTRGN
-  0x0000004A: null, // EMR_PAINTRGN
+  0x00000049: null, // EMR_INVERTRGN（POI 亦未实现）
   0x0000004E: null, // EMR_MASKBLT
   0x0000004F: null, // EMR_PLGBLT
   0x00000050: null, // EMR_SETDIBITSTODEVICE
@@ -249,6 +252,8 @@ class EmfDrawer {
     this.currentPath = [];
     this.pathState = 'idle';
     this.currentPos = { x: 0, y: 0 };
+    // 当前逻辑调色板（EMR_SELECTPALETTE 设置，供 DIB_PAL_COLORS 位图取色）
+    this.currentPalette = null;
 
     // 处理每个记录
     const debugLogs = globalThis.__WMF_DEBUG__;
@@ -1401,10 +1406,21 @@ class EmfDrawer {
 
       const palCount = biBitCount <= 8 ? (biClrUsed || (1 << biBitCount)) : 0;
       const palette = [];
-      for (let i = 0; i < palCount; i++) {
-        const o = bmi + biSize + i * 4;
-        if (o + 4 > data.length) break;
-        palette.push([data[o + 2], data[o + 1], data[o], 255]); // BGR -> RGB
+      if (opts.iUsage === 1 && this.currentPalette && this.currentPalette.entries && this.currentPalette.entries.length) {
+        // DIB_PAL_COLORS：颜色表每项为 2 字节逻辑调色板索引（对齐 POI HemfFill 对 iUsageSrc 的处理）
+        for (let i = 0; i < palCount; i++) {
+          const o = bmi + biSize + i * 2;
+          if (o + 2 > data.length) break;
+          const idx = data[o] | (data[o + 1] << 8);
+          const e = this.currentPalette.entries[idx];
+          palette.push(e ? [e.r, e.g, e.b, 255] : [0, 0, 0, 255]);
+        }
+      } else {
+        for (let i = 0; i < palCount; i++) {
+          const o = bmi + biSize + i * 4;
+          if (o + 4 > data.length) break;
+          palette.push([data[o + 2], data[o + 1], data[o], 255]); // BGR -> RGB
+        }
       }
 
       const out = new Uint8ClampedArray(width * height * 4);
@@ -1601,7 +1617,8 @@ class EmfDrawer {
       this._fillBltRect(xDest, yDest, cxDest, cyDest, '#ffffff'); return;
     }
     // 无 DIB 或解码失败：不绘制（避免灰色占位块覆盖后续内容）
-    const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits) : null;
+    const iUsage = this.readDwordFromData(data, 72);
+    const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
     if (dib) {
       this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
     }
@@ -1628,9 +1645,10 @@ class EmfDrawer {
     const cySrc = this.readLongFromData(data, 96);
     console.log('EMF StretchBlt: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'src=(', xSrc, ySrc, ')', cxSrc, 'x', cySrc);
 
+    const iUsage = this.readDwordFromData(data, 72);
     if (dwRop === 0x00000042) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#000000'); return; }
     if (dwRop === 0x00FF0062) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#ffffff'); return; }
-    const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits) : null;
+    const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
     if (dib) {
       // 源矩形裁剪：按 cxSrc/cySrc 与源偏移取子图（简化：整图贴到目标大小）
       this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
@@ -1661,9 +1679,10 @@ class EmfDrawer {
     if (cyDest === 0 && cySrc) cyDest = cySrc;
     console.log('EMF StretchDIBits: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'src=(', xSrc, ySrc, ')', cxSrc, 'x', cySrc);
 
+    const iUsage = this.readDwordFromData(data, 56);
     if (dwRop === 0x00000042) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#000000'); return; }
     if (dwRop === 0x00FF0062) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#ffffff'); return; }
-    const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits) : null;
+    const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
     if (dib) {
       // 源矩形子图裁剪（cxSrc/cySrc 可能小于整图）
       let use = dib;
@@ -1706,7 +1725,7 @@ class EmfDrawer {
     console.log('EMF AlphaBlend: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'alphaFmt=', alphaFormat, 'constA=', constantAlpha);
 
     const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits,
-      { alphaFromPixels: alphaFormat === 1, constantAlpha }) : null;
+      { alphaFromPixels: alphaFormat === 1, constantAlpha, iUsage: this.readDwordFromData(data, 72) }) : null;
     if (dib) {
       this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
     }
@@ -1730,7 +1749,7 @@ class EmfDrawer {
     console.log('EMF TransparentBlt: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'colorKey=0x' + transparentColor.toString(16));
 
     const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits,
-      { transparentColor }) : null;
+      { transparentColor, iUsage: this.readDwordFromData(data, 72) }) : null;
     if (dib) {
       this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
     }
@@ -1849,6 +1868,125 @@ class EmfDrawer {
     console.log('EMF IntersectClipRect:', left, top, right, bottom);
   }
 
+  // ===== Region 支持（对齐 POI HemfFill.readRgnData / getRgnShape） =====
+  // 解析 RegionData（MS-EMF 2.2.44）：iType(4)+nRgnSize(4)+nCount(4)+nRgnBytes(4)
+  // +rclBounds(16)+aRects[nCount](16 字节 RectL/个)。返回逻辑坐标矩形数组。
+  _readRgnData(data, off) {
+    if (!data || off + 32 > data.length) return null;
+    const count = this.readDwordFromData(data, off + 8);
+    if (count > 65536) return null; // 防御异常数据
+    const rects = [];
+    for (let i = 0; i < count; i++) {
+      const o = off + 32 + i * 16;
+      if (o + 16 > data.length) break;
+      rects.push({
+        l: this.readLongFromData(data, o),
+        t: this.readLongFromData(data, o + 4),
+        r: this.readLongFromData(data, o + 8),
+        b: this.readLongFromData(data, o + 12),
+      });
+    }
+    return rects;
+  }
+
+  // 将 region 矩形集合转为设备坐标路径（并集近似：nonzero 填充下重叠同向矩形无孔洞，等效 Area.add）
+  _buildRgnPath(rects) {
+    this.ctx.beginPath();
+    for (const rc of rects) {
+      const lt = this.coordinateTransformer.transform(rc.l, rc.t, this.ctx.canvas.width, this.ctx.canvas.height);
+      const rb = this.coordinateTransformer.transform(rc.r, rc.b, this.ctx.canvas.width, this.ctx.canvas.height);
+      this.ctx.rect(lt.x, lt.y, rb.x - lt.x, rb.y - lt.y);
+    }
+  }
+
+  // 按句柄应用画刷（含 stock 0x80000000 回落），返回原 fillStyle 供恢复
+  _applyBrushForRegion(ihBrush) {
+    const savedFill = this.ctx.fillStyle;
+    const obj = this.gdiObjectManager.selectObject(ihBrush | 0);
+    if (obj) {
+      this.applyGdiObject(obj);
+    } else if ((ihBrush >>> 0) >= 0x80000000) {
+      this.applyStockObject(ihBrush >>> 0);
+    }
+    return savedFill;
+  }
+
+  // EMR_FILLRGN (0x47, MS-EMF 2.3.2.19)：rclBounds(16)+cbRgnData(4)+ihBrush(4)+RgnData
+  processEmfFillRgn(data) {
+    if (data.length < 24) return;
+    const cbRgnData = this.readDwordFromData(data, 16);
+    const ihBrush = this.readDwordFromData(data, 20);
+    const rects = this._readRgnData(data, 24);
+    if (!rects || !rects.length) return;
+    const savedFill = this._applyBrushForRegion(ihBrush);
+    this._buildRgnPath(rects);
+    this.ctx.fill();
+    this.ctx.fillStyle = savedFill;
+    console.log('EMF FillRgn: rects=', rects.length, 'brush=', (ihBrush >>> 0).toString(16));
+  }
+
+  // EMR_FRAMERGN (0x48, MS-EMF 2.3.2.18)：rclBounds(16)+cbRgnData(4)+ihBrush(4)
+  // +Width(4)+Height(4)+RgnData。框线宽：垂直边 Width、水平边 Height。
+  processEmfFrameRgn(data) {
+    if (data.length < 32) return;
+    const cbRgnData = this.readDwordFromData(data, 16);
+    const ihBrush = this.readDwordFromData(data, 20);
+    const frameW = this.readLongFromData(data, 24);
+    const frameH = this.readLongFromData(data, 28);
+    const rects = this._readRgnData(data, 32);
+    if (!rects || !rects.length) return;
+    const savedFill = this._applyBrushForRegion(ihBrush);
+    // 近似：GDI 框线在 region 内侧（垂直条宽 Width、水平条高 Height）；
+    // Canvas stroke 居中且线宽统一，取 min(W,H) 换算到像素，最小 1px。
+    const scale = this.coordinateTransformer.getScale();
+    const lw = Math.max(1, Math.min(Math.abs(frameW), Math.abs(frameH)) * Math.abs(scale.x || 1));
+    const savedStroke = this.ctx.strokeStyle;
+    const savedLw = this.ctx.lineWidth;
+    this.ctx.strokeStyle = this.ctx.fillStyle;
+    this.ctx.lineWidth = lw;
+    this._buildRgnPath(rects);
+    this.ctx.stroke();
+    this.ctx.strokeStyle = savedStroke;
+    this.ctx.lineWidth = savedLw;
+    this.ctx.fillStyle = savedFill;
+    console.log('EMF FrameRgn: rects=', rects.length, 'frame=', frameW, frameH);
+  }
+
+  // EMR_PAINTRGN (0x4A, MS-EMF 2.3.2.21)：rclBounds(16)+cbRgnData(4)+RgnData
+  // 用当前画刷填充 region。
+  processEmfPaintRgn(data) {
+    if (data.length < 20) return;
+    const rects = this._readRgnData(data, 20);
+    if (!rects || !rects.length) return;
+    this._buildRgnPath(rects);
+    this.ctx.fill();
+    console.log('EMF PaintRgn: rects=', rects.length);
+  }
+
+  // EMR_EXTSELECTCLIPRGN (0x4B, MS-EMF 2.3.1.5)：cbRgnData(4)+iMode(4)+[RgnData]
+  // iMode：1=RGN_AND 2=RGN_OR 3=RGN_XOR 4=RGN_DIFF 5=RGN_COPY（COPY 时 RgnData 可省略）
+  processEmfExtSelectClipRgn(data) {
+    if (data.length < 8) return;
+    const cbRgnData = this.readDwordFromData(data, 0);
+    const mode = this.readDwordFromData(data, 4);
+    let rects = null;
+    if (mode !== 5 && cbRgnData > 0) {
+      rects = this._readRgnData(data, 8);
+    }
+    // SVG 嵌套 <g clip-path> 天然按交集组合：RGN_AND(1) 直接 save+clip 即相交；
+    // RGN_COPY(5) 设新裁剪区（常见用法，先于其它 clip 出现时等效）。
+    // RGN_OR/XOR/DIFF(2/3/4) 无真 region 运算，近似按 COPY 处理。
+    if (rects && rects.length) {
+      this.ctx.save();
+      this._buildRgnPath(rects);
+      this.ctx.clip();
+    } else if (mode === 5) {
+      // RGN_COPY 无数据：恢复默认（空）裁剪区——仅 save 记录栈位，不设 clip
+      this.ctx.save();
+    }
+    console.log('EMF ExtSelectClipRgn: mode=', mode, 'rects=', rects ? rects.length : 0);
+  }
+
   processEmfScaleViewportExtEx(data) {
     if (data.length < 16) return;
     const xNum = this.readLongFromData(data, 0);
@@ -1889,6 +2027,7 @@ class EmfDrawer {
       arcDirection: this.arcDirection,
       textColor: this.textColor,
       currentPos: { x: this.currentPos.x, y: this.currentPos.y },
+      currentPalette: this.currentPalette,
       objectTable: this.gdiObjectManager
         ? new Map(this.gdiObjectManager.objectTable)
         : null,
@@ -1916,6 +2055,7 @@ class EmfDrawer {
     this.arcDirection = state.arcDirection;
     if (state.textColor) this.textColor = state.textColor;
     if (state.currentPos) this.currentPos = { x: state.currentPos.x, y: state.currentPos.y };
+    if (state.currentPalette !== undefined) this.currentPalette = state.currentPalette;
     if (this.gdiObjectManager && state.objectTable) {
       this.gdiObjectManager.objectTable = new Map(state.objectTable);
     }
@@ -2143,27 +2283,60 @@ class EmfDrawer {
     console.log('EMF Pie:', left, top, right, bottom);
   }
 
+  // ===== 调色板链路（对齐 POI HemfPalette / HwmfPalette） =====
+  // PaletteEntry 4 字节：flags(1)+blue(1)+green(1)+red(1)
+
   processEmfSelectPalette(data) {
     if (data.length < 4) return;
     const paletteHandle = this.readDwordFromData(data, 0);
-    console.log('EMF SelectPalette:', paletteHandle);
+    const obj = this.gdiObjectManager.selectObject(paletteHandle | 0);
+    if (obj && obj.type === 'palette') {
+      this.currentPalette = obj;
+    } else if ((paletteHandle >>> 0) >= 0x80000000) {
+      // DEFAULT_PALETTE 等 stock 调色板：回落到无逻辑调色板
+      this.currentPalette = null;
+    }
+    console.log('EMF SelectPalette:', (paletteHandle >>> 0).toString(16), !!this.currentPalette);
   }
 
+  // EMR_CREATEPALETTE：ihPal(4) + LGPAL（Version(2)+NumberOfEntries(2)+aPalEntries[4字节/个]）
   processEmfCreatePalette(data) {
-    console.log('EMF CreatePalette');
-    // 调色板创建，Canvas中不常用
+    if (data.length < 8) return;
+    const ihPal = this.readDwordFromData(data, 0);
+    if ((ihPal & 0x80000000) !== 0) return;
+    const numEntries = data[6] | (data[7] << 8);
+    const entries = [];
+    for (let i = 0; i < numEntries; i++) {
+      const o = 8 + i * 4;
+      if (o + 4 > data.length) break;
+      entries.push({ r: data[o + 3], g: data[o + 2], b: data[o + 1] }); // flags,blue,green,red
+    }
+    this.gdiObjectManager.createObjectAt(ihPal, { type: 'palette', entries });
+    console.log('EMF CreatePalette: ih=', (ihPal >>> 0).toString(16), 'entries=', entries.length);
   }
 
+  // EMR_SETPALETTEENTRIES：ihPal(4)+Start(4)+NumEntries(4)+aPalEntries
   processEmfSetPaletteEntries(data) {
-    console.log('EMF SetPaletteEntries');
+    if (data.length < 12) return;
+    const ihPal = this.readDwordFromData(data, 0);
+    const start = this.readDwordFromData(data, 4);
+    const num = this.readDwordFromData(data, 8);
+    const obj = this.gdiObjectManager.selectObject(ihPal | 0);
+    if (obj && obj.type === 'palette') {
+      for (let i = 0; i < num; i++) {
+        const o = 12 + i * 4;
+        if (o + 4 > data.length) break;
+        obj.entries[start + i] = { r: data[o + 3], g: data[o + 2], b: data[o + 1] };
+      }
+    }
   }
 
   processEmfResizePalette(data) {
-    console.log('EMF ResizePalette');
+    // 影响低（多数文件只创建不调整）
   }
 
   processEmfRealizePalette(data) {
-    console.log('EMF RealizePalette');
+    // 设备相关映射，SVG 输出无需实现（POI 亦 Unimplemented）
   }
 
   processEmfExtFloodFill(data) {

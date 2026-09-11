@@ -473,7 +473,7 @@
     "type": "wmf",
     "records": 20172,
     "svgBytes": 2327983,
-    "svgHash": "e12e4b7838431acda5f51707e4fb32c6828ae133d2e0bdc5c71b2eb5bc75d060"
+    "svgHash": "39c115610caaa33f945e6da55f1a3656ef60160ab3d37f51459ee8b3046cccfe"
   },
   "lo-wmf-corpus/fdo58003-2.wmf": {
     "status": "ok",
@@ -3843,8 +3843,8 @@
     "status": "ok",
     "type": "emf",
     "records": 4815,
-    "svgBytes": 287017,
-    "svgHash": "d4a98c7a201e662e64cae609c3c7bed2dd51d0c51c0bef4568f1167b14389757"
+    "svgBytes": 288742,
+    "svgHash": "0500d2d6f0ecff0f758de3872a2b174ff63d03350033f4252238c8da35f845c5"
   },
   "ref-emf-corpus/emf-valid/test-110.emf": {
     "status": "ok",

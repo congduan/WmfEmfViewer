@@ -58,11 +58,11 @@
 
 | # | 项目 | 对比结果 | 说明 |
 |---|------|----------|------|
-| E1 | Region 解析（RDH+rects） | ❌ | 完全无 region 存储；POI readRgnData 解析为 Rectangle2D 列表再合成 Area（HemfFill.java:809、878） |
-| E2 | FillRgn/FrameRgn/PaintRgn/InvertRgn | ❌ | 分派表全部 null（emfDrawer.js:125-128）；POI 逐矩形 fill/描边 |
-| E3 | ExtSelectClipRgn | ❌ | null；POI 支持 RGN_AND/OR/XOR/DIFF/COPY 真 clip（HemfFill.java:501） |
+| E1 | Region 解析（RDH+rects） | ✅ 已实现(09-11) | 完全无 region 存储；POI readRgnData 解析为 Rectangle2D 列表再合成 Area（HemfFill.java:809、878） |
+| E2 | FillRgn/FrameRgn/PaintRgn/InvertRgn | ✅ 已实现(09-11)（InvertRgn POI 亦未实现 ➖） | 分派表全部 null（emfDrawer.js:125-128）；POI 逐矩形 fill/描边 |
+| E3 | ExtSelectClipRgn | ✅ 已实现(09-11)（AND/COPY 精确，OR/XOR/DIFF 近似 COPY） | null；POI 支持 RGN_AND/OR/XOR/DIFF/COPY 真 clip（HemfFill.java:501） |
 | E4 | ExtFloodFill | ⚠️ | 本项目仅解析不绘制（emfDrawer.js:2132）；POI 有近似 draw 实现 |
-| E5 | 调色板 | ❌ | CreatePalette/SelectPalette/RealizePalette 全为 console.log 空实现；**_decodeDib 从不引用逻辑调色板 → DIB_PAL_COLORS 位图颜色错误**（emfDrawer.js:2109-2130、1370） |
+| E5 | 调色板 | ✅ 已实现(09-11)（Create/Select/SetEntries + DIB_PAL_COLORS） | CreatePalette/SelectPalette/RealizePalette 全为 console.log 空实现；**_decodeDib 从不引用逻辑调色板 → DIB_PAL_COLORS 位图颜色错误**（emfDrawer.js:2109-2130、1370） |
 
 ## F. EMF 位图/BLT（POI: HemfFill/HwmfBitmapDib ↔ emfDrawer.js）
 
@@ -95,7 +95,7 @@
 | H3 | 绘图记录布局 | ✅ | Rectangle/Arc/Pie/Chord 16 位布局与 atan2 求角一致 |
 | H4 | DIBBitBlt/DibStretchBlt/StretchDib | ✅ | 参数读取与 ROP 位置、DIB 偏移一致 |
 | H5 | ExtTextOut | ⚠️ | Options/Dx/CLIPPED 处理较完整；**ETO_OPAQUE 不填充背景矩形** |
-| H6 | CreateRegion/FillRegion | ❌ | processCreateRegion 在 baseDrawer 仅 console.log 兜底（非崩溃）；FillRegion 未实现；region 扫描线/矩形格式未解析 |
+| H6 | CreateRegion/FillRegion | ⬜ 待做（扫描线格式） | processCreateRegion 在 baseDrawer 仅 console.log 兜底（非崩溃）；FillRegion 未实现；region 扫描线/矩形格式未解析 |
 | H7 | Escape | ⚠️ | 仅处理 MFCOMMENT/MathType，其余类型忽略 |
 | H8 | ROP 组合 | ❌/➖ | SetROP2 仅日志；Canvas 无光栅 op，未做近似（POI 有 HwmfROP2/ROP3Composite） |
 
@@ -126,6 +126,11 @@
 - ✅ 第二梯队 9（Scale*ExtEx）、10（offDx）已修复；8（EMF+ 单位换算）未做——
   注意：pen 宽度单位换算经实测为负收益（POI 亦未做，留 TODO），已改为原始宽度直出 +
   SvgContext 线宽钳制防御（>2×画布对角线，规避 rsvg 裁剪失效灰边）。
-- ⬜ 第三梯队 6/7（region 与调色板，需引入 region 数据结构）待做。
+- ✅ 第三梯队 6/7 已完成（2026-09-11）：region 解析（RDH+rects，_readRgnData）、FillRgn/FrameRgn/PaintRgn、
+  ExtSelectClipRgn（RGN_AND/COPY 精确、OR/XOR/DIFF 近似）、调色板全链（CreatePalette/SelectPalette/
+  SetPaletteEntries → _decodeDib DIB_PAL_COLORS，BLT 五记录均传 iUsageSrc）。
+  语料验证：无 FILLRGN/FRAMERGN 样本；ExtSelectClipRgn 使 test-109 RMSE 0.0849→0.0574；
+  test-164 等调色板文件位图均为 iUsage=0（链路已通、暂无收益样本）。
+  RMSE 0.1199→0.1198；快照 632/632（2 个 hash 变化为 clip id 计数偏移，归一化后 SVG 全等）。
 - 门禁：快照 632/632（已更新基线）、lint 0 error、语料解析率不变、RMSE 0.1184→0.1199（噪声级，
   test-131 等 offDx 文件标签位置改为文件声明字距，视觉无差异）。
