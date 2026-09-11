@@ -60,3 +60,11 @@ Desktop.ini
 .env
 .env.local
 .env.*.local
+
+# Debug/render outputs and local corpora (too large for repo)
+test-107.emf/
+output/
+.workbuddy/
+test_files/ref-emf-corpus/
+test_files/lo-wmf-corpus/
+test_files/sample-wmf/
