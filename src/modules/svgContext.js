@@ -27,6 +27,16 @@ class SvgContext {
         this._scaleY = 1;
     }
 
+    // 线宽上限防御：超过画布对角线 2 倍的线宽几乎必然是单位换算错误
+    //（如 EMF+ world 单位直出），会让光栅化器（rsvg）在非等比缩放下裁剪失效、
+    // 描边回渗整个视口（test-000/075/120 灰边案例）。
+    _strokeWidth() {
+        const cw = this.canvas.width || 800;
+        const ch = this.canvas.height || 600;
+        const cap = Math.sqrt(cw * cw + ch * ch) * 2;
+        return Math.min(this.lineWidth, cap);
+    }
+
     // ---- 数值格式化（保留最多2位小数） ----
     _fmt(v) {
         if (typeof v !== 'number' || !isFinite(v)) return '0';
@@ -256,7 +266,7 @@ class SvgContext {
         if (!this._hasSubpath) return;
         const dashAttr = (this._dash && this._dash.length) ? ' stroke-dasharray="' + this._dash.map(v => this._fmt(v)).join(' ') + '"' : '';
         this._nodes.push(
-            '<path d="' + this._d() + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this.lineWidth) + '"' + dashAttr + ' ' + this._attr() + '/>'
+            '<path d="' + this._d() + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this._strokeWidth()) + '"' + dashAttr + ' ' + this._attr() + '/>'
         );
     }
 
@@ -277,7 +287,7 @@ class SvgContext {
         const r = this._normalizeRect(x, y, w, h);
         const dashAttr = (this._dash && this._dash.length) ? ' stroke-dasharray="' + this._dash.map(v => this._fmt(v)).join(' ') + '"' : '';
         this._nodes.push(
-            '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this.lineWidth) + '"' + dashAttr + ' ' + this._attr() + '/>'
+            '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this._strokeWidth()) + '"' + dashAttr + ' ' + this._attr() + '/>'
         );
     }
 

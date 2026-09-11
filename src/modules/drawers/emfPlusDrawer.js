@@ -465,16 +465,35 @@ class EmfPlusDrawer {
     this.ctx.stroke();
   }
 
-  // 处理EMF+绘制图像记录（DrawImage = 目标矩形与源矩形相同；可引用嵌套 EMF / 位图对象）
+  // 处理EMF+绘制图像记录（0x401A，MS-EMFPLUS 2.3.4.9；对齐 POI HemfPlusDraw.EmfPlusDrawImage）：
+  // data = imageAttributesId(4) + srcUnit(4) + srcRect RectF(16，源裁剪，像素单位)
+  //        + RectData（目标框：flags&0x4000(C) 压缩为 EmfPlusRect(4×int16)，否则 EmfPlusRectF(4×float)）。
+  // srcRect 被缩放填充到 RectData；此前漏读 RectData 导致图被画到源坐标位置。
   processEmfPlusDrawImage(flags, data) {
     const img = this.emfPlusObjects[flags & 0xFF];
     if (!img || data.length < 24) return;
-    // imageAttributesId(4) + sourceUnit(4) + srcRect(16)
     const sx = this._emfPlusReadFloat(data, 8);
     const sy = this._emfPlusReadFloat(data, 12);
     const sw = this._emfPlusReadFloat(data, 16);
     const sh = this._emfPlusReadFloat(data, 20);
-    this._drawImageObj(img, sx, sy, sx + sw, sy, sx, sy + sh);
+    const compressed = (flags & 0x4000) !== 0;
+    if (24 + (compressed ? 8 : 16) > data.length) return;
+    let dx, dy, dw, dh;
+    if (compressed) {
+      dx = this._emfPlusReadInt16(data, 24);
+      dy = this._emfPlusReadInt16(data, 26);
+      dw = this._emfPlusReadInt16(data, 28);
+      dh = this._emfPlusReadInt16(data, 30);
+    } else {
+      dx = this._emfPlusReadFloat(data, 24);
+      dy = this._emfPlusReadFloat(data, 28);
+      dw = this._emfPlusReadFloat(data, 32);
+      dh = this._emfPlusReadFloat(data, 36);
+    }
+    const ul = this._emfPlusMapPoint(dx, dy);
+    const ur = this._emfPlusMapPoint(dx + dw, dy);
+    const ll = this._emfPlusMapPoint(dx, dy + dh);
+    this._drawImageObj(img, ul.x, ul.y, ur.x, ur.y, ll.x, ll.y, { x: sx, y: sy, w: sw, h: sh });
   }
 
   // 处理EMF+绘制图像点记录（DrawImagePoints：三点定义目标平行四边形）
@@ -543,10 +562,11 @@ class EmfPlusDrawer {
   }
 
   // 渲染嵌套 EMF / 位图对象到指定平行四边形（3 点：左上 / 右上 / 左下）
-  _drawImageObj(img, x1, y1, x2, y2, x3, y3) {
+  // srcRect（可选）：源裁剪矩形 {x,y,w,h}，嵌套 EMF 按其子区域映射到目标平行四边形。
+  _drawImageObj(img, x1, y1, x2, y2, x3, y3, srcRect) {
     try {
       if (img.type === 'imageData') {
-        // 原生 PNG/JPEG 位图
+        // 原生 PNG/JPEG 位图（srcRect 裁剪需要图片内在尺寸，暂按整图绘制）
         this.ctx.rawPush('<image x="' + Math.min(x1, x2, x3) + '" y="' + Math.min(y1, y2, y3) + '" width="' +
           Math.abs(Math.max(x1, x2, x3) - Math.min(x1, x2, x3)) + '" height="' +
           Math.abs(Math.max(y1, y2, y3) - Math.min(y1, y2, y3)) + '" href="' + img.href + '" preserveAspectRatio="none" />');
@@ -557,13 +577,20 @@ class EmfPlusDrawer {
       if (!nested) return;
       const W = nested.width || 1;
       const H = nested.height || 1;
-      // source 空间 (0,0)-(W,H) → dest 由 3 点定义的仿射
-      const a = (x2 - x1) / W, b = (y2 - y1) / W;
-      const c = (x3 - x1) / H, d = (y3 - y1) / H;
+      // srcRect 为空或覆盖全图时退化为整图映射
+      const sx = srcRect && srcRect.w > 0 && srcRect.h > 0 ? srcRect.x : 0;
+      const sy = srcRect && srcRect.w > 0 && srcRect.h > 0 ? srcRect.y : 0;
+      const sw = srcRect && srcRect.w > 0 ? srcRect.w : W;
+      const sh = srcRect && srcRect.h > 0 ? srcRect.h : H;
+      // source 子矩形 (sx,sy)-(sx+sw,sy+sh) → dest 由 3 点定义的仿射
+      const a = (x2 - x1) / sw, b = (y2 - y1) / sw;
+      const c = (x3 - x1) / sh, d = (y3 - y1) / sh;
+      const e = x1 - a * sx - c * sy;
+      const f = y1 - b * sx - d * sy;
       const body = nested.nodes.join('\n');
       const defs = nested.defs.length ? '<defs>' + nested.defs.join('') + '</defs>' : '';
       this.ctx.rawPush(
-        '<g transform="matrix(' + this._fmtN(a) + ' ' + this._fmtN(b) + ' ' + this._fmtN(c) + ' ' + this._fmtN(d) + ' ' + this._fmtN(x1) + ' ' + this._fmtN(y1) + ')">' +
+        '<g transform="matrix(' + this._fmtN(a) + ' ' + this._fmtN(b) + ' ' + this._fmtN(c) + ' ' + this._fmtN(d) + ' ' + this._fmtN(e) + ' ' + this._fmtN(f) + ')">' +
         defs + body + '</g>'
       );
     } catch (e) {
@@ -928,22 +955,58 @@ class EmfPlusDrawer {
         if (color) this.emfPlusObjects[objectId] = { type: 'solidBrush', color };
       }
       // Texture 后续扩展
-    } else if (objectType === 0x0200 && data.length >= 8) { // EmfPlusPen
-      // EmfPlusPen: PenDataFlags(4) + PenUnit(4) + PenWidth(float, 若 PenDataTransformable?) 简化：
-      const penUnit = this._emfPlusReadInt32(data, 4);
-      let color = '#000000';
-      let width = 1;
-      const flagsD = this._emfPlusReadInt32(data, 0);
-      if ((flagsD & 0x4) && data.length >= 16) { // PenDataSolidBrush：其后为 ARGB
-        const argb = this._emfPlusReadArgb(data, 12);
-        color = this._emfPlusArgbToColor(argb);
-        if (data.length >= 12) width = this._emfPlusReadFloat(data, 8) || 1;
-      } else if (data.length >= 12) {
-        width = this._emfPlusReadFloat(data, 8) || 1;
-        // 定位 solid brush 颜色（若有）
-        if (data.length >= 20) { const argb = this._emfPlusReadArgb(data, 12); color = this._emfPlusArgbToColor(argb); }
+    } else if (objectType === 0x0200) { // EmfPlusPen
+      // EmfPlusPen（data 已剥离 GraphicsVersion，MS-EMFPLUS 2.2.2.27；对齐 POI HemfPlusPen.init）：
+      // PenType(4,=0) + PenDataFlags(4) + UnitType(4) + PenWidth(float,4) + OptionalData[flags] + Brush
+      // OptionalData 顺序：Transform(24) StartCap(4) EndCap(4) Join(4) MiterLimit(4) LineStyle(4)
+      //   DashedLineCap(4) DashedLineOffset(4) DashedLineData(4+n*4) Alignment(4)
+      //   CompoundLine(4+n*4) CustomStartCap(4+..) CustomEndCap(4+..)；随后固定为 EmfPlusBrush。
+      if (data.length < 16) return;
+      const penDataFlags = this._emfPlusReadInt32(data, 4);
+      const unitType = this._emfPlusReadInt32(data, 8);
+      let width = this._emfPlusReadFloat(data, 12) || 1;
+      let o = 16;
+      // 跳过可选字段
+      if (penDataFlags & 0x01) o += 24;                    // PenDataTransform: XFORM 6×float
+      if (penDataFlags & 0x02) o += 4;                     // StartCap
+      if (penDataFlags & 0x04) o += 4;                     // EndCap
+      if (penDataFlags & 0x08) o += 4;                     // Join
+      if (penDataFlags & 0x10) o += 4;                     // MiterLimit float
+      if (penDataFlags & 0x20) o += 4;                     // LineStyle
+      if (penDataFlags & 0x40) o += 4;                     // DashedLineCap
+      if (penDataFlags & 0x80) o += 4;                     // DashedLineOffset float
+      if (penDataFlags & 0x100) {                          // DashedLineData: count + count*float
+        const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+        o += 4 + Math.max(0, Math.min(n, 1000)) * 4;
       }
-      this.emfPlusObjects[objectId] = { type: 'pen', color, width, penUnit };
+      if (penDataFlags & 0x200) o += 4;                    // Alignment
+      if (penDataFlags & 0x400) {                          // CompoundLine: count + count*float
+        const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+        o += 4 + Math.max(0, Math.min(n, 1000)) * 4;
+      }
+      if (penDataFlags & 0x800) {                          // CustomStartCap: size + data
+        const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+        o += 4 + Math.max(0, n);
+      }
+      if (penDataFlags & 0x1000) {                         // CustomEndCap: size + data
+        const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+        o += 4 + Math.max(0, n);
+      }
+      // 随后固定为 EmfPlusBrush：BrushType(4) + BrushData（Solid=0 → ARGB(4)）
+      let color = '#000000';
+      if (o + 4 <= data.length) {
+        const brushType = this._emfPlusReadInt32(data, o);
+        if (brushType === 0 && o + 8 <= data.length) {
+          color = this._emfPlusArgbToColor(this._emfPlusReadArgb(data, o + 4));
+        } else if (brushType !== 0) {
+          const c = this._emfPlusFirstOpaqueArgb(data, o + 4);
+          if (c) color = c;
+        }
+      }
+      // PenWidth 与坐标同空间使用（对齐 POI：applyObject 未做单位换算，注释为 TODO；
+      // 参考实现 libemf2svg 也输出原始宽度）。仅当 width<=0 时取最小值 1。
+      if (width <= 0) width = 1;
+      this.emfPlusObjects[objectId] = { type: 'pen', color, width, penUnit: unitType };
     } else if (objectType === 0x0600) { // EmfPlusFont（U_OT_Font=6）
       // EmfPlusFont（data 已剥离 GraphicsVersion，MS-EMFPLUS 2.2.1.3）：
       // EmSize(float,4) + SizeUnit(4) + StyleFlags(4) + 保留(4，实测为 FaceName 字符数)

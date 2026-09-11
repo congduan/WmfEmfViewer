@@ -957,9 +957,10 @@ class EmfDrawer {
 
   processEmfRestoreDC(data) {
     if (data.length < 4) return;
-    const savedDC = this.readDwordFromData(data, 0);
-    // nSavedDC：0 = 最近一次 SaveDC，1 = 前一次，依此类推
-    const count = Math.min((savedDC >>> 0) + 1, this.dcStateStack.length);
+    const savedDC = this.readDwordFromData(data, 0) | 0;
+    // MS-EMF 2.3.4.5：nSavedDC>0 恢复到倒数第 n 个保存状态（丢弃其后的，等效弹 n 层）；
+    // nSavedDC<0 恢复向前 |n| 层；0 表示最近一次（弹 1 层）。参考 POI HemfMisc.EmfRestoreDc。
+    const count = Math.min(savedDC === 0 ? 1 : Math.abs(savedDC), this.dcStateStack.length);
     let restored = null;
     for (let i = 0; i < count; i++) {
       if (this.dcStateStack.length > 0) {
@@ -1329,7 +1330,39 @@ class EmfDrawer {
               f: matrix.b * r.e + matrix.d * r.f + matrix.f,
             };
           }
-          this.ctx.fillText(text, x, y, matrix);
+          // offDx 字符间距数组（MS-EMF 2.2.45；对齐 POI HemfText：32 位无符号，相对记录起始 -8）。
+          // ETO_PDY (0x2000) 时为 2 倍长度（水平+垂直交替），取水平分量。
+          const offDx = data.length >= 68 ? this.readDwordFromData(data, 64) : 0;
+          let dxArr = null;
+          if (offDx > 8 && stringLength > 0) {
+            const dxOffset = offDx - 8;
+            const stride = (options & 0x2000) !== 0 ? 2 : 1;
+            if (dxOffset + stringLength * stride * 4 <= data.length) {
+              dxArr = [];
+              for (let i = 0; i < stringLength; i++) {
+                dxArr.push(this.readDwordFromData(data, dxOffset + i * stride * 4));
+              }
+            }
+          }
+          if (dxArr && text.length === dxArr.length) {
+            // 逐字符按 Dx 累计偏移排布（Dx 为逻辑单位 advance；字符串总宽 = Σdx）。
+            // TA_* 水平对齐作用于整串参考点：center/right 需先平移 -Σdx（或其半）。
+            const totalDx = dxArr.reduce((a, b) => a + b, 0);
+            const align = this.ctx.textAlign;
+            let origin = x;
+            if (align === 'center') origin = x - totalDx / 2;
+            else if (align === 'right') origin = x - totalDx;
+            const savedAlign = this.ctx.textAlign;
+            this.ctx.textAlign = 'left';
+            let cum = 0;
+            for (let i = 0; i < text.length; i++) {
+              this.ctx.fillText(text[i], origin + cum, y, matrix);
+              cum += dxArr[i];
+            }
+            this.ctx.textAlign = savedAlign;
+          } else {
+            this.ctx.fillText(text, x, y, matrix);
+          }
           this.ctx.font = savedFont;
           this.ctx.fillStyle = savedFillStyle;
           console.log('  Rendered text:', text.substring(0, 50));
@@ -1822,8 +1855,10 @@ class EmfDrawer {
     const xDenom = this.readLongFromData(data, 4);
     const yNum = this.readLongFromData(data, 8);
     const yDenom = this.readLongFromData(data, 12);
+    // MS-EMF 2.3.4.7：viewport 范围按 num/denom 比例缩放（累乘语义，对齐 POI HemfWindowing.EmfScaleViewportExtEx）
+    if (xDenom !== 0) this.coordinateTransformer.viewportExtX *= xNum / xDenom;
+    if (yDenom !== 0) this.coordinateTransformer.viewportExtY *= yNum / yDenom;
     console.log('EMF ScaleViewportExtEx:', xNum, xDenom, yNum, yDenom);
-    // 需要更新坐标转换器的viewport范围
   }
 
   processEmfScaleWindowExtEx(data) {
@@ -1832,8 +1867,10 @@ class EmfDrawer {
     const xDenom = this.readLongFromData(data, 4);
     const yNum = this.readLongFromData(data, 8);
     const yDenom = this.readLongFromData(data, 12);
+    // MS-EMF 2.3.4.8：window 范围按 num/denom 比例缩放（累乘语义，对齐 POI HemfWindowing.EmfScaleWindowExtEx）
+    if (xDenom !== 0) this.coordinateTransformer.windowExtX *= xNum / xDenom;
+    if (yDenom !== 0) this.coordinateTransformer.windowExtY *= yNum / yDenom;
     console.log('EMF ScaleWindowExtEx:', xNum, xDenom, yNum, yDenom);
-    // 需要更新坐标转换器的window范围
   }
 
   processEmfSaveDC(data) {
@@ -2140,12 +2177,18 @@ class EmfDrawer {
   }
 
   processEmfArcTo(data) {
-    // EMR_ARCTO与EMR_ARC结构相同，但会移动当前位置
+    // EMR_ARCTO (0x25+12, MS-EMF 2.3.2.2)：布局与 EMR_ARC 相同（bounds+start+end），
+    // 但从当前位置连线到弧起点画弧，并把当前位置重置为弧终点（对齐 POI HemfDraw.EmfArcTo 的
+    // path.append(arc, connect=true) 语义）。
     if (data.length < 32) return;
     const left = this.readLongFromData(data, 0);
     const top = this.readLongFromData(data, 4);
     const right = this.readLongFromData(data, 8);
     const bottom = this.readLongFromData(data, 12);
+    const startX = this.readLongFromData(data, 16);
+    const startY = this.readLongFromData(data, 20);
+    const endX = this.readLongFromData(data, 24);
+    const endY = this.readLongFromData(data, 28);
 
     const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
     const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
@@ -2153,34 +2196,75 @@ class EmfDrawer {
     const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
     const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
     const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
+    if (radiusX === 0 || radiusY === 0) return;
 
-    this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+    const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
+    const full = Math.abs(endAngle - startAngle) < 1e-6;
+
+    // 弧起点/终点（设备坐标，参数化 t 与 _calcArcAngles 一致）
+    const arcStart = { x: centerX + radiusX * Math.cos(startAngle), y: centerY + radiusY * Math.sin(startAngle) };
+    const arcEnd = { x: centerX + radiusX * Math.cos(endAngle), y: centerY + radiusY * Math.sin(endAngle) };
+
+    const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+    this.ctx.beginPath();
+    this.ctx.moveTo(from.x, from.y);
+    this.ctx.lineTo(arcStart.x, arcStart.y);
+    if (full) {
+      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+    } else {
+      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
+    }
     this.ctx.stroke();
-    console.log('EMF ArcTo:', left, top, right, bottom);
+
+    // 当前位置 = 弧终点。设备坐标反推逻辑坐标：t 参数在逻辑椭圆上等价
+    //（device = cx + rx·cos t, cy + ry·sin t ⇒ logical = cxL + rxL·cos t, cyL + ryL·sin t）。
+    const cxL = (left + right) / 2;
+    const cyL = (top + bottom) / 2;
+    const rxL = Math.abs(right - left) / 2;
+    const ryL = Math.abs(bottom - top) / 2;
+    this.currentPos = {
+      x: cxL + rxL * Math.cos(endAngle),
+      y: cyL + ryL * Math.sin(endAngle),
+    };
   }
 
   processEmfPolyDraw(data) {
-    // EMR_POLYDRAW: Bounds(16) + Count(4) + Points[] + Types[]
+    // EMR_POLYDRAW: Bounds(16) + Count(4) + Points[](8字节/点) + Types[](1字节/点)
+    // 点类型（MS-EMF 2.2.2.21）：PT_CLOSEFIGURE=1、PT_LINETO=2、PT_BEZIERTO=4（3 个一组）、PT_MOVETO=6；
+    // 低 2 位按 &0x06 区分（对齐 POI HemfDraw.EmfPolyDraw）。
     if (data.length < 20) return;
     const count = this.readDwordFromData(data, 16);
-    console.log('EMF PolyDraw, count:', count);
-
     if (data.length < 20 + count * 8 + count) return;
 
-    // 读取点和类型
+    this.ctx.beginPath();
     for (let i = 0; i < count; i++) {
       const x = this.readLongFromData(data, 20 + i * 8);
       const y = this.readLongFromData(data, 24 + i * 8);
       const type = data[20 + count * 8 + i];
       const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-
-      // type: 1=MOVETO, 2=LINETO, 4=BEZIERTO, 128=CLOSEFIGURE
-      if (type & 1) {
-        this.ctx.moveTo(transformed.x, transformed.y);
-      } else if (type & 2) {
-        this.ctx.lineTo(transformed.x, transformed.y);
+      let closeFlag = (type & 1) !== 0;
+      switch (type & 0x06) {
+        case 0x02: // PT_LINETO
+          this.ctx.lineTo(transformed.x, transformed.y);
+          break;
+        case 0x04: { // PT_BEZIERTO：连续 3 个点（2 控制点 + 1 终点）
+          if (i + 2 >= count) break;
+          const pts = [transformed];
+          for (let k = 1; k <= 2; k++) {
+            const bx = this.readLongFromData(data, 20 + (i + k) * 8);
+            const by = this.readLongFromData(data, 24 + (i + k) * 8);
+            pts.push(this.coordinateTransformer.transform(bx, by, this.ctx.canvas.width, this.ctx.canvas.height));
+          }
+          this.ctx.bezierCurveTo(pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
+          closeFlag = (data[20 + count * 8 + i + 2] & 1) !== 0;
+          i += 2;
+          break;
+        }
+        case 0x06: // PT_MOVETO
+          this.ctx.moveTo(transformed.x, transformed.y);
+          break;
       }
-      if (type & 128) {
+      if (closeFlag) {
         this.ctx.closePath();
       }
     }
