@@ -137,6 +137,9 @@ const EMF_RECORD_HANDLERS = {
   0x00000076: null  // EMR_GRADIENTFILL
 };
 
+// 会产生可见输出的 GDI 记录 handler（用于双模式判定：多边形/线条/路径/填充/文本/位图类）
+const EMF_DRAW_HANDLER_RE = /processEmf(Poly|Ellipse|Rectangle|RoundRect|Arc|Chord|Pie|LineTo|MoveToEx|ExtTextOut|SmallTextOut|BitBlt|StretchBlt|MaskBlt|PlgBlt|StretchDibBits|SetDibitsToDevice|AlphaBlend|TransparentBlt|GradientFill|FillRgn|FrameRgn|PaintRgn|ExtFloodFill|FillPath|StrokePath|StrokeAndFillPath|SetPixel)/;
+
 class EmfDrawer {
   constructor(ctx) {
     this.ctx = ctx;
@@ -259,6 +262,12 @@ class EmfDrawer {
     this.currentPos = { x: 0, y: 0 };
     // 当前逻辑调色板（EMR_SELECTPALETTE 设置，供 DIB_PAL_COLORS 位图取色）
     this.currentPalette = null;
+
+    // 双模式判定：文件含 EMF+ 注释块且含独立的 GDI 绘图记录时，只回放 GDI 记录。
+    // 依据：(1) libemf2svg 等参考实现不解析 EMF+，双模式文件仅渲染 GDI 拷贝；
+    // (2) Windows 单拷贝语义，双份回放会产生重影（如 EMF+ 孪生描边宽度不匹配）。
+    // 纯 EMF+ 文件（无 GDI 绘图记录，GDI 回放为空）仍需回放 EMF+。
+    this._skipEmfPlusPlayback = this._detectDualMode(metafileData.records);
 
     // 处理每个记录
     const debugLogs = globalThis.__WMF_DEBUG__;
@@ -923,10 +932,32 @@ class EmfDrawer {
 
   // 处理 EMR_GDICOMMENT：EMF+ 数据经此内嵌于标准 EMF 记录流（Windows 按记录序交织播放）。
   // data（record.data，已剥离 8 字节 EMR 头）布局：[DataSize(4)] [CommentIdentifier(4)] [EMF+ 记录...]
+  // 判定是否为 EMF+/GDI 双模式文件：存在 EMF+ 注释块 && 存在 GDI 绘图记录。
+  _detectDualMode(records) {
+    let hasEmfPlus = false;
+    let hasGdiDraw = false;
+    for (const r of records) {
+      const t = (r.type >>> 0);
+      if (t === 0x46) {
+        // GDICOMMENT 数据起始 "EMF+" 签名（0x2B464D45 LE：45 4D 46 2B）
+        if (r.data && r.data.length >= 8 && r.data[4] === 0x45 && r.data[5] === 0x4D && r.data[6] === 0x46 && r.data[7] === 0x2B) {
+          hasEmfPlus = true;
+          if (hasGdiDraw) return true;
+        }
+        continue;
+      }
+      const handler = EMF_RECORD_HANDLERS[t];
+      if (typeof handler === 'string' && EMF_DRAW_HANDLER_RE.test(handler)) hasGdiDraw = true;
+      if (hasEmfPlus && hasGdiDraw) return true;
+    }
+    return false;
+  }
+
   processEmfGdiComment(data) {
     if (!data || data.length < 8) return;
     if (this.readDwordFromData(data, 4) !== 0x2B464D45) return; // 非 EMF+ 注释
     try {
+      if (this._skipEmfPlusPlayback) return; // 双模式：GDI 记录已覆盖内容，跳过 EMF+ 回放
       const parser = new EmfPlusParser(data); // parseEmfPlusRecords 只依赖入参
       const emfPlusRecords = parser.parseEmfPlusRecords(data);
       if (emfPlusRecords.length === 0) return;
