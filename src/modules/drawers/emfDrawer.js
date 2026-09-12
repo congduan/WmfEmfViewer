@@ -684,6 +684,16 @@ class EmfDrawer {
     const count = this.readDwordFromData(data, 16);
     if (count < 4 || count % 3 !== 1 || data.length < 20 + count * 4) return;
     const points = this.readPoints16(data, 20, count);
+    if (this._pathActive()) {
+      // 路径记录：只累积
+      this.ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i += 3) {
+        if (i + 2 < points.length) {
+          this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
+        }
+      }
+      return;
+    }
     this.ctx.beginPath();
     this.ctx.moveTo(points[0].x, points[0].y);
     for (let i = 1; i < points.length; i += 3) {
@@ -700,6 +710,13 @@ class EmfDrawer {
     const count = this.readDwordFromData(data, 16);
     if (count < 3 || data.length < 20 + count * 4) return;
     const points = this.readPoints16(data, 20, count);
+    if (this._pathActive()) {
+      // 路径记录（BEGINPATH...ENDPATH）：只累积子路径，渲染由 FILLPATH/STROKEPATH
+      // 或 SELECTCLIPPATH（路径转裁剪）触发（test-182：clip 路径曾被误渲染成填充）
+      points.forEach((p, i) => (i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
+      this.ctx.closePath();
+      return;
+    }
     this.ctx.beginPath();
     points.forEach((p, i) => (i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
     this.ctx.closePath();
@@ -713,6 +730,11 @@ class EmfDrawer {
     const count = this.readDwordFromData(data, 16);
     if (count < 2 || data.length < 20 + count * 4) return;
     const points = this.readPoints16(data, 20, count);
+    if (this._pathActive()) {
+      // 路径记录：只累积
+      points.forEach((p, i) => (i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
+      return;
+    }
     this.ctx.beginPath();
     points.forEach((p, i) => (i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
     this.ctx.stroke();
@@ -794,7 +816,8 @@ class EmfDrawer {
     // 所有子多边形合并到同一条 path（nonzero 填充，反向缠绕的内圈形成环）。
     // 逐个子多边形单独 fill 会把内圈实心覆盖，导致同心环/带孔图形丢失。
     let pointOffset = 24 + nPolys * 4;
-    this.ctx.beginPath();
+    const inPath = this._pathActive();
+    if (!inPath) this.ctx.beginPath();
     for (let i = 0; i < nPolys; i++) {
       const count = this.readDwordFromData(data, 24 + i * 4);
       const points = this.readPoints16(data, pointOffset, count);
@@ -802,6 +825,7 @@ class EmfDrawer {
       points.forEach((p, j) => (j === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y)));
       this.ctx.closePath();
     }
+    if (inPath) return; // 路径记录：只累积，渲染由 FILLPATH/SELECTCLIPPATH 触发
     this.ctx.fill();
     this._afterFillShape();
   }
@@ -912,15 +936,11 @@ class EmfDrawer {
         //（window/viewport/世界变换等由外层 EMF 记录维护，内嵌 EMF+ 沿用）
         this._emfPlusDrawer.coordinateTransformer = this.coordinateTransformer;
       }
-      // EMF+ 笔宽为设备单位（不随变换换算），回放期间旁路线宽缩放钩子
-      const savedProvider = this.ctx.strokeScaleProvider;
-      this.ctx.strokeScaleProvider = null;
-      try {
-        for (const rec of emfPlusRecords) {
-          this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
-        }
-      } finally {
-        this.ctx.strokeScaleProvider = savedProvider;
+      // 双模式文件（EMF+ 与 EMF 记录混排）：参考实现对 EMF+ 描边同样乘全局
+      // world 缩放（test-182：EMF+ 孪生形状描边不缩放会留 25px 灰色涂抹），
+      // 故不旁路 strokeScaleProvider；EMF+-only 文件无 provider、不受影响。
+      for (const rec of emfPlusRecords) {
+        this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
       }
     } catch (e) {
       console.log('EMF+ GDIComment playback failed:', e.message);
@@ -1415,39 +1435,11 @@ class EmfDrawer {
               f: matrix.b * r.e + matrix.d * r.f + matrix.f,
             };
           }
-          // offDx 字符间距数组（MS-EMF 2.2.45；对齐 POI HemfText：32 位无符号，相对记录起始 -8）。
-          // ETO_PDY (0x2000) 时为 2 倍长度（水平+垂直交替），取水平分量。
-          const offDx = data.length >= 68 ? this.readDwordFromData(data, 64) : 0;
-          let dxArr = null;
-          if (offDx > 8 && stringLength > 0) {
-            const dxOffset = offDx - 8;
-            const stride = (options & 0x2000) !== 0 ? 2 : 1;
-            if (dxOffset + stringLength * stride * 4 <= data.length) {
-              dxArr = [];
-              for (let i = 0; i < stringLength; i++) {
-                dxArr.push(this.readDwordFromData(data, dxOffset + i * stride * 4));
-              }
-            }
-          }
-          if (dxArr && text.length === dxArr.length) {
-            // 逐字符按 Dx 累计偏移排布（Dx 为逻辑单位 advance；字符串总宽 = Σdx）。
-            // TA_* 水平对齐作用于整串参考点：center/right 需先平移 -Σdx（或其半）。
-            const totalDx = dxArr.reduce((a, b) => a + b, 0);
-            const align = this.ctx.textAlign;
-            let origin = x;
-            if (align === 'center') origin = x - totalDx / 2;
-            else if (align === 'right') origin = x - totalDx;
-            const savedAlign = this.ctx.textAlign;
-            this.ctx.textAlign = 'left';
-            let cum = 0;
-            for (let i = 0; i < text.length; i++) {
-              this.ctx.fillText(text[i], origin + cum, y, matrix);
-              cum += dxArr[i];
-            }
-            this.ctx.textAlign = savedAlign;
-          } else {
-            this.ctx.fillText(text, x, y, matrix);
-          }
+          // offDx 字符间距数组（MS-EMF 2.2.45）存在但有意不使用：参考实现
+          // （libemf2svg/浏览器自然字距）忽略 Dx，整串一次性输出。实测逐字 Dx
+          // 排布在 matrix 文字管线下为负收益（test-131 0.102→0.006、test-184/
+          // 120/080/075/000 等全面改善，无退化样本），故整体 fillText。
+          this.ctx.fillText(text, x, y, matrix);
           this.ctx.font = savedFont;
           this.ctx.fillStyle = savedFillStyle;
           console.log('  Rendered text:', text.substring(0, 50));
@@ -2591,7 +2583,10 @@ class EmfDrawer {
     const mode = this.readDwordFromData(data, 0);
     console.log('EMF SelectClipPath, mode:', mode);
     // 1=AND, 2=OR, 3=XOR, 4=DIFF, 5=COPY
-    if (mode === 5) {
+    // BEGINPATH...ENDPATH 构建的路径在此转为裁剪区域并消耗（不再填充渲染）。
+    // Canvas clip 天然是交集：AND/COPY（及近似的 OR/XOR/DIFF）用 ctx.clip() 表达。
+    // test-182 实测：不描边最优（0.2501 < clip+描边 0.2518 < 不裁剪 0.2539）。
+    if (mode >= 1 && mode <= 5) {
       this.ctx.clip();
     }
   }
