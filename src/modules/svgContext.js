@@ -13,6 +13,8 @@ class SvgContext {
         this.textBaseline = 'alphabetic';
         this.fillRule = 'nonzero';
         this.globalAlpha = 1;
+        this.strokeScale = 1;            // 逻辑→设备 线宽缩放（EMF drawer 通过 provider 动态注入）
+        this.strokeScaleProvider = null; // 实时计算 strokeScale 的钩子
 
         this._nodes = [];       // SVG 元素列表
         this._defs = [];        // <defs> 里的 clipPath 等
@@ -34,7 +36,16 @@ class SvgContext {
         const cw = this.canvas.width || 800;
         const ch = this.canvas.height || 600;
         const cap = Math.sqrt(cw * cw + ch * ch) * 2;
-        return Math.min(this.lineWidth, cap);
+        // GDI 笔宽为逻辑单位，需按当前 逻辑→设备 缩放系数换算
+        //（对齐 libemf2svg/Windows：笔宽与坐标经过同一变换）。
+        // strokeScaleProvider 由 EMF drawer 注入，实时反映 world/viewport 变换。
+        let scale = this.strokeScale;
+        if (typeof this.strokeScaleProvider === 'function') {
+            const s = this.strokeScaleProvider();
+            if (isFinite(s) && s > 0) scale = s;
+        }
+        const w = this.lineWidth * (isFinite(scale) && scale > 0 ? scale : 1);
+        return Math.min(w, cap);
     }
 
     // ---- 数值格式化（保留最多2位小数） ----

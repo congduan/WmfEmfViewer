@@ -181,6 +181,19 @@ class CoordinateTransformer {
     }
 
     /**
+     * 当前 world 变换的线性缩放系数（用于笔宽换算）。
+     * 仅 world 变换参与：参考实现（libemf2svg）把 world 变换作为 SVG matrix
+     * 输出，笔宽在 matrix 内因此被等比缩放；而 window/viewport 比例由参考实现
+     * 预变换到坐标里、不作用于笔宽（test-182 需 ×0.0625，test-027 需 ×1）。
+     * 非等比时取行列式的几何平均。
+     * @returns {number}
+     */
+    getStrokeScale() {
+        const worldDet = this.worldM11 * this.worldM22 - this.worldM12 * this.worldM21;
+        return Math.sqrt(Math.abs(worldDet));
+    }
+
+    /**
      * 逻辑坐标 -> 设备坐标。
      * 公式: 设备坐标 = (逻辑坐标 - windowOrg) * (viewportExt / windowExt) + viewportOrg
      * @param {number} x

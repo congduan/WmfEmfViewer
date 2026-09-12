@@ -134,3 +134,14 @@
   RMSE 0.1199→0.1198；快照 632/632（2 个 hash 变化为 clip id 计数偏移，归一化后 SVG 全等）。
 - 门禁：快照 632/632（已更新基线）、lint 0 error、语料解析率不变、RMSE 0.1184→0.1199（噪声级，
   test-131 等 offDx 文件标签位置改为文件声明字距，视觉无差异）。
+- ✅ 第四梯队（2026-09-12）：GDI 路径记录语义 + 笔宽 world 缩放。
+  1) BeginPath/EndPath 期间的 PolylineTo(16)/PolyBezierTo(16)/LINETO 改为只向当前路径追加线段
+    （不再 beginPath()+stroke() 截断已累积子路径）；MoveToEx 在路径记录中开启新子路径
+    （test-182 槽位圆角矩形曾退化为碎片段）。FILLPATH 后路径保留供 STROKEPATH 复用（SvgContext 语义已支持）。
+  2) 笔宽随 world 变换缩放（getStrokeScale=√|det|，经 ctx.strokeScaleProvider 注入 SvgContext），
+    仅 world 参与换算、window/viewport 比例不参与（对齐 libemf2svg：world 变换作为 SVG matrix 输出时
+    笔宽在 matrix 内被等比缩放；test-182 需 ×0.0625，test-027 ANISOTROPIC+单位 world 需 ×1）。
+    EMF+ 回放期间旁路 provider（EMF+ 笔宽为设备单位）。
+  3) RMSE 0.1198→0.1153；>0.3 仅剩 test-176（EXTTEXTOUTA 文本度量）。单文件：
+    test-150 0.341→0.195、test-186 0.198→0.060、test-182 0.335→0.254、test-045/048 0.138→0.078。
+    快照更新（描边合并进路径，SVG 更小）。

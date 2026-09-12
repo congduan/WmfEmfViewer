@@ -156,6 +156,11 @@ class EmfDrawer {
     this.dcStateStack = []; // SaveDC/RestoreDC 状态栈
     this.currentPos = { x: 0, y: 0 }; // 当前位置（逻辑/窗口坐标），MoveToEx/LineTo/Poly*To 使用
     this._emfPlusDrawer = null; // 惰性创建的内嵌 EMF+ 播放器（与标准 EMF 记录共享 ctx）
+    // 描边线宽缩放：GDI 笔宽（逻辑单位）随当前变换换算为设备单位
+    //（对齐 libemf2svg：ref 将坐标与笔宽经同一 matrix 缩放）
+    if (this.ctx && typeof this.ctx === 'object') {
+      this.ctx.strokeScaleProvider = () => this.coordinateTransformer.getStrokeScale();
+    }
   }
 
   draw(metafileData, options = {}) {
@@ -500,19 +505,33 @@ class EmfDrawer {
     }
 
     // 从当前位置起步（GDI PolyBezierTo 语义）
-    this.ctx.beginPath();
-    const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
-    this.ctx.moveTo(start.x, start.y);
-    for (let i = 0; i < points.length; i += 3) {
-      if (i + 2 < points.length) {
-        this.ctx.bezierCurveTo(
-          points[i].x, points[i].y,
-          points[i + 1].x, points[i + 1].y,
-          points[i + 2].x, points[i + 2].y
-        );
+    if (this._pathActive()) {
+      // 路径记录：只追加贝塞尔段，渲染推迟到 FILLPATH/STROKEPATH
+      this._ensurePathStart();
+      for (let i = 0; i < points.length; i += 3) {
+        if (i + 2 < points.length) {
+          this.ctx.bezierCurveTo(
+            points[i].x, points[i].y,
+            points[i + 1].x, points[i + 1].y,
+            points[i + 2].x, points[i + 2].y
+          );
+        }
       }
+    } else {
+      this.ctx.beginPath();
+      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      this.ctx.moveTo(start.x, start.y);
+      for (let i = 0; i < points.length; i += 3) {
+        if (i + 2 < points.length) {
+          this.ctx.bezierCurveTo(
+            points[i].x, points[i].y,
+            points[i + 1].x, points[i + 1].y,
+            points[i + 2].x, points[i + 2].y
+          );
+        }
+      }
+      this.ctx.stroke();
     }
-    this.ctx.stroke();
     const last = points[points.length - 1];
     if (last) {
       // 记录逻辑坐标终点
@@ -533,16 +552,27 @@ class EmfDrawer {
 
     if (data.length < 20 + count * 8) return;
 
-    this.ctx.beginPath();
-    const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
-    this.ctx.moveTo(start.x, start.y);
-    for (let i = 0; i < count; i++) {
-      const x = this.readLongFromData(data, 20 + i * 8);
-      const y = this.readLongFromData(data, 24 + i * 8);
-      const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-      this.ctx.lineTo(transformed.x, transformed.y);
+    if (this._pathActive()) {
+      // 路径记录：只追加线段，渲染推迟到 FILLPATH/STROKEPATH
+      this._ensurePathStart();
+      for (let i = 0; i < count; i++) {
+        const x = this.readLongFromData(data, 20 + i * 8);
+        const y = this.readLongFromData(data, 24 + i * 8);
+        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        this.ctx.lineTo(transformed.x, transformed.y);
+      }
+    } else {
+      this.ctx.beginPath();
+      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      this.ctx.moveTo(start.x, start.y);
+      for (let i = 0; i < count; i++) {
+        const x = this.readLongFromData(data, 20 + i * 8);
+        const y = this.readLongFromData(data, 24 + i * 8);
+        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        this.ctx.lineTo(transformed.x, transformed.y);
+      }
+      this.ctx.stroke();
     }
-    this.ctx.stroke();
     this.currentPos = {
       x: this.readLongFromData(data, 20 + (count - 1) * 8),
       y: this.readLongFromData(data, 24 + (count - 1) * 8)
@@ -694,13 +724,21 @@ class EmfDrawer {
     const count = this.readDwordFromData(data, 16);
     if (count < 3 || count % 3 !== 0 || data.length < 20 + count * 4) return;
     const points = this.readPoints16(data, 20, count);
-    this.ctx.beginPath();
-    const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
-    this.ctx.moveTo(start.x, start.y);
-    for (let i = 0; i + 2 < points.length; i += 3) {
-      this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
+    if (this._pathActive()) {
+      // 路径记录：只追加贝塞尔段，渲染推迟到 FILLPATH/STROKEPATH
+      this._ensurePathStart();
+      for (let i = 0; i + 2 < points.length; i += 3) {
+        this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
+      }
+    } else {
+      this.ctx.beginPath();
+      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      this.ctx.moveTo(start.x, start.y);
+      for (let i = 0; i + 2 < points.length; i += 3) {
+        this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
+      }
+      this.ctx.stroke();
     }
-    this.ctx.stroke();
     this.currentPos = {
       x: this.readInt16FromData(data, 20 + (count - 1) * 4),
       y: this.readInt16FromData(data, 20 + (count - 1) * 4 + 2)
@@ -713,11 +751,17 @@ class EmfDrawer {
     const count = this.readDwordFromData(data, 16);
     if (count < 1 || data.length < 20 + count * 4) return;
     const points = this.readPoints16(data, 20, count);
-    this.ctx.beginPath();
-    const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
-    this.ctx.moveTo(start.x, start.y);
-    points.forEach(p => this.ctx.lineTo(p.x, p.y));
-    this.ctx.stroke();
+    if (this._pathActive()) {
+      // 路径记录：只追加线段，渲染推迟到 FILLPATH/STROKEPATH
+      this._ensurePathStart();
+      points.forEach(p => this.ctx.lineTo(p.x, p.y));
+    } else {
+      this.ctx.beginPath();
+      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      this.ctx.moveTo(start.x, start.y);
+      points.forEach(p => this.ctx.lineTo(p.x, p.y));
+      this.ctx.stroke();
+    }
     this.currentPos = {
       x: this.readInt16FromData(data, 20 + (count - 1) * 4),
       y: this.readInt16FromData(data, 20 + (count - 1) * 4 + 2)
@@ -868,8 +912,15 @@ class EmfDrawer {
         //（window/viewport/世界变换等由外层 EMF 记录维护，内嵌 EMF+ 沿用）
         this._emfPlusDrawer.coordinateTransformer = this.coordinateTransformer;
       }
-      for (const rec of emfPlusRecords) {
-        this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
+      // EMF+ 笔宽为设备单位（不随变换换算），回放期间旁路线宽缩放钩子
+      const savedProvider = this.ctx.strokeScaleProvider;
+      this.ctx.strokeScaleProvider = null;
+      try {
+        for (const rec of emfPlusRecords) {
+          this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
+        }
+      } finally {
+        this.ctx.strokeScaleProvider = savedProvider;
       }
     } catch (e) {
       console.log('EMF+ GDIComment playback failed:', e.message);
@@ -956,6 +1007,12 @@ class EmfDrawer {
     // GDI 语义：MoveToEx 仅更新"当前位置"，不立即产生绘制动作。
     // 实际的 moveTo 由后续 LineTo/Poly*To 在自身 beginPath 中完成，
     // 否则 moveTo 会累积进共享路径段导致 SVG 体积二次方膨胀。
+    // 路径记录（BeginPath/EndPath）中：MoveToEx 开启新子路径（GDI 语义），
+    // 后续 To 记录从新位置续接（_ensurePathStart 只在无子路径时 moveTo）。
+    if (this._pathActive()) {
+      const t = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+      this.ctx.moveTo(t.x, t.y);
+    }
     this.currentPos = { x, y };
     console.log('EMF MoveToEx:', x, y);
   }
@@ -1081,13 +1138,19 @@ class EmfDrawer {
     if (data.length < 8) return;
     const x = this.readLongFromData(data, 0);
     const y = this.readLongFromData(data, 4);
-    const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
     const to = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-    // 每条线独立 beginPath，避免路径段跨记录累积
-    this.ctx.beginPath();
-    this.ctx.moveTo(from.x, from.y);
-    this.ctx.lineTo(to.x, to.y);
-    this.ctx.stroke();
+    if (this._pathActive()) {
+      // 路径记录：只追加线段，渲染推迟到 FILLPATH/STROKEPATH
+      this._ensurePathStart();
+      this.ctx.lineTo(to.x, to.y);
+    } else {
+      const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      // 每条线独立 beginPath，避免路径段跨记录累积
+      this.ctx.beginPath();
+      this.ctx.moveTo(from.x, from.y);
+      this.ctx.lineTo(to.x, to.y);
+      this.ctx.stroke();
+    }
     this.currentPos = { x, y };
     console.log('EMF LineTo:', x, y);
   }
@@ -1101,6 +1164,23 @@ class EmfDrawer {
   processEmfEndPath(data) {
     console.log('EMF EndPath');
     this.pathState = 'completed';
+  }
+
+  // ===== GDI 路径记录语义（BeginPath/EndPath 之间）=====
+  // 路径记录期间，To 类记录（PolylineTo/PolyBezierTo/LINETo 等）只向当前路径
+  // 追加线段，不产生绘制动作；渲染统一由 FILLPATH/STROKEPATH/STROKEANDFILLPATH
+  // 触发。若在此期间 beginPath()/stroke() 会清空/截断已累积的子路径
+  //（test-182：槽位圆角矩形被截成退化碎片段）。
+  _pathActive() {
+    return this.pathState === 'active';
+  }
+
+  // 路径记录中确保子路径起点在"当前位置"（首记录无 MoveToEx 时）
+  _ensurePathStart() {
+    if (!this.ctx._hasSubpath) {
+      const s = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      this.ctx.moveTo(s.x, s.y);
+    }
   }
 
   processEmfStrokeAndFillPath(data) {
