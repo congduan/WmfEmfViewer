@@ -245,11 +245,16 @@ class CoordinateTransformer {
             case MAP_MODE.MM_ISOTROPIC:
             case MAP_MODE.MM_ANISOTROPIC:
                 if (this.windowExtX !== 0 && this.windowExtY !== 0) {
-                    return {
-                        sx: this.viewportExtX / this.windowExtX,
-                        sy: this.viewportExtY / this.windowExtY,
-                        apply: true
-                    };
+                    let sx = this.viewportExtX / this.windowExtX;
+                    let sy = this.viewportExtY / this.windowExtY;
+                    if (this.mapMode === MAP_MODE.MM_ISOTROPIC) {
+                        // 等比模式：逻辑单位两轴等长。生产者写出的 vpExt/winExt 两轴比例
+                        // 常有微小出入。参考实现（libemf2svg）实证**恒用 x 轴比例**作用于
+                        // 两轴（test-164/174 sx<sy 且 ref 取 sx；test-165 sx>sy 亦取 sx——
+                        // 用 min() 会在后者退化），ref 字号与 y 坐标均按 sx 缩放。
+                        sy = sx;
+                    }
+                    return { sx, sy, apply: true };
                 }
                 return { sx: 1, sy: 1, apply: false };
             case MAP_MODE.MM_LOMETRIC: {

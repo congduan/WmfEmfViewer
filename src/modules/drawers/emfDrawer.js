@@ -1402,9 +1402,12 @@ class EmfDrawer {
             }
           }
         } else if (!isUnicode && stringOffset + stringLength <= data.length) {
-          // ANSI text
+          // ANSI text。≥0x80 的字节依赖字体字符集（CP1252/Symbol/…）解释，无法
+          // 从元文件可靠还原；参考实现（libemf2svg）将其统一替换为空格
+          // （test-174：Wingdings 2 符号字体的高位字节，ref 输出 ' '）。
           for (let i = 0; i < stringLength; i++) {
-            text += String.fromCharCode(data[stringOffset + i]);
+            const b = data[stringOffset + i];
+            text += b >= 0x80 ? ' ' : String.fromCharCode(b);
           }
         }
 
@@ -1996,7 +1999,9 @@ class EmfDrawer {
     const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
     const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
 
-    this.ctx.save();
+    // 注意：不得在此 ctx.save()。裁剪区的生命周期由 EMF 级 SaveDC/RestoreDC 管理
+    // （clip 已纳入 _captureDcState/_restoreDcState）；这里的 save 会让 RestoreDC 的
+    // ctx.restore() 弹错层（弹出本处 save 而非 SaveDC 的状态）。
     this.ctx.beginPath();
     this.ctx.rect(
       transformedLeftTop.x,
@@ -2116,13 +2121,13 @@ class EmfDrawer {
     // SVG 嵌套 <g clip-path> 天然按交集组合：RGN_AND(1) 直接 save+clip 即相交；
     // RGN_COPY(5) 设新裁剪区（常见用法，先于其它 clip 出现时等效）。
     // RGN_OR/XOR/DIFF(2/3/4) 无真 region 运算，近似按 COPY 处理。
+    // 裁剪区生命周期归 EMF 级 SaveDC/RestoreDC（同 INTERSECTCLIPRECT，勿 ctx.save()）。
     if (rects && rects.length) {
-      this.ctx.save();
       this._buildRgnPath(rects);
       this.ctx.clip();
     } else if (mode === 5) {
-      // RGN_COPY 无数据：恢复默认（空）裁剪区——仅 save 记录栈位，不设 clip
-      this.ctx.save();
+      // RGN_COPY 无数据：GDI 语义为取消裁剪（空区域 = 不裁剪）
+      if (this.ctx._state) this.ctx._state.clip = null;
     }
     console.log('EMF ExtSelectClipRgn: mode=', mode, 'rects=', rects ? rects.length : 0);
   }
@@ -2168,6 +2173,10 @@ class EmfDrawer {
       textColor: this.textColor,
       currentPos: { x: this.currentPos.x, y: this.currentPos.y },
       currentPalette: this.currentPalette,
+      // GDI 语义：裁剪区属于 DC 状态，SaveDC 快照 / RestoreDC 恢复
+      // （test-156：INTERSECTCLIPRECT 后若 RESTOREDC 不撤裁剪，96 个 PIE 风玫瑰
+      //  花瓣全部被裁剪带吞掉，整图近乎空白）。
+      clip: this.ctx._state ? (this.ctx._state.clip || null) : null,
       // 注意：不得快照 gdiObjectManager.objectTable。GDI 的 SaveDC/RestoreDC 只
       // 保存/恢复 DC 状态（选中对象、映射模式等），不保存"已创建对象集合"——
       // 块内新建的对象在 RestoreDC 后依然有效（只有 DeleteObject 能销毁）。
@@ -2200,6 +2209,8 @@ class EmfDrawer {
     if (state.textColor) this.textColor = state.textColor;
     if (state.currentPos) this.currentPos = { x: state.currentPos.x, y: state.currentPos.y };
     if (state.currentPalette !== undefined) this.currentPalette = state.currentPalette;
+    // 恢复裁剪区（GDI：clip 属于 DC 状态，见 _captureDcState 注释）
+    if (this.ctx._state) this.ctx._state.clip = state.clip || null;
     const ct = this.coordinateTransformer;
     ct.mapMode = state.mapMode;
     ct.windowOrgX = state.windowOrgX;

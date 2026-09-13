@@ -304,10 +304,14 @@ class SvgContext {
 
     // ---- 文本 ----
     _parseFont() {
-        // 格式："italic bold 12px Arial" 之类
+        // 格式："italic bold 12px Arial" 或 'italic bold 12px "WingDings"'
         const m = /([\d.]+)\s*px\s*(.+)/.exec(this.font || '');
         const size = m ? parseFloat(m[1]) : 12;
-        const family = m ? m[2] : 'sans-serif';
+        let family = m ? m[2].trim() : 'sans-serif';
+        // 去掉包裹引号：font-family 属性值不能再带字面引号——带引号的
+        // '"WingDings"' 会被当作字名为引号字符本身而匹配失败，走到与
+        // 参考实现不同的回退字体（test-164 的 WingDings 符号字形全部错位）。
+        family = family.replace(/^"([^"]*)"$/, '$1').replace(/^'([^']*)'$/, '$1');
         const style = /italic/.test(this.font) ? 'italic' : 'normal';
         const weight = /bold/.test(this.font) ? 'bold' : 'normal';
         return { size: this._fmt(size), sizeNum: size, family: SvgContext._esc(family), style, weight };
@@ -336,12 +340,19 @@ class SvgContext {
             : this.textBaseline === 'bottom' ? -0.1 * fs : 0;
         const yBase = y + dy;
         // 可选旋转：{ rotate: 角度(度，SVG 顺时针为正) }，绕文本基线原点 (x, yBase) 旋转。
-        // 与参考实现 libemf2svg 同构（其旋转文本输出 rotate(θ, x, y+dy) translate(0, dy)，
-        // 即枢轴落在基线上）。
+        // 与参考实现 libemf2svg 同构：其旋转文本输出 rotate(θ, x, y+dy) translate(0, dy)。
+        // ⚠️ translate(0,dy) 不可省略：SVG transform 列表对坐标**先 translate 后 rotate**
+        // （从右向左作用），即 TA_TOP 的 0.9×字号 偏移沿**字形自身（旋转后）框架**施加——
+        // 这正是 GDI 语义（参考点相对字形的方位不随 escapement 改变）。θ=0 时与直接
+        // 把 dy 加进设备 y 等价；θ≠0 时差 R(θ)·(0,dy) 的位移（test-164 实证 41px 字形
+        // 偏移 37px）。 pivet 与 ref 一致落在 (x, y+dy)。
         let xform = '';
         if (transformMatrix && typeof transformMatrix.rotate === 'number' && transformMatrix.rotate !== 0) {
             xform = ' transform="rotate(' + this._fmt(transformMatrix.rotate) + ' ' +
                 this._fmt(x) + ' ' + this._fmt(yBase) + ')"';
+            if (dy !== 0) {
+                xform = xform.slice(0, -1) + ' translate(0 ' + this._fmt(dy) + ')"';
+            }
         }
         this._nodes.push(
             '<text x="' + this._fmt(x) + '" y="' + this._fmt(yBase) + '" font-family="' + f.family + '" font-size="' + f.size + '"' +
