@@ -167,17 +167,14 @@ class CoordinateTransformer {
     }
 
     /**
-     * 获取当前视口/窗口缩放比例。
+     * 获取当前视口/窗口缩放比例（与 _getViewportScale 同源，含映射模式语义）。
+     * MM_TEXT 恒返回 1:1（不参与缩放）。
      * @returns {Point}
      */
     getScale() {
-        if (this.windowExtX !== 0 && this.windowExtY !== 0) {
-            return {
-                x: this.viewportExtX / this.windowExtX,
-                y: this.viewportExtY / this.windowExtY
-            };
-        }
-        return { x: 1, y: 1 };
+        const vp = this._getViewportScale();
+        if (!vp.apply) return { x: 1, y: 1 };
+        return { x: vp.sx, y: vp.sy };
     }
 
     /**
@@ -226,8 +223,16 @@ class CoordinateTransformer {
 
     /**
      * 计算 window→viewport 的缩放因子（sx/sy）与是否应用 viewportOrg。
-     * MM_TEXT/ISOTROPIC/ANISOTROPIC 用 viewportExt/windowExt 比值；当 windowExt 任一分量为 0 时，
+     * MM_ISOTROPIC/ANISOTROPIC 用 viewportExt/windowExt 比值；当 windowExt 任一分量为 0 时，
      * 原语义为“完全不应用缩放，也不加 viewportOrg”，故 apply=false。
+     * MM_TEXT 恒为 1:1（GDI/参考实现均忽略 windowExt/viewportExt）：
+     *   - MS-EMF / GDI：MM_TEXT 下 window 与 viewport 范围不参与映射；
+     *   - LibreOffice mtftools.cxx ImplMap()：`if (meMapMode != MappingMode::MM_TEXT)` 才做
+     *     `fX2 /= mnWinExtX; fX2 *= mnDevWidth;`；
+     *   - libemf2svg 亦不使用这两个范围。
+     * 旧实现在 MM_TEXT 下也按 vpExt/winExt 缩放，导致「只设 SETWINDOWEXTEX、不设
+     * SETVIEWPORTEXTEX」的文件（如 test-068，winExt=4859x3456 vs 画布 4765x3434）
+     * 内容被整体缩到 98%，越靠右偏移越大。
      * 固定比例模式（LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS）用 pxPerMm 换算，
      * 且 Y 轴在固定比例模式下向上（负缩放，GDI 语义），始终应用 viewportOrg。
      * @returns {{sx: number, sy: number, apply: boolean}}
@@ -235,6 +240,8 @@ class CoordinateTransformer {
     _getViewportScale() {
         switch (this.mapMode) {
             case MAP_MODE.MM_TEXT:
+                // 1:1，但仍应用 viewportOrg（LO 的 mnDevOrgX/mnDevOrgY 补偿）
+                return { sx: 1, sy: 1, apply: true };
             case MAP_MODE.MM_ISOTROPIC:
             case MAP_MODE.MM_ANISOTROPIC:
                 if (this.windowExtX !== 0 && this.windowExtY !== 0) {

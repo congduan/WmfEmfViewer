@@ -310,7 +310,7 @@ class SvgContext {
         const family = m ? m[2] : 'sans-serif';
         const style = /italic/.test(this.font) ? 'italic' : 'normal';
         const weight = /bold/.test(this.font) ? 'bold' : 'normal';
-        return { size: this._fmt(size), family: SvgContext._esc(family), style, weight };
+        return { size: this._fmt(size), sizeNum: size, family: SvgContext._esc(family), style, weight };
     }
 
     measureText(text) {
@@ -323,21 +323,30 @@ class SvgContext {
     fillText(text, x, y, transformMatrix) {
         const f = this._parseFont();
         const anchor = this.textAlign === 'right' ? 'end' : this.textAlign === 'center' ? 'middle' : 'start';
-        const baseline = this.textBaseline === 'top' ? 'text-before-edge' : this.textBaseline === 'bottom' ? 'text-after-edge' : 'alphabetic';
-        // 可选的仿射变换（SVG matrix(a b c d e f)，列向量约定）。
-        // 文字渲染时传入 world×viewport×device 的合成矩阵，使 x/y/font-size 保持原始逻辑值，
-        // 缩放/平移/旋转统一由 transform 承担（对齐参考实现 libemf2svg 的 <g transform="matrix(...)">）。
+        // 基线折算：**不能**依赖 dominant-baseline 属性。
+        // 实测 rsvg-convert 2.58.4 完全忽略它（alphabetic / text-before-edge / hanging /
+        // middle / central 六种写法渲染结果逐像素一致），而 RMSE 对照管线正是用 rsvg
+        // 光栅化；浏览器虽支持该属性，但两者必须一致才可复现。故这里把 GDI 的垂直对齐
+        // 直接折算成 alphabetic 基线：TA_TOP 时基线 = y + 0.9×字号。
+        // 该 0.9 与参考实现 libemf2svg 一致：test-001 实测 22 条 TA_TOP 文本
+        // (refY - ourY)/fontSize = 0.8996~0.9003（10px 与 12px 两档字号），alphabetic
+        // 文本 dy≈0。TA_BOTTOM 对称取 −0.1×字号（字符格 = 0.9 上伸 + 0.1 下伸）。
+        const fs = f.sizeNum || 0;
+        const dy = this.textBaseline === 'top' ? 0.9 * fs
+            : this.textBaseline === 'bottom' ? -0.1 * fs : 0;
+        const yBase = y + dy;
+        // 可选旋转：{ rotate: 角度(度，SVG 顺时针为正) }，绕文本基线原点 (x, yBase) 旋转。
+        // 与参考实现 libemf2svg 同构（其旋转文本输出 rotate(θ, x, y+dy) translate(0, dy)，
+        // 即枢轴落在基线上）。
         let xform = '';
-        if (transformMatrix) {
-            const m = transformMatrix;
-            xform = ' transform="matrix(' + this._fmt(m.a) + ' ' + this._fmt(m.b) + ' ' +
-                this._fmt(m.c) + ' ' + this._fmt(m.d) + ' ' +
-                this._fmt(m.e) + ' ' + this._fmt(m.f) + ')"';
+        if (transformMatrix && typeof transformMatrix.rotate === 'number' && transformMatrix.rotate !== 0) {
+            xform = ' transform="rotate(' + this._fmt(transformMatrix.rotate) + ' ' +
+                this._fmt(x) + ' ' + this._fmt(yBase) + ')"';
         }
         this._nodes.push(
-            '<text x="' + this._fmt(x) + '" y="' + this._fmt(y) + '" font-family="' + f.family + '" font-size="' + f.size + '"' +
+            '<text x="' + this._fmt(x) + '" y="' + this._fmt(yBase) + '" font-family="' + f.family + '" font-size="' + f.size + '"' +
             ' font-style="' + f.style + '" font-weight="' + f.weight + '"' +
-            ' text-anchor="' + anchor + '" dominant-baseline="' + baseline + '"' +
+            ' text-anchor="' + anchor + '" dominant-baseline="alphabetic"' +
             ' fill="' + SvgContext._esc(this.fillStyle) + '" stroke="none" ' + this._attr() + xform + '>' + SvgContext._esc(text) + '</text>'
         );
     }
@@ -373,9 +382,9 @@ class SvgContext {
 
     // 最小 PNG 编码器（zlib 无压缩块 + CRC32），跨环境可用（无需 canvas/zlib）
     _pngBase64(imgData) {
-        const { width: w, height: h, data: px } = imgData;
-        // 保护：超大位图（>1.5M 像素，无压缩 PNG 后 base64 会超 XML 解析器单节点上限）
-        if (w * h > 1572864 || w <= 0 || h <= 0) return null;
+        const img = this._downscaleIfNeeded(imgData, 1572864);
+        const { width: w, height: h, data: px } = img;
+        if (!img || w <= 0 || h <= 0) return null;
         // 原始扫描线：每行前置 filter byte 0
         const raw = new Uint8Array(h * (w * 4 + 1));
         for (let y = 0; y < h; y++) {
@@ -513,6 +522,31 @@ class SvgContext {
         const url = 'url(#' + id + ')';
         this._patternCache = { key, url };
         return url;
+    }
+
+    // 超大位图降采样：无压缩 PNG 下 2048×1338@RGBA 的 base64 会把 SVG 撑到 15MB+，
+    // rsvg-convert 直接光栅化失败（test-155）。目标画布通常仅 ~0.5Mpx，编码前用
+    // 最近邻降采样到 ≤maxPx（默认 1.5Mpx）即可：视觉无损、输出体积有界。
+    _downscaleIfNeeded(imgData, maxPx) {
+        if (!imgData) return imgData;
+        const { width, height } = imgData;
+        if (width <= 0 || height <= 0) return imgData;
+        if (width * height <= maxPx) return imgData;
+        const scale = Math.sqrt(maxPx / (width * height));
+        const nw = Math.max(1, Math.floor(width * scale));
+        const nh = Math.max(1, Math.floor(height * scale));
+        const src = imgData.data;
+        const out = new Uint8ClampedArray(nw * nh * 4);
+        for (let y = 0; y < nh; y++) {
+            const sy = Math.min(height - 1, Math.floor((y + 0.5) / scale));
+            for (let x = 0; x < nw; x++) {
+                const sx = Math.min(width - 1, Math.floor((x + 0.5) / scale));
+                const di = (y * nw + x) * 4, si = (sy * width + sx) * 4;
+                out[di] = src[si]; out[di + 1] = src[si + 1];
+                out[di + 2] = src[si + 2]; out[di + 3] = src[si + 3];
+            }
+        }
+        return { width: nw, height: nh, data: out };
     }
 
     // 垂直翻转 RGBA 像素（top-down → bottom-up 或反向）

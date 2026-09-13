@@ -365,12 +365,14 @@ class EmfDrawer {
     }
   }
 
-  // 填充形状收尾：fill 后描边。默认黑色 1px pen（Excel 色块场景）时改为填充同色
-  // 1px 描边（对齐参考实现：彩色 fill 边缘无黑框）；显式彩色/宽笔保持原样描边。
+  // 填充形状收尾：fill 后描边。默认黑色 1px pen 或 NULL_PEN 时改为「按填充色 1px 描边」
+  // （对齐参考实现 libemf2svg：它把每个填充形状输出为 fill+stroke 同色 1px 的 path，
+  //  即使当前 pen 是 PS_NULL；彩色 fill 边缘因此无黑框）；
+  // 显式彩色/宽笔保持原样描边。
   _afterFillShape() {
-    if (this._penNull) return;
-    if (this._penStockBlack) {
+    if (this._penNull || this._penStockBlack) {
       const f = this.ctx.fillStyle;
+      if (!f || f === 'none' || f === 'transparent') return;
       const s = this.ctx.strokeStyle;
       const w = this.ctx.lineWidth;
       this.ctx.strokeStyle = f;
@@ -1430,20 +1432,25 @@ class EmfDrawer {
 
           // 文本使用 SetTextColor 设置的颜色
           this.ctx.fillStyle = this.textColor;
-          // 文字渲染对齐参考实现：用「原始逻辑坐标 + 原始字号 + transform 矩阵」，
-          // 缩放/平移/旋转统一由 SVG transform 承担（而非预乘进坐标与字号）。
-          // 这样世界变换矩阵、window→viewport 缩放、lfEscapement 旋转都能正确作用于文字。
+          // 文字渲染对齐参考实现（libemf2svg）：<text x=设备X y=设备Y font-size=lfHeight*sx>，
+          // 且**不带** transform。两条硬约束（旧实现违反后文字整体消失）：
+          //  1) 裁剪带（SETCLIPRGN / SELECTCLIPPATH）是以设备坐标写进 SVG 的，而 clip-path 在
+          //     带 transform 的元素上按「该元素自身新建立的用户坐标系」解析——一旦文字挂上
+          //     非恒等 matrix，设备坐标的裁剪带会被当成局部（逻辑）坐标，文字被整条切掉。
+          //     旧实现（原始逻辑坐标 + matrix）下，103 个 y 轴翻转的样本文字全部不可见。
+          //  2) GDI 文字字形不会被坐标映射镜像，且字形尺度取**水平**比例：LibreOffice
+          //     mtftools.cxx DrawText 注释「In GM_COMPATIBLE, text glyphs are NOT physically
+          //     mirrored」。实测 132/141 个含文本样本满足 refFontSize == lfHeight * sx；
+          //     唯一 |sy|>|sx| 的样本 test-109 亦印证取 sx（refS/sx=0.9998 vs refS/sy=0.8346）。
+          //     旧实现把非等比 matrix 直接套到字形上 → 纵向被 |sy| 压扁，且 y 轴翻转时上下倒置。
+          // 有旋转（world 含旋转/切变，或 lfEscapement≠0）时退回 matrix 路径，保持既有行为。
           const curFont = this.gdiObjectManager && this.gdiObjectManager.currentFont;
           const rawHeight = curFont && curFont.height ? Math.abs(curFont.height) : 12;
           const escapement = curFont && curFont.escapement ? curFont.escapement : 0; // 0.1°
-          // 用原始字号覆盖 ctx.font（applyGdiObject 设置的是已乘 scale 的字号，matrix 模式下需还原）
+          const weight = (curFont && curFont.weight >= 700) ? 'bold ' : '';
+          const italic = (curFont && curFont.italic) ? 'italic ' : '';
+          const face = (curFont && curFont.faceName) ? curFont.faceName : 'sans-serif';
           const savedFont = this.ctx.font;
-          {
-            const weight = (curFont && curFont.weight >= 700) ? 'bold ' : '';
-            const italic = (curFont && curFont.italic) ? 'italic ' : '';
-            const face = (curFont && curFont.faceName) ? curFont.faceName : 'sans-serif';
-            this.ctx.font = `${italic}${weight}${rawHeight}px "${face}"`;
-          }
           // 完整变换矩阵（world × viewport × device），叠加 lfEscapement 旋转（绕逻辑参考点）。
           let matrix = this.coordinateTransformer.getSvgMatrix();
           if (escapement !== 0) {
@@ -1466,11 +1473,27 @@ class EmfDrawer {
               f: matrix.b * r.e + matrix.d * r.f + matrix.f,
             };
           }
+          // 统一走「设备坐标 + 等比例字号」，旋转用 SVG rotate() 表达（与参考实现同构：
+          // ref 对旋转文本输出 rotate(θ, x, y+dy) translate(0, dy)，枢轴同样落在基线上）。
+          // 等比例尺度取变换线性部分的 x 轴长度（world 为等比缩放时即为它）。
+          const gscale = Math.hypot(matrix.a, matrix.b) || 1;
+          const dev = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          // 设备空间下文本 x 轴的方向角（SVG 顺时针为正）。
+          // 直接取变换线性部分 x 轴的方向角即可，**不要**按行列式符号取反：
+          // 该角度天然等于参考实现的 rotate() 值（det>0 时 = −escapement/10，
+          // det<0 时 = +escapement/10，即 y 轴翻转会把旋转方向一并翻转）。
+          // 实证：test-013（det>0，esc=900）→ ref rotate(-90)；test-001（det<0，esc=2700）
+          // → ref rotate(270) ≡ −90；test-040（det>0，esc=300…3300）→ ref rotate(-30…-330)。
+          let rotDeg = 0;
+          if (Math.abs(matrix.b) > 1e-9 || Math.abs(matrix.c) > 1e-9) {
+            rotDeg = Math.atan2(matrix.b, matrix.a) * 180 / Math.PI;
+          }
+          this.ctx.font = `${italic}${weight}${rawHeight * gscale}px "${face}"`;
+          this.ctx.fillText(text, dev.x, dev.y, rotDeg ? { rotate: rotDeg } : undefined);
           // offDx 字符间距数组（MS-EMF 2.2.45）存在但有意不使用：参考实现
           // （libemf2svg/浏览器自然字距）忽略 Dx，整串一次性输出。实测逐字 Dx
-          // 排布在 matrix 文字管线下为负收益（test-131 0.102→0.006、test-184/
-          // 120/080/075/000 等全面改善，无退化样本），故整体 fillText。
-          this.ctx.fillText(text, x, y, matrix);
+          // 排布为负收益（test-131 0.102→0.006、test-184/120/080/075/000 等全面
+          // 改善，无退化样本），故整体 fillText。
           this.ctx.font = savedFont;
           this.ctx.fillStyle = savedFillStyle;
           console.log('  Rendered text:', text.substring(0, 50));
@@ -1504,8 +1527,11 @@ class EmfDrawer {
       const width = biWidth;
       const height = Math.abs(biHeightRaw);
       const topDown = biHeightRaw < 0;
-      // 像素量保护：超出上限（1.5M 像素）的位图跳过，防内存/输出膨胀
-      if (width * height > 1572864) return null;
+      // 像素量保护：极端尺寸位图跳过，防内存/输出膨胀。
+      // 上限 4M px（约 16MB RGBA）：test-155 是一张 2048×1338@16bpp（2.74M px）的
+      // 整幅底图，旧上限 1.5M 会把它整体丢弃，导致该样本几乎全白。与
+      // SvgContext._pngBase64 的上限保持一致，否则解码后仍会在编码阶段被丢弃。
+      if (width * height > 4194304) return null;
 
       const palCount = biBitCount <= 8 ? (biClrUsed || (1 << biBitCount)) : 0;
       const palette = [];
@@ -1712,13 +1738,7 @@ class EmfDrawer {
     const offBits = this.readDwordFromData(data, 84);
     const cbBits = this.readDwordFromData(data, 88);
     console.log('EMF BitBlt: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'rop=0x' + dwRop.toString(16));
-
-    if (dwRop === 0x00000042) { // BLACKNESS
-      this._fillBltRect(xDest, yDest, cxDest, cyDest, '#000000'); return;
-    }
-    if (dwRop === 0x00FF0062) { // WHITENESS
-      this._fillBltRect(xDest, yDest, cxDest, cyDest, '#ffffff'); return;
-    }
+    if (this._bltSolidRop(dwRop, xDest, yDest, cxDest, cyDest)) return;
     // 无 DIB 或解码失败：不绘制（避免灰色占位块覆盖后续内容）
     const iUsage = this.readDwordFromData(data, 72);
     const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
@@ -1749,8 +1769,7 @@ class EmfDrawer {
     console.log('EMF StretchBlt: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'src=(', xSrc, ySrc, ')', cxSrc, 'x', cySrc);
 
     const iUsage = this.readDwordFromData(data, 72);
-    if (dwRop === 0x00000042) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#000000'); return; }
-    if (dwRop === 0x00FF0062) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#ffffff'); return; }
+    if (this._bltSolidRop(dwRop, xDest, yDest, cxDest, cyDest)) return;
     const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
     if (dib) {
       // 源矩形裁剪：按 cxSrc/cySrc 与源偏移取子图（简化：整图贴到目标大小）
@@ -1783,8 +1802,7 @@ class EmfDrawer {
     console.log('EMF StretchDIBits: dest=(', xDest, yDest, ')', cxDest, 'x', cyDest, 'src=(', xSrc, ySrc, ')', cxSrc, 'x', cySrc);
 
     const iUsage = this.readDwordFromData(data, 56);
-    if (dwRop === 0x00000042) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#000000'); return; }
-    if (dwRop === 0x00FF0062) { this._fillBltRect(xDest, yDest, cxDest, cyDest, '#ffffff'); return; }
+    if (this._bltSolidRop(dwRop, xDest, yDest, cxDest, cyDest)) return;
     const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
     if (dib) {
       // 源矩形子图裁剪（cxSrc/cySrc 可能小于整图）
@@ -1858,8 +1876,27 @@ class EmfDrawer {
     }
   }
 
+  // BLT 类记录中「不需要源位图」的 ROP 快捷分支：
+  //   BLACKNESS(0x00000042) → 目标矩形全黑
+  //   WHITENESS(0x00FF0062) → 目标矩形全白
+  //   PATCOPY  (0x00F00021) → 目标矩形填当前画刷颜色（GDI 语义：把画刷图案拷到目标）
+  // PATCOPY 在 Office/Excel 生成的图表里是纯色矩形的主要画法：
+  //   先 CREATEBRUSHINDIRECT 建彩色刷（如 0xA9A9A9），再发一条
+  //   「offBmiSrc=cbBmiSrc=0」的 EMR_BITBLT(rop=PATCOPY) 填柱子。
+  // 旧实现只认 BLACKNESS/WHITENESS，PATCOPY 落到「无 DIB → 不绘制」分支，
+  // 导致整块柱形/色块缺失（test-013 直方图灰柱、test-068 表格底色）。
+  // @returns {boolean} 是否已处理（true 则调用方应直接返回）
+  _bltSolidRop(dwRop, x, y, w, h) {
+    const rop = dwRop >>> 0;
+    if (rop === 0x00000042) { this._fillBltRect(x, y, w, h, '#000000'); return true; }
+    if (rop === 0x00FF0062) { this._fillBltRect(x, y, w, h, '#ffffff'); return true; }
+    if (rop === 0x00F00021) { this._fillBltRect(x, y, w, h, this.ctx.fillStyle); return true; }
+    return false;
+  }
+
   // BLT 无位图时的纯色填充（BLACKNESS/WHITENESS 或占位）
   _fillBltRect(x, y, w, h, color) {
+    if (!color || color === 'transparent' || color === 'none') return;
     const t1 = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
     const t2 = this.coordinateTransformer.transform(x + Math.abs(w), y + Math.abs(h), this.ctx.canvas.width, this.ctx.canvas.height);
     const rx = Math.min(t1.x, t2.x), ry = Math.min(t1.y, t2.y);
@@ -2131,9 +2168,13 @@ class EmfDrawer {
       textColor: this.textColor,
       currentPos: { x: this.currentPos.x, y: this.currentPos.y },
       currentPalette: this.currentPalette,
-      objectTable: this.gdiObjectManager
-        ? new Map(this.gdiObjectManager.objectTable)
-        : null,
+      // 注意：不得快照 gdiObjectManager.objectTable。GDI 的 SaveDC/RestoreDC 只
+      // 保存/恢复 DC 状态（选中对象、映射模式等），不保存"已创建对象集合"——
+      // 块内新建的对象在 RestoreDC 后依然有效（只有 DeleteObject 能销毁）。
+      // 旧实现把对象表一并快照，导致 Office clipart 的典型模式
+      //    DELETEOBJECT 1 / SAVEDC / CREATEBRUSHINDIRECT 1 / SELECTOBJECT 1 / ... / RESTOREDC
+      // 在 RestoreDC 后丢掉了刚创建的画笔，随后的 SELECTOBJECT 1 找不到对象而
+      // 沿用上一次样式（画笔色丢失 → 黑色轮廓被画成白色）。
       mapMode: ct.mapMode,
       windowOrgX: ct.windowOrgX,
       windowOrgY: ct.windowOrgY,
@@ -2159,9 +2200,6 @@ class EmfDrawer {
     if (state.textColor) this.textColor = state.textColor;
     if (state.currentPos) this.currentPos = { x: state.currentPos.x, y: state.currentPos.y };
     if (state.currentPalette !== undefined) this.currentPalette = state.currentPalette;
-    if (this.gdiObjectManager && state.objectTable) {
-      this.gdiObjectManager.objectTable = new Map(state.objectTable);
-    }
     const ct = this.coordinateTransformer;
     ct.mapMode = state.mapMode;
     ct.windowOrgX = state.windowOrgX;
