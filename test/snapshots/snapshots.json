@@ -200,7 +200,7 @@
     "type": "placeable-wmf",
     "records": 3355,
     "svgBytes": 897897,
-    "svgHash": "8934f59a8253fa6b8190b9fc27b314ee3f2a9430af2555554f54f65385b80c60"
+    "svgHash": "9213156c156499a669fd793e5f31314a7ef35ec738222dc40aa383a81667c7cd"
   },
   "lo-wmf-corpus/bui96003.wmf": {
     "status": "ok",
@@ -431,7 +431,7 @@
     "type": "placeable-wmf",
     "records": 6026,
     "svgBytes": 5563876,
-    "svgHash": "e0e6f29788e1abf6ab700869a0eacb08c949a866306d69fb6a9fec5461f049be"
+    "svgHash": "58dd4d6817987a894f149dfc2cecabd5e1e287b4f462e6536115015a2b1072f7"
   },
   "lo-wmf-corpus/fdo47243-6.wmf": {
     "status": "ok",
@@ -508,7 +508,7 @@
     "type": "placeable-wmf",
     "records": 2292,
     "svgBytes": 1630102,
-    "svgHash": "7ce9d8ba58d7f969b0e767f7f32394c298e1a06809965f7a0b5cbdd89aa85be1"
+    "svgHash": "cee09c9f9c8149960825523c22af1931d95abad48427e9cbf7071c62a522a006"
   },
   "lo-wmf-corpus/fds_2001.wmf": {
     "status": "ok",
@@ -536,7 +536,7 @@
     "type": "placeable-wmf",
     "records": 182,
     "svgBytes": 453576,
-    "svgHash": "5dbf1bc810922ef61cb0b451cb47a425cf5ca92d118de7b58a24810a61bf21a4"
+    "svgHash": "eeb3128a19985b95d1c5f798eaf64dcfb4bd6f6848432715942e73be7759f8b7"
   },
   "lo-wmf-corpus/fds_7025.wmf": {
     "status": "ok",
@@ -949,7 +949,7 @@
     "type": "wmf",
     "records": 18389,
     "svgBytes": 11786812,
-    "svgHash": "4ad7250d574defbcbc628b71fb27926641576b10a68f84e9d90beafeeb4cbad4"
+    "svgHash": "104e44527fceae129a8671e81fbb9eb547e4e1d840eada188236185b5f48b4bd"
   },
   "lo-wmf-corpus/sgn35030.wmf": {
     "status": "ok",
@@ -1250,7 +1250,7 @@
     "type": "placeable-wmf",
     "records": 1100,
     "svgBytes": 1128363,
-    "svgHash": "0be466749975aa55340d13e8930f94c765eae98adfa635fe86e320a5c439d3af"
+    "svgHash": "0d1ac27c213641764004c7bcae0bb8a58d56c8d75e962f35ad9ab7757e684646"
   },
   "lo-wmf-corpus/tre_9502.wmf": {
     "status": "ok",
@@ -2797,7 +2797,7 @@
     "type": "emf",
     "records": 1438,
     "svgBytes": 183368,
-    "svgHash": "45755d3bc20beaf6c19d5c2f9a86d61b4237b7f274848c9b13fd83e39bf1793b"
+    "svgHash": "fa8d6e2227f5d6947b6a9f06cdd88efbbf1c9a14675f64e53edf6e672176ddca"
   },
   "ref-emf-corpus/emf-corrupted/bad_corrupted_2014-12-02-215358.emf": {
     "status": "ok",
@@ -2836,7 +2836,7 @@
     "type": "emf",
     "records": 1953,
     "svgBytes": 187222,
-    "svgHash": "589f202223f840dc5e3d2f803a5302453b550c448574f9cdc1d36cb9fa91a31c"
+    "svgHash": "257f2aba743c8a22544058cf51c2738dbd9cc38e5377bf9f586e4af72ecd9267"
   },
   "ref-emf-corpus/emf-corrupted/bad_corrupted_2014-12-07-163010.emf": {
     "status": "ok",
@@ -2857,14 +2857,14 @@
     "type": "emf",
     "records": 79055,
     "svgBytes": 4499426,
-    "svgHash": "83f0c72257186d15c0ccb89a6a4beb98385a754b2aa9551ade48fa820d485bec"
+    "svgHash": "95cfceaba68df6583842fa012f15433bd7163d417024d50bca8421d5b8e13bf8"
   },
   "ref-emf-corpus/emf-corrupted/bad_corrupted_2014-12-13-105759.emf": {
     "status": "ok",
     "type": "emf",
     "records": 1953,
     "svgBytes": 218215,
-    "svgHash": "55f44b99bd6cfa63b740f8f6c762aa6bb15025e1ab78041653a04ef9bbdaa8f0"
+    "svgHash": "fb224e6ceb0117dd5bd03856e32dccd7b5f2ac8bd90d269c28575d7203166379"
   },
   "ref-emf-corpus/emf-corrupted/bad_corrupted_2014-12-13-132605.emf": {
     "status": "ok",
@@ -2878,7 +2878,7 @@
     "type": "emf",
     "records": 7649,
     "svgBytes": 421096,
-    "svgHash": "cb8e408aeb1d17254c57a7247c040e7e99531de9518e286814733584d94c31ba"
+    "svgHash": "01792fc372be12b9cf524309896a09c2cb253286da8ddcbf56ed28f9ad62bfab"
   },
   "ref-emf-corpus/emf-corrupted/bad_corrupted_2014-12-14-080539.emf": {
     "status": "ok",
@@ -2906,7 +2906,7 @@
     "type": "emf",
     "records": 603,
     "svgBytes": 110590,
-    "svgHash": "6b966dbd93741986d3020255ca5cce97668b5fe8de819590980b3b4250d982ab"
+    "svgHash": "e21b6ca6e9669ec5b6515a5ce07fff1ee261e69ec58f07987963456eeaf007ae"
   },
   "ref-emf-corpus/emf-corrupted/bad_corrupted_2017-02-11-230400.emf": {
     "status": "ok",
@@ -2920,7 +2920,7 @@
     "type": "emf",
     "records": 396,
     "svgBytes": 386917,
-    "svgHash": "a7168702be3c7098b1b2e20adb9defc030148a5df4b5ddf7cdfe0bc2706faf4b"
+    "svgHash": "387cf4ad65a6259c86b751d266719816b55f6bfec3abb7ee18593e7117defc94"
   },
   "ref-emf-corpus/emf-corrupted/bad_corrupted_2017-05-12-074000.emf": {
     "status": "ok",
@@ -3081,7 +3081,7 @@
     "type": "emf",
     "records": 478,
     "svgBytes": 449197,
-    "svgHash": "81e3faad987fcc817a42ec5b47788d7184287b2b8b59e5d6ff8149249a78a068"
+    "svgHash": "d85e4f8f97a2f43b419a2588bae197ef9b0a19007e2a3bcfc0a1afe276a797e3"
   },
   "ref-emf-corpus/emf-valid/test-001.emf": {
     "status": "ok",
@@ -3298,7 +3298,7 @@
     "type": "emf",
     "records": 79055,
     "svgBytes": 4499799,
-    "svgHash": "914f594d8f25331de5d29110e0635dc69a95fd7861a44e53ecaa5051fb25a6c7"
+    "svgHash": "d7aaac5b5d6c19c24ba496df044d06a43ce9cbfb962a18504cd8d9832cf847ae"
   },
   "ref-emf-corpus/emf-valid/test-032.emf": {
     "status": "ok",
@@ -3354,14 +3354,14 @@
     "type": "emf",
     "records": 1953,
     "svgBytes": 218274,
-    "svgHash": "b98f9d851a6cd0ef62e4439b23370f3b4dc550e4f9e59b4cbe69a994a6e795bc"
+    "svgHash": "7cbe24bac047461c13e5c6d8125bc5a473350ba6a5ac199881f49ff10f66b4f1"
   },
   "ref-emf-corpus/emf-valid/test-040.emf": {
     "status": "ok",
     "type": "emf",
     "records": 1953,
     "svgBytes": 187018,
-    "svgHash": "86eccdc8bc95e7a17553dfc245674aa35347545f177d8d4f2bf5edbc108fa112"
+    "svgHash": "807dec04791fb408856cecd5e23c5172194454ab198a9268ba7cc13955a6ef85"
   },
   "ref-emf-corpus/emf-valid/test-041.emf": {
     "status": "ok",
@@ -3606,7 +3606,7 @@
     "type": "emf",
     "records": 478,
     "svgBytes": 449197,
-    "svgHash": "434f9f66432a31d3d8a378470d7d962fc88db5bf151bf0d85b906f9f70ce5854"
+    "svgHash": "a282f0ab576a6577d83679bc6b542b44eded29e2b03958c9997aad3653fdfd25"
   },
   "ref-emf-corpus/emf-valid/test-076.emf": {
     "status": "ok",
@@ -3907,7 +3907,7 @@
     "type": "emf",
     "records": 252,
     "svgBytes": 3990537,
-    "svgHash": "539ff30b889603c9fef4209cf55b54f45d587857da3c19140ed93ad213aa8070"
+    "svgHash": "32153ac5b73b51002457629189015940b33b8ccb4213f01d9dabfaf4cf061bf6"
   },
   "ref-emf-corpus/emf-valid/test-119.emf": {
     "status": "ok",
@@ -3921,7 +3921,7 @@
     "type": "emf",
     "records": 396,
     "svgBytes": 386917,
-    "svgHash": "d5d230aa2a55465c60efcb9dd0c3aba5302c4d345b0cf1ac8a0d7f4573729ac9"
+    "svgHash": "e9bb6d4a8b0e0558e30900b3bc2329ca030f32c07984c0c7c92a3743d0a43b2e"
   },
   "ref-emf-corpus/emf-valid/test-121.emf": {
     "status": "ok",
@@ -4075,7 +4075,7 @@
     "type": "emf",
     "records": 7649,
     "svgBytes": 421207,
-    "svgHash": "7db93018540929a4451da659ea441b860a0ff90ced40cd85568d530fead1f4a7"
+    "svgHash": "690f159f01a9f70f24690a94c0075a03a8662a853e09ec99a147a79c77538dce"
   },
   "ref-emf-corpus/emf-valid/test-143.emf": {
     "status": "ok",
@@ -4131,7 +4131,7 @@
     "type": "emf",
     "records": 11944,
     "svgBytes": 383065,
-    "svgHash": "722e9d9a4adac708c404ed3c937bf24cf4dc8fcdff5b950ef2b5098f8041703d"
+    "svgHash": "830b88bc10d37ab600a14aa82c2f12a13a548b6a641c35c53fb74f58c7bb184d"
   },
   "ref-emf-corpus/emf-valid/test-152.emf": {
     "status": "ok",
@@ -4222,7 +4222,7 @@
     "type": "emf",
     "records": 700,
     "svgBytes": 5428041,
-    "svgHash": "d7b1e73b077cfe0949c424ab66e865743e328f61719c8ab70e32d538e17e87d1"
+    "svgHash": "5de69acd255a895f19b1661a5ed5e99cdf20fbbee7975b74d5d82fa4bd06eb27"
   },
   "ref-emf-corpus/emf-valid/test-165.emf": {
     "status": "ok",
@@ -4404,7 +4404,7 @@
     "type": "placeable-wmf",
     "records": 1112,
     "svgBytes": 371663,
-    "svgHash": "18640745fbedcc3fa21735cbc4f1921eca6c797072cea5a23b1b2d3c4061b398"
+    "svgHash": "1877229f42d0f34b7799ebbbdd41d1b213d348577f6bcb33dd169824f6bde4c6"
   },
   "sample-wmf/vegetable.wmf": {
     "status": "ok",

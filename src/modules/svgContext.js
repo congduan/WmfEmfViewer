@@ -380,6 +380,9 @@ class SvgContext {
         // 保存像素数据，getSvg() 时编码为 PNG 内嵌。
         // dw/dh：可选显示尺寸（缩放绘制目标大小），缺省为位图像素尺寸
         if (!imageData || !imageData.data || !imageData.width || !imageData.height) return;
+        // 在节点流中占位，保持与矢量图元的绘制顺序（z 序）：test-118 的表格位图
+        // 记录夹在圈注路径记录之间，若统一追加到末尾会把先画的椭圆圈注盖住。
+        const idx = this._images.length;
         this._images.push({
             data: new Uint8ClampedArray(imageData.data),
             width: imageData.width,
@@ -389,6 +392,7 @@ class SvgContext {
             dw: dw || imageData.width,
             dh: dh || imageData.height,
         });
+        this._nodes.push('\u0000IMG' + idx + '\u0000');
     }
 
     // 最小 PNG 编码器（zlib 无压缩块 + CRC32），跨环境可用（无需 canvas/zlib）
@@ -573,14 +577,16 @@ class SvgContext {
     }
 
     getSvg() {
-        // 位图节点先于其他节点尾部输出（保持绘制顺序：putImageData 发生在绘制流中，
-        // 简化处理为按调用顺序追加，与 _nodes 交织会有细微差异，位图记录通常独立成块）
-        for (const img of this._images) {
+        // 位图按 putImageData 调用顺序原位编码（节点流中的 \u0000IMG<n>\u0000 占位标记）
+        const imgMarkup = new Map();
+        for (let i = 0; i < this._images.length; i++) {
+            const img = this._images[i];
             try {
                 const href = this._pngBase64(img);
-                this._nodes.push(
+                imgMarkup.set(i,
                     '<image x="' + this._fmt(img.dx) + '" y="' + this._fmt(img.dy) + '"' +
                     ' width="' + this._fmt(img.dw) + '" height="' + this._fmt(img.dh) + '"' +
+                    (this._state.clip ? ' clip-path="' + this._state.clip + '"' : '') +
                     ' href="' + href + '" preserveAspectRatio="none" />'
                 );
             } catch (e) { /* 编码失败则跳过该位图 */ }
@@ -593,12 +599,19 @@ class SvgContext {
         const defs = this._defs.length
             ? '<defs>' + this._defs.join('') + '</defs>'
             : '';
+        const nodes = this._nodes.map((n) => {
+            if (n.length > 1 && n.charCodeAt(0) === 0) {
+                const idx = parseInt(n.slice(4, -1), 10);
+                return imgMarkup.get(idx) || '';
+            }
+            return n;
+        });
         return (
             '<?xml version="1.0" encoding="UTF-8"?>\n' +
             '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"' +
             ' width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">\n' +
             defs + '\n' +
-            this._nodes.join('\n') + '\n' +
+            nodes.join('\n') + '\n' +
             '</svg>\n'
         );
     }

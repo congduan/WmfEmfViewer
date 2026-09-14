@@ -1538,6 +1538,7 @@ class EmfDrawer {
 
       const palCount = biBitCount <= 8 ? (biClrUsed || (1 << biBitCount)) : 0;
       const palette = [];
+      let anyPaletteAlpha = false; // 颜色表 reserved 字节是否存在非 0（参考实现 alpha 规则）
       if (opts.iUsage === 1 && this.currentPalette && this.currentPalette.entries && this.currentPalette.entries.length) {
         // DIB_PAL_COLORS：颜色表每项为 2 字节逻辑调色板索引（对齐 POI HemfFill 对 iUsageSrc 的处理）
         for (let i = 0; i < palCount; i++) {
@@ -1551,7 +1552,10 @@ class EmfDrawer {
         for (let i = 0; i < palCount; i++) {
           const o = bmi + biSize + i * 4;
           if (o + 4 > data.length) break;
-          palette.push([data[o + 2], data[o + 1], data[o], 255]); // BGR -> RGB
+          // reserved 字节作为 alpha 记录（参考实现 DIB_to_RGBA：a = U_BGRAGetA(color)）
+          const a = data[o + 3];
+          if (a !== 0) anyPaletteAlpha = true;
+          palette.push([data[o + 2], data[o + 1], data[o], a]); // BGR -> RGB
         }
       }
 
@@ -1588,18 +1592,18 @@ class EmfDrawer {
               if (o >= end) continue;
               const idx = (data[o] >> (7 - (x & 7))) & 1;
               const c = palette[idx] || [0, 0, 0, 255];
-              r = c[0]; g = c[1]; b = c[2];
+              r = c[0]; g = c[1]; b = c[2]; a = c[3];
             } else if (biBitCount === 4) {
               const o = rowOff + (x >> 1);
               if (o >= end) continue;
               const idx = (x & 1) === 0 ? (data[o] >> 4) : (data[o] & 0x0F);
               const c = palette[idx] || [0, 0, 0, 255];
-              r = c[0]; g = c[1]; b = c[2];
+              r = c[0]; g = c[1]; b = c[2]; a = c[3];
             } else if (biBitCount === 8) {
               const o = rowOff + x;
               if (o >= end) continue;
               const c = palette[data[o]] || [0, 0, 0, 255];
-              r = c[0]; g = c[1]; b = c[2];
+              r = c[0]; g = c[1]; b = c[2]; a = c[3];
             } else if (biBitCount === 16) {
               const o = rowOff + x * 2;
               if (o + 2 > end) continue;
@@ -1670,12 +1674,24 @@ class EmfDrawer {
         return null; // BI_JPEG/BI_PNG 等暂不支持
       }
 
-      // 32bpp alpha 回填（参考实现 rgb2png：alpha 通道全 0 → 全体强制 0xFF；
-      // 任一非 0 → 按原始逐像素 alpha 输出，rsvg 合成到白底即呈半透明发白观感）。
-      // 注意 ALPHA_BLEND 的 useAlpha 路径已直接写逐像素 alpha，不在此覆盖。
+      // 32bpp alpha 回填：非 useAlpha 路径在循环内按不透明写入，这里若存在
+      // 非 0 的原始 alpha 字节则按参考实现回填逐像素 alpha。
       if (rawAlpha && anyAlpha32 && !useAlpha && constantAlpha >= 255 && transparent === undefined) {
         for (let i = 0; i < rawAlpha.length; i++) {
           out[i * 4 + 3] = rawAlpha[i];
+        }
+      }
+
+      // 调色板类（1/4/8bpp）alpha 来自颜色表 reserved 字节（参考实现
+      // DIB_to_RGBA：a = U_BGRAGetA(ct[index])）。全 0 → alpha 通道视为空，
+      // 强制整体不透明（rgb2png alpha_channel_empty 规则）；有非 0 则保留逐像素值。
+      if (!useAlpha && constantAlpha >= 255 && transparent === undefined && biBitCount <= 8 && biCompression !== 1 && biCompression !== 2) {
+        let allZero = true;
+        for (let i = 0; i < out.length; i += 4) {
+          if (out[i + 3] !== 0) { allZero = false; break; }
+        }
+        if (allZero) {
+          for (let i = 3; i < out.length; i += 4) out[i] = 255;
         }
       }
 
@@ -1695,8 +1711,12 @@ class EmfDrawer {
   _drawDecodedDib(dib, destX, destY, destW, destH) {
     if (!dib || destW === 0 || destH === 0) return;
     const t1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-    // 尺寸向量：映射的完整线性部分（world 线性 × window/viewport 比例）
-    const size = this.coordinateTransformer.mapSize(destW, destH);
+    // 尺寸向量：映射线性部分。mapSizeAsPoint（复刻 ref point_cal(cDest) 缺陷，
+    // 含 viewportOrg 放大）仅对带 __pointCalSize 标记的记录启用
+    // （有源 DIB 的 STRETCHDIBITS，见 processEmfStretchDibBits）。
+    const size = dib.__pointCalSize
+      ? this.coordinateTransformer.mapSizeAsPoint(destW, destH)
+      : this.coordinateTransformer.mapSize(destW, destH);
     let x = t1.x;
     let y = t1.y;
     let w = size.x;
@@ -1801,7 +1821,9 @@ class EmfDrawer {
     if (this._bltSolidRop(dwRop, xDest, yDest, cxDest, cyDest)) return;
     const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
     if (dib) {
-      // 源矩形裁剪：按 cxSrc/cySrc 与源偏移取子图（简化：整图贴到目标大小）
+      // 源矩形裁剪：按 cxSrc/cySrc 与源偏移取子图（简化：整图贴到目标大小）。
+      // 注意：STRETCHBLT 不启用 pointCal 尺寸（ref 对 1bpp 图案小图的合成语义
+      // 未完全验证，实证 net 负收益：test-142 的透明竖条语义未复现）。
       this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
     }
   }
@@ -1851,6 +1873,8 @@ class EmfDrawer {
         }
         use = { width: sw, height: sh, data: sub.data };
       }
+      // 参考实现对 STRETCHDIBITS 的尺寸用 point_cal(cDest)（含 viewportOrg 放大缺陷）
+      use.__pointCalSize = true;
       this._drawDecodedDib(use, xDest, yDest, cxDest, cyDest);
     }
   }
