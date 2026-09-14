@@ -178,6 +178,28 @@ class CoordinateTransformer {
     }
 
     /**
+     * 映射一个「尺寸向量」（两点之差，不含平移）到设备坐标。
+     * 与 transform() 的线性部分完全一致：先 world 变换线性部分（行向量约定），
+     * 再 window/viewport 缩放（apply=false 时跳过，同 transform 原语义）。
+     * 供位图 BLT 类记录把带符号的 (cxDest, cyDest) 映射为目标宽高使用
+     * （对齐 libemf2svg 对 size 做 point_cal 的行为）。
+     * @param {number} dx
+     * @param {number} dy
+     * @returns {Point}
+     */
+    mapSize(dx, dy) {
+        if (this.worldM11 !== 1 || this.worldM12 !== 0 || this.worldM21 !== 0 ||
+            this.worldM22 !== 1) {
+            const wx = dx * this.worldM11 + dy * this.worldM21;
+            const wy = dx * this.worldM12 + dy * this.worldM22;
+            dx = wx; dy = wy;
+        }
+        const vp = this._getViewportScale();
+        if (!vp.apply) return { x: dx, y: dy };
+        return { x: dx * vp.sx, y: dy * vp.sy };
+    }
+
+    /**
      * 当前 world 变换的线性缩放系数（用于笔宽换算）。
      * 仅 world 变换参与：参考实现（libemf2svg）把 world 变换作为 SVG matrix
      * 输出，笔宽在 matrix 内因此被等比缩放；而 window/viewport 比例由参考实现

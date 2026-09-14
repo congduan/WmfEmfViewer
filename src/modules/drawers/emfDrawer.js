@@ -1572,6 +1572,10 @@ class EmfDrawer {
         out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = a;
       };
 
+      // 32bpp：记录原始 alpha 字节（参考实现 rgb2png 的 alpha 通道判定规则）
+      const rawAlpha = biBitCount === 32 ? new Uint8Array(width * height) : null;
+      let anyAlpha32 = false;
+
       if (biCompression === 0 || biCompression === 3) { // BI_RGB / BI_BITFIELDS
         const rowSize = Math.ceil((width * biBitCount) / 32) * 4;
         for (let y = 0; y < height; y++) {
@@ -1611,7 +1615,10 @@ class EmfDrawer {
               const o = rowOff + x * 4;
               if (o + 4 > end) continue;
               b = data[o]; g = data[o + 1]; r = data[o + 2];
-              a = useAlpha ? data[o + 3] : 255; // BI_RGB 时 alpha 通道无意义，视为不透明
+              // 记录原始 alpha 字节（参考实现 rgb2png：全 0 → 强制不透明；任一非 0 → 逐像素 alpha）
+              if (rawAlpha) rawAlpha[y * width + x] = data[o + 3];
+              if (data[o + 3] !== 0) anyAlpha32 = true;
+              a = useAlpha ? data[o + 3] : 255;
             }
             putPx(x, y, r, g, b, a);
           }
@@ -1663,6 +1670,15 @@ class EmfDrawer {
         return null; // BI_JPEG/BI_PNG 等暂不支持
       }
 
+      // 32bpp alpha 回填（参考实现 rgb2png：alpha 通道全 0 → 全体强制 0xFF；
+      // 任一非 0 → 按原始逐像素 alpha 输出，rsvg 合成到白底即呈半透明发白观感）。
+      // 注意 ALPHA_BLEND 的 useAlpha 路径已直接写逐像素 alpha，不在此覆盖。
+      if (rawAlpha && anyAlpha32 && !useAlpha && constantAlpha >= 255 && transparent === undefined) {
+        for (let i = 0; i < rawAlpha.length; i++) {
+          out[i * 4 + 3] = rawAlpha[i];
+        }
+      }
+
       return { width, height, data: out };
     } catch (e) {
       console.log('DIB decode failed:', e.message);
@@ -1671,30 +1687,40 @@ class EmfDrawer {
   }
 
   // 将解码后的 DIB 绘制到目标矩形（支持缩放）
+  // 参考实现（libemf2svg U_EMRSTRETCHDIBITS_draw）语义：
+  //   position = map(Dest)，size = 映射的线性缩放作用于**带符号** (cxDest, cyDest)。
+  // 不做「min/max 归一化矩形」：负 cyDest 经 y 翻转映射（sy<0，如 winExt.y<0）自然
+  // 转为正高度、矩形从 map(yDest) 向下延伸；旧实现在此会少画恰好一个图高
+  // （test-041~049 簇 RMSE 0.12 的主因之一）。
   _drawDecodedDib(dib, destX, destY, destW, destH) {
     if (!dib || destW === 0 || destH === 0) return;
     const t1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-    const t2 = this.coordinateTransformer.transform(destX + Math.abs(destW), destY + Math.abs(destH), this.ctx.canvas.width, this.ctx.canvas.height);
-    const x = Math.min(t1.x, t2.x);
-    const y = Math.min(t1.y, t2.y);
-    const w = Math.abs(t2.x - t1.x);
-    const h = Math.abs(t2.y - t1.y);
-    if (w <= 0 || h <= 0) return;
-
-    // 镜像语义：目标宽/高为负时翻转源图
-    if (destW < 0 || destH < 0) {
-      const flipped = this.ctx.createImageData(dib.width, dib.height);
-      for (let sy = 0; sy < dib.height; sy++) {
-        for (let sx = 0; sx < dib.width; sx++) {
-          const dx2 = destW < 0 ? dib.width - 1 - sx : sx;
-          const dy2 = destH < 0 ? dib.height - 1 - sy : sy;
-          for (let k = 0; k < 4; k++) {
-            flipped.data[(dy2 * dib.width + dx2) * 4 + k] = dib.data[(sy * dib.width + sx) * 4 + k];
+    // 尺寸向量：映射的完整线性部分（world 线性 × window/viewport 比例）
+    const size = this.coordinateTransformer.mapSize(destW, destH);
+    let x = t1.x;
+    let y = t1.y;
+    let w = size.x;
+    let h = size.y;
+    if (w <= 0 || h <= 0) {
+      // SVG 负宽/高无效：镜像内容并取绝对值（GDI 负目标尺寸 = 镜像语义）。
+      // 参考实现直接把负值写进 SVG 导致 rsvg 不渲染，此处取近似（镜像）。
+      if (w < 0 || h < 0) {
+        const flipped = this.ctx.createImageData(dib.width, dib.height);
+        for (let sy = 0; sy < dib.height; sy++) {
+          for (let sx = 0; sx < dib.width; sx++) {
+            const dx2 = w < 0 ? dib.width - 1 - sx : sx;
+            const dy2 = h < 0 ? dib.height - 1 - sy : sy;
+            for (let k = 0; k < 4; k++) {
+              flipped.data[(dy2 * dib.width + dx2) * 4 + k] = dib.data[(sy * dib.width + sx) * 4 + k];
+            }
           }
         }
+        dib = flipped;
       }
-      dib = flipped;
+      w = Math.abs(w);
+      h = Math.abs(h);
     }
+    if (w <= 0 || h <= 0) return;
 
     // 浏览器/真实 canvas：临时 canvas + drawImage；SvgContext：putImageData（SVG image 天然缩放）
     const canvasCtor = (typeof document === 'undefined' && this.ctx.canvas)
