@@ -393,9 +393,10 @@ class SvgContext {
         return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
     }
 
-    putImageData(imageData, dx, dy, dw, dh) {
+    putImageData(imageData, dx, dy, dw, dh, opts) {
         // 保存像素数据，getSvg() 时编码为 PNG 内嵌。
         // dw/dh：可选显示尺寸（缩放绘制目标大小），缺省为位图像素尺寸
+        // opts.stretch：目标框带 world 各向异性，需要 preserveAspectRatio="none"
         if (!imageData || !imageData.data || !imageData.width || !imageData.height) return;
         // 在节点流中占位，保持与矢量图元的绘制顺序（z 序）：test-118 的表格位图
         // 记录夹在圈注路径记录之间，若统一追加到末尾会把先画的椭圆圈注盖住。
@@ -415,6 +416,8 @@ class SvgContext {
             // test-142：138 条 STRETCHBLT 的位图 2x425 高，被裁剪区截到 72px；
             // 用错 clip（或无 clip）会让黑条整根画出来，RMSE 0.076→0.263。
             clip: this._state.clip || null,
+            // 目标框是否带 world 各向异性（由绘制层判定并透传）
+            stretch: !!(opts && opts.stretch),
         });
         this._nodes.push('\u0000IMG' + idx + '\u0000');
     }
@@ -611,12 +614,18 @@ class SvgContext {
                     '<image x="' + this._fmt(img.dx) + '" y="' + this._fmt(img.dy) + '"' +
                     ' width="' + this._fmt(img.dw) + '" height="' + this._fmt(img.dh) + '"' +
                     (img.clip ? ' clip-path="' + img.clip + '"' : '') +
-                    // ⚠️ **不写** preserveAspectRatio：SVG 默认是 xMidYMid meet（等比
-                    // 缩放并居中，即 letterbox 到目标框内）。参考实现的 <image> 没有该
-                    // 属性，故必须保持默认。写成 "none"（强行拉伸）会让源图宽高比与
-                    // 目标框差很大时严重失真：test-142 的 STRETCHBLT 源图 4x2 被拉到
-                    // 1.99x425（point_cal 把尺寸当点映射后的畸形框），"none" 画出整根
-                    // 425px 黑白柱，而 ref 的 meet 只占 ~1px 高。
+                    // ⚠️ 默认**不写** preserveAspectRatio：SVG 默认值是 xMidYMid meet
+                    // （等比缩放并居中，即 letterbox 到目标框内），而参考实现的
+                    // <image> 没有该属性，故必须保持默认。写成 "none"（强行拉伸）
+                    // 会在源图宽高比与目标框差很大时严重失真：test-142 的 STRETCHBLT
+                    // 源图 4x2 被 point_cal 映射成 1.99x425 的畸形框，"none" 会画出整根
+                    // 425px 黑白柱，而 ref 的 meet 只占 ~1px 高（0.0755 vs 0.263）。
+                    // 例外：目标框的**各向异性来自 world 变换**时必须用 "none"——
+                    // 参考实现把 world 放在外层 <g matrix>，point_cal(cDest) 得到的框
+                    // 不含各向异性，各向异性由组施加；我们是烘焙式实现，若用默认 meet
+                    // 会被 letterbox 掉。test-155 的 world=[0.5877,0,0,0.5841] 即属此类
+                    // （RMSE 0.0489 vs 0.0303）。该标记由绘制层 isWorldAnisotropic() 判定。
+                    (img.stretch ? ' preserveAspectRatio="none"' : '') +
                     ' href="' + href + '" />'
                 );
             } catch (e) { /* 编码失败则跳过该位图 */ }

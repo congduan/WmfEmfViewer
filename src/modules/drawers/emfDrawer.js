@@ -1794,7 +1794,10 @@ class EmfDrawer {
       tempCtx.putImageData(this._wrapImageData(dib), 0, 0);
       this.ctx.drawImage(tempCanvas, x, y, w, h);
     } else {
-      this.ctx.putImageData(this._wrapImageData(dib), x, y, w, h);
+      // stretch：只有当 world 变换非等比例才需要把各向异性施加到 <image> 上
+      // （参考实现用外层 <g matrix> 承载，我们烘焙进框，故需 "none" 阻止 letterbox）。
+      this.ctx.putImageData(this._wrapImageData(dib), x, y, w, h,
+        { stretch: this.coordinateTransformer.isWorldAnisotropic() });
     }
     console.log('  DIB drawn at:', x, y, w, h, '(source', dib.width, 'x', dib.height + ')');
   }

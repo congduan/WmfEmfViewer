@@ -292,6 +292,28 @@ class CoordinateTransformer {
   }
 
   /**
+   * world 变换是否「非等比」（两轴缩放不同）。
+   *
+   * 参考实现把 world 矩阵放在外层 `<g transform="matrix(...)">` 里，而
+   * `point_cal(cDest)` 只含统一的 `states->scaling`——因此 ref 的 `<image>`
+   * 框**不含** world 的各向异性，各向异性由外层组施加。我们是烘焙式实现，
+   * world 的各向异性会进到框里；此时必须用 `preserveAspectRatio="none"` 把
+   * 它施加回去，否则 SVG 默认的 `xMidYMid meet` 会把各向异性 letterbox 掉。
+   *
+   * test-155：world = [0.587692,0,0,0.584140,307,118]（= ref 的组矩阵），
+   * 各向异性 0.6%，butter 后 RMSE 0.0303→0.0489。
+   * test-142：无 world（恒等组）→ 默认 meet 与 ref 一致（0.0755→0.0206）。
+   *
+   * @returns {boolean}
+   */
+  isWorldAnisotropic() {
+    const sx = Math.hypot(this.worldM11, this.worldM12);
+    const sy = Math.hypot(this.worldM21, this.worldM22);
+    if (!(sx > 0) || !(sy > 0)) return false;
+    return Math.abs(sx / sy - 1) > 1e-9;
+  }
+
+  /**
    * 逻辑坐标 -> 设备坐标。
    * 参考实现（libemf2svg）的复合顺序：SVG 根 translate(-deviceOrg) 包裹
    * world 矩阵组，组内坐标为 point_cal 结果。即：
