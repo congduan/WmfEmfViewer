@@ -349,7 +349,10 @@ class SvgContext {
         // 否则 translate 会再叠加一次（test-016 的 y 轴标签横向偏 14.4px）。
         // 旋转分支的触发与参考实现一致：`font_escapement != 0`（只要字体带 escapement，
         // 即使截断后角度为 0°，ref 仍输出 rotate(0, …) translate(0, 0.9fs) 形态，
-        // 锚点因此带 0.9 字号偏移）。transformMatrix.escapement 由绘制层透传。
+        // 锚点因此带 0.9 字号偏移）。transformMatrix.escapement 由绘制层透传，
+        // 且绘制层已按参考实现归一化 `lfEscapement % 3600`——3600(=360°) 与 0 等价，
+        // ref 对这种字体**完全**不输出 rotate（test-080 的 30 个字体里 29 个 esc=3600
+        // 全部无 rotate，只有 esc=900 的 y 轴标签输出 rotate(-90)）。
         // escapement == 0（旋转只因坐标映射产生）时不走该分支：ref 此时根本不输出
         // rotate 属性（文字靠外层 world 组旋转），形态与带 escapement 的文字不同。
         const isRotated = !!(transformMatrix && transformMatrix.escapement);

@@ -335,18 +335,38 @@ class EmfDrawer {
       if (!obj._isStockPen) this._penStockBlack = false;
       this.ctx.strokeStyle = isNullPen ? 'transparent' : obj.color;
       if (!isNullPen) {
-        // 线宽按当前 window→viewport 缩放换算到像素；cosmetic(PS_COSMETIC=0x10) 固定 1px
+        // 线宽按当前 window→viewport 比例换算；对照参考实现 width_stroke()：
+        //   tmp_w = stroke_width × scaling；若结果 < 1 输出 "1px"，否则输出 %.4f（**不取整**）。
+        // 旧实现用 Math.max(1, Math.round(w*scale)) 取整，笔宽 2.4→2、1.6→2，
+        // 细线图元的线宽系统性偏离 ref（test-153 的 2.6667 被取整成 3 → 该样本
+        // RMSE 0.0234；test-154 同理 0.0301）。world 缩放不在此处（由 SvgContext 的
+        // strokeScaleProvider 按 √|det(world)| 统一施加，与 ref 的 world 组同构）。
         const scale = this.coordinateTransformer.getScale();
         const w = obj.width || 1;
-        this.ctx.lineWidth = Math.max(1, Math.round(w * Math.abs(scale.x || 1)));
+        const wMap = w * Math.abs(scale.x || 1);
+        this.ctx.lineWidth = wMap < 1 ? 1 : wMap;
         // Pen Style → SVG stroke-dasharray
         // PS_SOLID=0 / PS_DASH=1 / PS_DOT=2 / PS_DASHDOT=3 / PS_DASHDOTDOT=4
+        // 逐字对照参考实现 stroke_draw()（libemf2svg src/lib/emf2svg_utils.c）：
+        //   unit_stroke = stroke_width × scaling;  dash_len = 5×u;  dot_len = 1×u;
+        //   PS_DASH       → dash,dash
+        //   PS_DOT        → dot,dot
+        //   PS_DASHDOT    → dash,dash,dot,dash      ← 末位是 dash（不是 dot）
+        //   PS_DASHDOTDOT → dash,dash,dot,dot,dot,dash
+        // 旧公式（[3w,1w] / [3w,1w,1w,1w] / …）长度只有 ref 的 0.6 倍。
+        // u 取**原始笔宽 w** 而非 wMap：全语料含虚线的 6 个样本实测 ref 输出
+        // "25,25" / "1,1" / "35,35,7,35" / "40,40,8,8,8,40"，对应 u = 5/1/7/8 = w，
+        // 逐位吻合（若乘 window/viewport 比例会得到 0.96 等非整数、偏离 ref）。
         const ps = obj.style & 0xF;
         let dash = [];
-        if (ps === 1) dash = [3 * w, 1 * w];                // PS_DASH
-        else if (ps === 2) dash = [1 * w, 1 * w];           // PS_DOT
-        else if (ps === 3) dash = [3 * w, 1 * w, 1 * w, 1 * w];              // PS_DASHDOT
-        else if (ps === 4) dash = [3 * w, 1 * w, 1 * w, 1 * w, 1 * w, 1 * w]; // PS_DASHDOTDOT
+        if (ps >= 1 && ps <= 4) {
+          const u = w;
+          const D = 5 * u, T = 1 * u;
+          if (ps === 1) dash = [D, D];                 // PS_DASH
+          else if (ps === 2) dash = [T, T];            // PS_DOT
+          else if (ps === 3) dash = [D, D, T, D];      // PS_DASHDOT
+          else dash = [D, D, T, T, T, D];              // PS_DASHDOTDOT
+        }
         if (typeof this.ctx.setLineDash === 'function') this.ctx.setLineDash(dash);
       } else {
         // NULL_PEN：清空 dash 避免残留
@@ -1502,8 +1522,13 @@ class EmfDrawer {
           // 输出 rotate(0, x, y+0.9fs) translate(0, 0.9fs)——锚点带 0.9fs 偏移；
           // 若我们按「角度为 0」走非旋转路径，会用 SETTEXTALIGN 的折算值（可能为 0），
           // 与该文本差 0.9 字号（test-164 的 0.4° 字体即属此类）。
-          const rotated = escapement !== 0 || rotDeg !== 0;
-          this.ctx.fillText(text, dev.x, dev.y, rotated ? { rotate: rotDeg, escapement } : undefined);
+          // lfEscapement 单位为 0.1°：3600(=360°) 与 0 等价（整圈）。参考实现把整圈
+          // 旋转归一化掉——esc=3600 的字体 ref 完全不输出 rotate，esc=900 才输出
+          // rotate(-90)。只判非零会把 360° 当旋转，多带一次 translate(0, 0.9fs)
+          // 偏移（test-080/056/060/069/082/105/108 文字整体下移 0.9 字号）。
+          const escNorm = escapement % 3600; // 与 ref 逐字一致：lfEscapement % 3600
+          const rotated = escNorm !== 0 || rotDeg !== 0;
+          this.ctx.fillText(text, dev.x, dev.y, rotated ? { rotate: rotDeg, escapement: escNorm } : undefined);
           // offDx 字符间距数组（MS-EMF 2.2.45）存在但有意不使用：参考实现
           // （libemf2svg/浏览器自然字距）忽略 Dx，整串一次性输出。实测逐字 Dx
           // 排布为负收益（test-131 0.102→0.006、test-184/120/080/075/000 等全面
