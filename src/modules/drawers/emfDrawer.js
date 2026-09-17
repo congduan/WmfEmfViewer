@@ -1458,7 +1458,12 @@ class EmfDrawer {
           let matrix = this.coordinateTransformer.getSvgMatrix();
           if (escapement !== 0) {
             // GDI lfEscapement：单位 0.1°，正值对应 SVG 顺时针（ref 输出 rotate(-escapement/10)）。
-            const deg = -escapement / 10;
+            // ⚠️ 参考实现按**整数度**旋转：libemf2svg emf2svg_utils.c text_style_draw 的
+            //    `orientation * (int)escapement / 10` 是 C 整数除法（向零截断），
+            //    于是 escapement=695（69.5°）输出 rotate(69)、2028（202.8°）输出 202。
+            //    test-164 有 75 个非整度字体（0.4°/69.5°/202.8°/291.1°…），
+            //    不截断会让每条旋转文字都偏 0.1~0.9°，是该样本的主要残差来源。
+            const deg = -Math.trunc(escapement / 10);
             const rad = deg * Math.PI / 180;
             const cos = Math.cos(rad), sin = Math.sin(rad);
             // 先绕逻辑参考点 (x, y) 旋转，再套 matrix（列向量约定：rot 先应用，故 R * M 顺序为 matrix 后乘）。
@@ -1492,7 +1497,13 @@ class EmfDrawer {
             rotDeg = Math.atan2(matrix.b, matrix.a) * 180 / Math.PI;
           }
           this.ctx.font = `${italic}${weight}${rawHeight * gscale}px "${face}"`;
-          this.ctx.fillText(text, dev.x, dev.y, rotDeg ? { rotate: rotDeg } : undefined);
+          // 旋转分支的触发条件与参考实现一致：`font_escapement != 0`（而非角度非零）。
+          // ref 的 text_style_draw 只看 escapement，故 esc=4（0.4°）截断成 0° 时它仍
+          // 输出 rotate(0, x, y+0.9fs) translate(0, 0.9fs)——锚点带 0.9fs 偏移；
+          // 若我们按「角度为 0」走非旋转路径，会用 SETTEXTALIGN 的折算值（可能为 0），
+          // 与该文本差 0.9 字号（test-164 的 0.4° 字体即属此类）。
+          const rotated = escapement !== 0 || rotDeg !== 0;
+          this.ctx.fillText(text, dev.x, dev.y, rotated ? { rotate: rotDeg, escapement } : undefined);
           // offDx 字符间距数组（MS-EMF 2.2.45）存在但有意不使用：参考实现
           // （libemf2svg/浏览器自然字距）忽略 Dx，整串一次性输出。实测逐字 Dx
           // 排布为负收益（test-131 0.102→0.006、test-184/120/080/075/000 等全面

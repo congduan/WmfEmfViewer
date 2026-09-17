@@ -336,26 +336,40 @@ class SvgContext {
         // (refY - ourY)/fontSize = 0.8996~0.9003（10px 与 12px 两档字号），alphabetic
         // 文本 dy≈0。TA_BOTTOM 对称取 −0.1×字号（字符格 = 0.9 上伸 + 0.1 下伸）。
         const fs = f.sizeNum || 0;
-        const dy = this.textBaseline === 'top' ? 0.9 * fs
+        const dyBase = this.textBaseline === 'top' ? 0.9 * fs
             : this.textBaseline === 'bottom' ? -0.1 * fs : 0;
+        // 旋转文本：完全按参考实现的结构输出——
+        //   libemf2svg text_style_draw：
+        //     <text x=<point_cal(Org)> y=<point_cal(Org)>            ← y 属性**不加**偏移
+        //       transform="rotate(θ, X, Y + fs*0.9) translate(0, fs*0.9)">   ← 偏移只在变换里
+        //   且该分支**只**由 `font_escapement != 0` 触发，与 SETTEXTALIGN 无关。
+        // 变换列表从右向左作用：先 translate 再绕 (X, Y+0.9fs) 旋转，两者恰好抵消，
+        // 净效果 = 锚点落在 (X, Y+0.9fs) 且字形绕该点旋转（GDI 语义：参考点相对
+        // 字形的方位不随 escapement 改变）。**不能**把 0.9fs 同时写进 y 属性，
+        // 否则 translate 会再叠加一次（test-016 的 y 轴标签横向偏 14.4px）。
+        // 旋转分支的触发与参考实现一致：`font_escapement != 0`（只要字体带 escapement，
+        // 即使截断后角度为 0°，ref 仍输出 rotate(0, …) translate(0, 0.9fs) 形态，
+        // 锚点因此带 0.9 字号偏移）。transformMatrix.escapement 由绘制层透传。
+        // escapement == 0（旋转只因坐标映射产生）时不走该分支：ref 此时根本不输出
+        // rotate 属性（文字靠外层 world 组旋转），形态与带 escapement 的文字不同。
+        const isRotated = !!(transformMatrix && transformMatrix.escapement);
+        const dy = isRotated ? 0.9 * fs : dyBase;
         const yBase = y + dy;
-        // 可选旋转：{ rotate: 角度(度，SVG 顺时针为正) }，绕文本基线原点 (x, yBase) 旋转。
-        // 与参考实现 libemf2svg 同构：其旋转文本输出 rotate(θ, x, y+dy) translate(0, dy)。
-        // ⚠️ translate(0,dy) 不可省略：SVG transform 列表对坐标**先 translate 后 rotate**
-        // （从右向左作用），即 TA_TOP 的 0.9×字号 偏移沿**字形自身（旋转后）框架**施加——
-        // 这正是 GDI 语义（参考点相对字形的方位不随 escapement 改变）。θ=0 时与直接
-        // 把 dy 加进设备 y 等价；θ≠0 时差 R(θ)·(0,dy) 的位移（test-164 实证 41px 字形
-        // 偏移 37px）。 pivet 与 ref 一致落在 (x, y+dy)。
+        // y 属性：escapement 分支用未偏移的 y（偏移由 translate 承担）；否则用基线折算值
+        const yAttr = isRotated ? y : yBase;
         let xform = '';
-        if (transformMatrix && typeof transformMatrix.rotate === 'number' && transformMatrix.rotate !== 0) {
+        if (isRotated) {
+            xform = ' transform="rotate(' + this._fmt(transformMatrix.rotate) + ' ' +
+                this._fmt(x) + ' ' + this._fmt(yBase) + ') translate(0 ' + this._fmt(dy) + ')"';
+        } else if (transformMatrix && typeof transformMatrix.rotate === 'number' && transformMatrix.rotate !== 0) {
             xform = ' transform="rotate(' + this._fmt(transformMatrix.rotate) + ' ' +
                 this._fmt(x) + ' ' + this._fmt(yBase) + ')"';
-            if (dy !== 0) {
-                xform = xform.slice(0, -1) + ' translate(0 ' + this._fmt(dy) + ')"';
+            if (dyBase !== 0) {
+                xform = xform.slice(0, -1) + ' translate(0 ' + this._fmt(dyBase) + ')"';
             }
         }
         this._nodes.push(
-            '<text x="' + this._fmt(x) + '" y="' + this._fmt(yBase) + '" font-family="' + f.family + '" font-size="' + f.size + '"' +
+            '<text x="' + this._fmt(x) + '" y="' + this._fmt(yAttr) + '" font-family="' + f.family + '" font-size="' + f.size + '"' +
             ' font-style="' + f.style + '" font-weight="' + f.weight + '"' +
             ' text-anchor="' + anchor + '" dominant-baseline="alphabetic"' +
             ' fill="' + SvgContext._esc(this.fillStyle) + '" stroke="none" ' + this._attr() + xform + '>' + SvgContext._esc(text) + '</text>'
