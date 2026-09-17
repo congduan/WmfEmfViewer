@@ -256,6 +256,9 @@ class EmfDrawer {
     this.ctx.strokeStyle = '#000000'; // 黑色描边
     this.ctx.fillStyle = '#ffffff'; // 白色填充
     this.ctx.lineWidth = 1;
+    // 默认笔 = PS_SOLID|PS_COSMETIC|PS_ENDCAP_ROUND|PS_JOIN_ROUND（位域全 0）→ round/round
+    this.ctx.lineCap = 'round';
+    this.ctx.lineJoin = 'round';
     this.fillColor = '#ffffff';
     this.strokeColor = '#000000';
     console.log('Drawing styles set');
@@ -338,15 +341,59 @@ class EmfDrawer {
       // 显式创建的笔（非 stock）：不再视为"默认黑笔"
       if (!obj._isStockPen) this._penStockBlack = false;
       this.ctx.strokeStyle = isNullPen ? 'transparent' : obj.color;
+      // PS_ENDCAP_* (0x00000F00) / PS_JOIN_* (0x0000F000) → SVG stroke-linecap/linejoin。
+      // 逐字对照 libemf2svg stroke_draw()：
+      //   PS_ENDCAP_ROUND(0x000) → "round"；SQUARE(0x100) → "square"；FLAT(0x200) → "butt"
+      //   PS_JOIN_ROUND(0x0000)  → "round"；BEVEL(0x1000)  → "bevel"；MITER(0x2000) → "miter"
+      //   （其余值不输出属性，保持 SVG 默认）
+      // ⚠️ 两个枚举的 0 值都是 "ROUND"，因此 style=0 的普通笔 ref 也会输出
+      //    stroke-linecap="round" stroke-linejoin="round"；我们此前完全不输出，
+      //    于是每条折线的端头比 ref 少半个笔帽的墨量。test-032 有 4123 条短折线，
+      //    该差异足以让「线宽越粗越接近 ref」的假象出现（扫描 1.00→1.10 单调改善），
+      //    补上 cap/join 后线宽 1 才是真正的极小点。
+      // ⚠️ 但 **PS_NULL 笔不输出 caps**：ref 的 stroke_draw 首行即为
+      //     if ((stroke_mode & 0xFF) == U_PS_NULL) { no_stroke(); return; }
+      //   而 no_stroke() 只写 stroke-width + stroke(=填充色)，随后 fill_draw 写
+      //   fill，整条路径**没有** linecap/linejoin。我们若给空笔也输出 round，
+      //   会让「填充形状的 1px 同色伪描边」比 ref 多出圆角墨量：
+      //   test-008（22 条路径里 21 条空笔）0.0028 → 0.0312，test-007/132/133/134 同理。
+      this.ctx.lineCap = null;
+      this.ctx.lineJoin = null;
+      if (!isNullPen) {
+        switch (obj.style & 0x00000F00) {
+          case 0x000: this.ctx.lineCap = 'round'; break;
+          case 0x100: this.ctx.lineCap = 'square'; break;
+          case 0x200: this.ctx.lineCap = 'butt'; break;
+          default: break;
+        }
+        switch (obj.style & 0x0000F000) {
+          case 0x0000: this.ctx.lineJoin = 'round'; break;
+          case 0x1000: this.ctx.lineJoin = 'bevel'; break;
+          case 0x2000: this.ctx.lineJoin = 'miter'; break;
+          default: break;
+        }
+      }
       if (!isNullPen) {
         // 线宽按当前 window→viewport 比例换算；对照参考实现 width_stroke()：
-        //   tmp_w = stroke_width × scaling；若结果 < 1 输出 "1px"，否则输出 %.4f（**不取整**）。
+        //   tmp_w = scaleX(stroke_width) = stroke_width × mapMode缩放 × scaling；
+        //   若 tmp_w/scaling < 1 输出 "1px"，否则输出 %.4f（**不取整**）。
         // 旧实现用 Math.max(1, Math.round(w*scale)) 取整，笔宽 2.4→2、1.6→2，
         // 细线图元的线宽系统性偏离 ref（test-153 的 2.6667 被取整成 3 → 该样本
         // RMSE 0.0234；test-154 同理 0.0301）。world 缩放不在此处（由 SvgContext 的
         // strokeScaleProvider 按 √|det(world)| 统一施加，与 ref 的 world 组同构）。
+        //
+        // ⚠️ PS_COSMETIC / PS_GEOMETRIC 分叉（ref stroke_draw）：
+        //   switch (stroke_mode & 0x000F0000) {
+        //     case U_PS_COSMETIC:  width_stroke(states, out, 1);        ← 宽度恒为 1
+        //     case U_PS_GEOMETRIC: width_stroke(states, out, stroke_width);
+        //   }
+        // 即**只有** PS_GEOMETRIC(0x00010000) 的笔才使用声明的宽度，其余一律 1。
+        // test-171 的笔全是 style=0（COSMETIC）却声明了 4~20 的宽度，我们照读数
+        // 描边宽度放大到 1.16~5.84px，而 ref 输出 1.0000 → 那批折线成为该样本
+        // 最大残差来源。
+        const PS_GEOMETRIC = 0x00010000;
+        const w = (obj.style & 0x000F0000) === PS_GEOMETRIC ? (obj.width || 1) : 1;
         const scale = this.coordinateTransformer.getScale();
-        const w = obj.width || 1;
         const wMap = w * Math.abs(scale.x || 1);
         this.ctx.lineWidth = wMap < 1 ? 1 : wMap;
         // Pen Style → SVG stroke-dasharray
@@ -358,13 +405,16 @@ class EmfDrawer {
         //   PS_DASHDOT    → dash,dash,dot,dash      ← 末位是 dash（不是 dot）
         //   PS_DASHDOTDOT → dash,dash,dot,dot,dot,dash
         // 旧公式（[3w,1w] / [3w,1w,1w,1w] / …）长度只有 ref 的 0.6 倍。
-        // u 取**原始笔宽 w** 而非 wMap：全语料含虚线的 6 个样本实测 ref 输出
-        // "25,25" / "1,1" / "35,35,7,35" / "40,40,8,8,8,40"，对应 u = 5/1/7/8 = w，
+        // u 取**原始声明笔宽**而非 wMap，也**不**做 COSMETIC 替换：ref 的
+        // unit_stroke = currentDeviceContext.stroke_width × scaling，用的是 DC 里
+        // 记录的声明宽度（width_stroke(states,out,1) 只覆盖 stroke-width，不影响 dash）。
+        // 全语料含虚线的 6 个样本实测 ref 输出
+        // "25,25" / "1,1" / "35,35,7,35" / "40,40,8,8,8,40"，对应 u = 5/1/7/8 = 声明笔宽，
         // 逐位吻合（若乘 window/viewport 比例会得到 0.96 等非整数、偏离 ref）。
+        const u = obj.width || 1;
         const ps = obj.style & 0xF;
         let dash = [];
         if (ps >= 1 && ps <= 4) {
-          const u = w;
           const D = 5 * u, T = 1 * u;
           if (ps === 1) dash = [D, D];                 // PS_DASH
           else if (ps === 2) dash = [T, T];            // PS_DOT
@@ -2274,7 +2324,6 @@ class EmfDrawer {
       lineWidth: this.lineWidth,
       arcDirection: this.arcDirection,
       textColor: this.textColor,
-      currentPos: { x: this.currentPos.x, y: this.currentPos.y },
       currentPalette: this.currentPalette,
       // GDI 语义：裁剪区属于 DC 状态，SaveDC 快照 / RestoreDC 恢复
       // （test-156：INTERSECTCLIPRECT 后若 RESTOREDC 不撤裁剪，96 个 PIE 风玫瑰
@@ -2286,16 +2335,18 @@ class EmfDrawer {
       // 旧实现把对象表一并快照，导致 Office clipart 的典型模式
       //    DELETEOBJECT 1 / SAVEDC / CREATEBRUSHINDIRECT 1 / SELECTOBJECT 1 / ... / RESTOREDC
       // 在 RestoreDC 后丢掉了刚创建的画笔，随后的 SELECTOBJECT 1 找不到对象而
-      // 沿用上一次样式（画笔色丢失 → 黑色轮廓被画成白色）。
-      mapMode: ct.mapMode,
-      windowOrgX: ct.windowOrgX,
-      windowOrgY: ct.windowOrgY,
-      windowExtX: ct.windowExtX,
-      windowExtY: ct.windowExtY,
-      viewportOrgX: ct.viewportOrgX,
-      viewportOrgY: ct.viewportOrgY,
-      viewportExtX: ct.viewportExtX,
-      viewportExtY: ct.viewportExtY,
+      // 沿用上一次样式（画笔颜色丢失 → 黑色轮廓被画成白色）。
+      //
+      // ⚠️ 快照范围必须与参考实现逐字段对齐：libemf2svg 的 SAVEDC/RESTOREDC 只
+      // 复制 `EMF_DEVICE_CONTEXT`（inc/emf2svg_private.h），其中**不含**
+      //   MapMode / windowOrg(X,Y) / windowEx(X,Y) / viewPortOrg(X,Y) /
+      //   viewPortEx(X,Y) / pxPerMm / cur_x / cur_y
+      // —— 这些是 `drawingStates` 的顶层字段，SETMAPMODE / SETWINDOWORGEX /
+      // SETVIEWPORTEXTEX 直接写顶层，RestoreDC 不恢复。旧实现把它们一并快照/恢复，
+      // 导致「SAVEDC 时是 ISO、块内改成 TEXT、RESTOREDC 后又弹回 ISO」这类
+      // 状态倒回：test-171 的 49 条 LINETO 因此按 ISO 的 0.29179 缩放绘制
+      // （ref 保持 TEXT 的 1:1），整批折线位置与线宽全错，RMSE 0.2059。
+      // 仍然保留：worldTransform（在 DC 结构内，ref 会恢复）、裁剪区、配色/线型。
       worldM11: ct.worldM11, worldM12: ct.worldM12,
       worldM21: ct.worldM21, worldM22: ct.worldM22,
       worldDx: ct.worldDx, worldDy: ct.worldDy,
@@ -2310,20 +2361,12 @@ class EmfDrawer {
     this.lineWidth = state.lineWidth;
     this.arcDirection = state.arcDirection;
     if (state.textColor) this.textColor = state.textColor;
-    if (state.currentPos) this.currentPos = { x: state.currentPos.x, y: state.currentPos.y };
     if (state.currentPalette !== undefined) this.currentPalette = state.currentPalette;
     // 恢复裁剪区（GDI：clip 属于 DC 状态，见 _captureDcState 注释）
     if (this.ctx._state) this.ctx._state.clip = state.clip || null;
+    // 只恢复 worldTransform（ref 的 EMF_DEVICE_CONTEXT 内含它）。
+    // MapMode / window-viewport orgs+exts / cur_x,cur_y **不恢复**（ref 不恢复）。
     const ct = this.coordinateTransformer;
-    ct.mapMode = state.mapMode;
-    ct.windowOrgX = state.windowOrgX;
-    ct.windowOrgY = state.windowOrgY;
-    ct.windowExtX = state.windowExtX;
-    ct.windowExtY = state.windowExtY;
-    ct.viewportOrgX = state.viewportOrgX;
-    ct.viewportOrgY = state.viewportOrgY;
-    ct.viewportExtX = state.viewportExtX;
-    ct.viewportExtY = state.viewportExtY;
     ct.worldM11 = state.worldM11; ct.worldM12 = state.worldM12;
     ct.worldM21 = state.worldM21; ct.worldM22 = state.worldM22;
     ct.worldDx = state.worldDx; ct.worldDy = state.worldDy;

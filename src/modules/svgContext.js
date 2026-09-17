@@ -15,6 +15,13 @@ class SvgContext {
         this.globalAlpha = 1;
         this.strokeScale = 1;            // 逻辑→设备 线宽缩放（EMF drawer 通过 provider 动态注入）
         this.strokeScaleProvider = null; // 实时计算 strokeScale 的钩子
+        // 笔的端帽/连接样式（SVG stroke-linecap / stroke-linejoin）。
+        // null = 不输出该属性（与 SVG 默认 butt/miter 相同，保守行为，WMF 路径保持原状）。
+        // EMF 路径由 applyGdiObject 按 pen style 的 PS_ENDCAP_*/PS_JOIN_* 位设置，
+        // 对齐 libemf2svg stroke_draw（PS_ENDCAP_ROUND/PS_JOIN_ROUND 的值都是 0，
+        // 故 style=0 的笔 ref 也会输出 round/round）。
+        this.lineCap = null;
+        this.lineJoin = null;
 
         this._nodes = [];       // SVG 元素列表
         this._defs = [];        // <defs> 里的 clipPath 等
@@ -74,6 +81,15 @@ class SvgContext {
         return (extra || []).concat(a).join(' ');
     }
 
+    // 描边专用的 stroke-linecap / stroke-linejoin（仅描边元素输出，fill-only 元素不带）。
+    // 对齐 libemf2svg stroke_draw：只有 pen style 的对应位为已知枚举时才输出属性。
+    _strokeCaps() {
+        const a = [];
+        if (this.lineCap) a.push('stroke-linecap="' + this.lineCap + '"');
+        if (this.lineJoin) a.push('stroke-linejoin="' + this.lineJoin + '"');
+        return a.length ? ' ' + a.join(' ') : '';
+    }
+
     // ---- 变换 ----
     scale(sx, sy) {
         // 记录 dpr 缩放（baseDrawer 初始化时调用 scale(dpr, dpr)），
@@ -103,6 +119,8 @@ class SvgContext {
             globalAlpha: this.globalAlpha,
             clip: this._state.clip,
             dash: (this._dash || []).slice(),
+            lineCap: this.lineCap,
+            lineJoin: this.lineJoin,
         });
     }
 
@@ -119,6 +137,8 @@ class SvgContext {
         this.globalAlpha = s.globalAlpha;
         this._state.clip = s.clip;
         this._dash = (s.dash || []).slice();
+        this.lineCap = s.lineCap;
+        this.lineJoin = s.lineJoin;
     }
 
     // ---- 路径 ----
@@ -277,7 +297,7 @@ class SvgContext {
         if (!this._hasSubpath) return;
         const dashAttr = (this._dash && this._dash.length) ? ' stroke-dasharray="' + this._dash.map(v => this._fmt(v)).join(' ') + '"' : '';
         this._nodes.push(
-            '<path d="' + this._d() + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this._strokeWidth()) + '"' + dashAttr + ' ' + this._attr() + '/>'
+            '<path d="' + this._d() + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this._strokeWidth()) + '"' + dashAttr + this._strokeCaps() + ' ' + this._attr() + '/>'
         );
     }
 
@@ -298,7 +318,7 @@ class SvgContext {
         const r = this._normalizeRect(x, y, w, h);
         const dashAttr = (this._dash && this._dash.length) ? ' stroke-dasharray="' + this._dash.map(v => this._fmt(v)).join(' ') + '"' : '';
         this._nodes.push(
-            '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this._strokeWidth()) + '"' + dashAttr + ' ' + this._attr() + '/>'
+            '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this._strokeWidth()) + '"' + dashAttr + this._strokeCaps() + ' ' + this._attr() + '/>'
         );
     }
 
