@@ -1858,8 +1858,18 @@ class EmfDrawer {
     const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
     if (dib) {
       // 源矩形裁剪：按 cxSrc/cySrc 与源偏移取子图（简化：整图贴到目标大小）。
-      // 注意：STRETCHBLT 不启用 pointCal 尺寸（ref 对 1bpp 图案小图的合成语义
-      // 未完全验证，实证 net 负收益：test-142 的透明竖条语义未复现）。
+      // 尺寸用 point_cal(cDest)：参考实现 U_EMRSTRETCHBLT_draw 与
+      // U_EMRSTRETCHDIBITS_draw 的写法**完全一致**——
+      //   size     = point_cal(states, cDest.x, cDest.y)
+      //   position = point_cal(states, Dest.x,  Dest.y)
+      // 即把尺寸向量当**点**做完整仿射映射（含 viewportOrg / scaling），而不是
+      // 只乘线性部分。副作用是尺寸会被「放大」：test-142 的 cDest=(33,-33)
+      // 经 point_cal 得到 1.9885 × 424.9885 的畸形高框——这是 ref 的真实行为，
+      // 必须复刻（配合 <image> 不带 preserveAspectRatio 的 letterbox 默认值，
+      // 4x2 源图在 425 高的框里只占 ~1px，最终仍与 ref 逐像素吻合）。
+      // 早期不启用是因为当时 <image> 带 preserveAspectRatio="none"，会把畸形框
+      // 拉成整根黑柱（test-142 RMSE 0.076→0.263）；去掉该属性后即为净收益。
+      dib.__pointCalSize = true;
       this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
     }
   }

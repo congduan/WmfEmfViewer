@@ -408,6 +408,13 @@ class SvgContext {
             dy: dy || 0,
             dw: dw || imageData.width,
             dh: dh || imageData.height,
+            // ⚠️ 裁剪必须在**此处**快照：getSvg() 是延迟执行的（putImageData 只占位），
+            // 若那时再读 this._state.clip，取到的是**最后一条记录**的裁剪状态，于是
+            // 所有位图要么共用同一个 clip、要么完全没有 clip。参考实现是把记录当时的
+            // clip-path 直接写在 <image> 上（ref: clip-path="url(#clip-N)"）。
+            // test-142：138 条 STRETCHBLT 的位图 2x425 高，被裁剪区截到 72px；
+            // 用错 clip（或无 clip）会让黑条整根画出来，RMSE 0.076→0.263。
+            clip: this._state.clip || null,
         });
         this._nodes.push('\u0000IMG' + idx + '\u0000');
     }
@@ -603,8 +610,14 @@ class SvgContext {
                 imgMarkup.set(i,
                     '<image x="' + this._fmt(img.dx) + '" y="' + this._fmt(img.dy) + '"' +
                     ' width="' + this._fmt(img.dw) + '" height="' + this._fmt(img.dh) + '"' +
-                    (this._state.clip ? ' clip-path="' + this._state.clip + '"' : '') +
-                    ' href="' + href + '" preserveAspectRatio="none" />'
+                    (img.clip ? ' clip-path="' + img.clip + '"' : '') +
+                    // ⚠️ **不写** preserveAspectRatio：SVG 默认是 xMidYMid meet（等比
+                    // 缩放并居中，即 letterbox 到目标框内）。参考实现的 <image> 没有该
+                    // 属性，故必须保持默认。写成 "none"（强行拉伸）会让源图宽高比与
+                    // 目标框差很大时严重失真：test-142 的 STRETCHBLT 源图 4x2 被拉到
+                    // 1.99x425（point_cal 把尺寸当点映射后的畸形框），"none" 画出整根
+                    // 425px 黑白柱，而 ref 的 meet 只占 ~1px 高。
+                    ' href="' + href + '" />'
                 );
             } catch (e) { /* 编码失败则跳过该位图 */ }
         }
