@@ -97,6 +97,34 @@ class CoordinateTransformer {
     this.deviceOrgY = y || 0;
   }
 
+  /**
+   * 世界矩阵分量量化到 4 位小数——复刻参考实现 libemf2svg 的输出精度缺陷。
+   *
+   * 参考实现把世界矩阵直接写进 SVG：`matrix(%.4f %.4f %.4f %.4f %.4f %.4f)`。
+   * 四位小数对 ~1 量级的值无损，但对「极小比例」的 world 变换是灾难性的：
+   * test-179 的 SETWORLDTRANSFORM 比例是 0.004962134641，%.4f 写成 **0.0050**，
+   * 于是 ref 的全图被放大 0.763%（x）/ 0.973%（y）——实测按该比例重采样后
+   * RMSE 0.2507→0.0243，即差异几乎全部来自这一处四舍五入。
+   * 既然对照基准是 ref 的渲染结果，就必须用 ref 实际使用的（已四舍五入的）矩阵。
+   *
+   * 唯一偏离：非 0 值若被舍入成 0（world 比例 < 5e-5 的极端文件）会保留原值，
+   * 否则该轴内容整体塌缩，ref 亦输出空白，保留原值不影响对齐且更稳健。
+   * @param {number} v
+   * @returns {number}
+   */
+  _q4(v) {
+    const q = Math.round(v * 1e4) / 1e4;
+    if (q === 0 && v !== 0) return v;
+    return q;
+  }
+
+  /** 把当前世界矩阵的 6 个分量按参考实现的 %.4f 输出精度量化 */
+  _quantizeWorld() {
+    this.worldM11 = this._q4(this.worldM11); this.worldM12 = this._q4(this.worldM12);
+    this.worldM21 = this._q4(this.worldM21); this.worldM22 = this._q4(this.worldM22);
+    this.worldDx = this._q4(this.worldDx); this.worldDy = this._q4(this.worldDy);
+  }
+
   /** 设置世界变换（MWT_SET / EMR_SETWORLDTRANSFORM） */
   /** @param {Xform} xform */
   setWorldTransform(xform) {
@@ -104,6 +132,7 @@ class CoordinateTransformer {
     this.worldM11 = xform.eM11; this.worldM12 = xform.eM12;
     this.worldM21 = xform.eM21; this.worldM22 = xform.eM22;
     this.worldDx = xform.eDx; this.worldDy = xform.eDy;
+    this._quantizeWorld();
   }
 
   /**
@@ -143,6 +172,7 @@ class CoordinateTransformer {
     this.worldM11 = r.a11; this.worldM12 = r.a12;
     this.worldM21 = r.a21; this.worldM22 = r.a22;
     this.worldDx = r.dx; this.worldDy = r.dy;
+    this._quantizeWorld();
   }
 
   // 行向量约定下 3x3 矩阵乘法：C = A * B（点先经 A 再经 B）
