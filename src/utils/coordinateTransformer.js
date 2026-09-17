@@ -89,6 +89,32 @@ class CoordinateTransformer {
     // 平移到画布 (0,0)，使内容铺满 canvas 且不超界（与各参考实现一致）。
     this.deviceOrgX = 0;
     this.deviceOrgY = 0;
+    /**
+     * MM_TEXT / 固定比例模式下是否**忽略** windowOrg/viewportOrg。
+     *
+     * 语义分叉（两套实现的真实差异，不是可随意取舍的偏好）：
+     *  - GDI（正确语义）：device = (logical − windowOrg) × s + viewportOrg，所有模式都减 windowOrg。
+     *  - libemf2svg（EMF 对照基准）：`point_cal()` 把 orgs 初值硬编码为 0.0，
+     *    只有 ISO/ANISO 分支才从 DC 状态读入 —— 于是 MM_TEXT 与公制模式下
+     *    生产者写的 windowOrg/viewportOrg **被完全忽略**。
+     *    实证 test-125：文件设 SETWINDOWORGEX(48,17)（MM_TEXT），ref 把内容画在
+     *    (48,17)（相对它的 translate(1,0) 即 49,17），我们减掉后整图偏 (−48,−17)，
+     *    RMSE 0.1105；忽略后 0.0024。
+     *
+     * EMF 路径以 ref 为对照基准 → 置 true；WMF 路径没有 EMF 式参考实现可比，
+     * 且 placeable WMF 依赖 windowOrg 表达 bbox 原点 → 保持 false（GDI 语义）。
+     * @type {boolean}
+     */
+    this.ignoreWindowOrgs = false;
+  }
+
+  /**
+   * 设置「MM_TEXT/公制模式下忽略 windowOrg/viewportOrg」。
+   * 仅供 EMF 绘制路径启用（对齐 libemf2svg point_cal），见 ignoreWindowOrgs 说明。
+   * @param {boolean} on
+   */
+  setIgnoreWindowOrgs(on) {
+    this.ignoreWindowOrgs = !!on;
   }
 
   /** @param {number} x @param {number} y 设置 device→canvas 平移 */
@@ -329,13 +355,17 @@ class CoordinateTransformer {
    * @returns {Point}
    */
   transform(x, y, canvasWidth, canvasHeight) {
-    // window/viewport 映射（无 world）
-    let cx = x - this.windowOrgX;
-    let cy = y - this.windowOrgY;
+    // window/viewport 映射（无 world）。useOrg 见 _getViewportScale 的说明：
+    // 只有 ISO/ANISO 才减 windowOrg、加 viewportOrg；MM_TEXT/公制恒不做。
+    let cx = x;
+    let cy = y;
     const vp = this._getViewportScale();
-    if (vp.apply) {
-      cx = cx * vp.sx + this.viewportOrgX;
-      cy = cy * vp.sy + this.viewportOrgY;
+    if (vp.useOrg) {
+      cx = (cx - this.windowOrgX) * vp.sx + this.viewportOrgX;
+      cy = (cy - this.windowOrgY) * vp.sy + this.viewportOrgY;
+    } else {
+      cx = cx * vp.sx;
+      cy = cy * vp.sy;
     }
     // world 仿射后置（行向量约定：x' = x*M11 + y*M21 + Dx）。
     // 参考实现 transform_draw：matrix(eM11,eM12,eM21,eM22, scaleX(eDx), scaleY(eDy))
@@ -368,10 +398,28 @@ class CoordinateTransformer {
    * @returns {{sx: number, sy: number, apply: boolean}}
    */
   _getViewportScale() {
+    // useOrg：是否应用 windowOrg/viewportOrg。
+    // 逐字对照参考实现 point_cal()（libemf2svg src/lib/emf2svg_utils.c）：
+    //   double windowOrgX = 0.0, viewPortOrgX = 0.0;   ← 初值恒 0
+    //   switch (MapMode) {
+    //     case U_MM_TEXT:          scalingX = 1.0; ...              // 不改 orgs
+    //     case U_MM_LOMETRIC: ...  scalingX = pxPerMm*0.1; ...      // 不改 orgs
+    //     case U_MM_ISOTROPIC/ANISOTROPIC:
+    //         if (windowExSet && viewPortExSet) scalingX = viewPortExX/windowExX;
+    //         else scalingX = 1.0;
+    //         windowOrgX = states->windowOrgX;  viewPortOrgX = states->viewPortOrgX;
+    //     default:                 scalingX = 1.0;                  // 不改 orgs
+    //   }
+    //   ret.x = ((x - windowOrgX) * scalingX + viewPortOrgX) * states->scaling;
+    // 也就是说：libemf2svg **只有 ISOTROPIC/ANISOTROPIC 才应用 orgs**，
+    // MM_TEXT 与公制模式下 windowOrg/viewportOrg 恒为 0（既不减 windowOrg，也不加 viewportOrg）。
+    // 另注意 ISO/ANISO 即使 windowEx/viewPortEx 未设（scaling=1）**仍然**应用 orgs。
+    // 该行为只在 EMF 路径启用（ignoreWindowOrgs）——WMF 走 GDI 语义，见字段说明。
+    const textModeUseOrg = !this.ignoreWindowOrgs;
     switch (this.mapMode) {
       case MAP_MODE.MM_TEXT:
-        // 1:1，但仍应用 viewportOrg（LO 的 mnDevOrgX/mnDevOrgY 补偿）
-        return { sx: 1, sy: 1, apply: true };
+        // 1:1；是否应用 orgs 取决于实现语义（EMF 对齐 ref → 忽略）
+        return { sx: 1, sy: 1, apply: true, useOrg: textModeUseOrg };
       case MAP_MODE.MM_ISOTROPIC:
       case MAP_MODE.MM_ANISOTROPIC:
         if (this.windowExtX !== 0 && this.windowExtY !== 0) {
@@ -384,38 +432,40 @@ class CoordinateTransformer {
             // 用 min() 会在后者退化），ref 字号与 y 坐标均按 sx 缩放。
             sy = sx;
           }
-          return { sx, sy, apply: true };
+          return { sx, sy, apply: true, useOrg: true };
         }
-        return { sx: 1, sy: 1, apply: false };
+        // 未设范围：scaling = 1，但 orgs **仍然**应用
+        return { sx: 1, sy: 1, apply: true, useOrg: true };
       case MAP_MODE.MM_LOMETRIC: {
         const f = this.pxPerMm * 0.1;
-        return { sx: f, sy: -f, apply: true };
+        return { sx: f, sy: -f, apply: true, useOrg: textModeUseOrg };
       }
       case MAP_MODE.MM_HIMETRIC: {
         const f = this.pxPerMm * 0.01;
-        return { sx: f, sy: -f, apply: true };
+        return { sx: f, sy: -f, apply: true, useOrg: textModeUseOrg };
       }
       case MAP_MODE.MM_LOENGLISH: {
         const f = this.pxPerMm * 25.4 * 0.01;
-        return { sx: f, sy: -f, apply: true };
+        return { sx: f, sy: -f, apply: true, useOrg: textModeUseOrg };
       }
       case MAP_MODE.MM_HIENGLISH: {
         const f = this.pxPerMm * 25.4 * 0.001;
-        return { sx: f, sy: -f, apply: true };
+        return { sx: f, sy: -f, apply: true, useOrg: textModeUseOrg };
       }
       case MAP_MODE.MM_TWIPS: {
         const f = this.pxPerMm * 25.4 / 1440;
-        return { sx: f, sy: -f, apply: true };
+        return { sx: f, sy: -f, apply: true, useOrg: textModeUseOrg };
       }
       default:
         if (this.windowExtX !== 0 && this.windowExtY !== 0) {
           return {
             sx: this.viewportExtX / this.windowExtX,
             sy: this.viewportExtY / this.windowExtY,
-            apply: true
+            apply: true,
+            useOrg: textModeUseOrg
           };
         }
-        return { sx: 1, sy: 1, apply: false };
+        return { sx: 1, sy: 1, apply: true, useOrg: textModeUseOrg };
     }
   }
 
@@ -444,13 +494,15 @@ class CoordinateTransformer {
     // 再 viewport：x2 = x1*sx + viewportOrgX; y2 = y1*sy + viewportOrgY
     // 再减 deviceOrg。合并为列向量矩阵 [a c e; b d f]：
     //   x' = x*(m11*sx) + y*(m21*sx) + (dx*sx + viewportOrgX - deviceOrgX - windowOrgX*sx)
-    // 注意 viewport 映射是 (x - windowOrg)*sx + viewportOrg，故常量项含 -windowOrg*sx。
+    // useOrg=false（MM_TEXT/公制）时 orgs 恒 0（同 transform()）：常量项只剩 dx*sx - deviceOrgX。
     const a = this.worldM11 * sx;
     const b = this.worldM12 * sy;
     const c = this.worldM21 * sx;
     const d = this.worldM22 * sy;
-    const e = this.worldDx * sx + this.viewportOrgX - this.deviceOrgX - this.windowOrgX * sx;
-    const f = this.worldDy * sy + this.viewportOrgY - this.deviceOrgY - this.windowOrgY * sy;
+    const orgX = vp.useOrg ? (this.viewportOrgX - this.windowOrgX * sx) : 0;
+    const orgY = vp.useOrg ? (this.viewportOrgY - this.windowOrgY * sy) : 0;
+    const e = this.worldDx * sx + orgX - this.deviceOrgX;
+    const f = this.worldDy * sy + orgY - this.deviceOrgY;
     return { a, b, c, d, e, f };
   }
 

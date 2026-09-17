@@ -3374,15 +3374,15 @@
     "status": "ok",
     "type": "emf",
     "records": 64,
-    "svgBytes": 3068,
-    "svgHash": "eaf20643bd34d4dba8079ce7a5f990f6191cecd40d901c1a94f5f3ab1e14c57e"
+    "svgBytes": 3011,
+    "svgHash": "f46261f7e3263fffcb72448d7f76c9026a6690146e718ec2bdce1c5cd764061a"
   },
   "ref-emf-corpus/emf-valid/test-043.emf": {
     "status": "ok",
     "type": "emf",
     "records": 64,
-    "svgBytes": 3044,
-    "svgHash": "19eb249d263a31b4ab97995bd3bf30ec8636002c6d43a05e5fc7184112e1cd71"
+    "svgBytes": 3002,
+    "svgHash": "e208891d60553a1a321871ca4d554bdc2ba5a962f30493b3d697c85e31afffb3"
   },
   "ref-emf-corpus/emf-valid/test-044.emf": {
     "status": "ok",
@@ -3402,15 +3402,15 @@
     "status": "ok",
     "type": "emf",
     "records": 64,
-    "svgBytes": 3072,
-    "svgHash": "f50024a6eead8a2c9d9ab9c32898cc3b7a48ddb9d010006a6fa9670401d35959"
+    "svgBytes": 3011,
+    "svgHash": "70c86b6a4b5cdd358a28110c4498cd57275a2942d56e1e052bcb93538e890a94"
   },
   "ref-emf-corpus/emf-valid/test-047.emf": {
     "status": "ok",
     "type": "emf",
     "records": 64,
-    "svgBytes": 3052,
-    "svgHash": "11c2746adca2cf46510e248917bf4af8de7b58b8ebc29854c19792436931263d"
+    "svgBytes": 3030,
+    "svgHash": "76deeecba6acac2de808ba6e3a8befd537f5d4b8e3950e389606a30f50473ec4"
   },
   "ref-emf-corpus/emf-valid/test-048.emf": {
     "status": "ok",
@@ -3423,8 +3423,8 @@
     "status": "ok",
     "type": "emf",
     "records": 64,
-    "svgBytes": 3052,
-    "svgHash": "9ced863973e5c946c7ec38e08defffc17c4725f43ddc57f5a3036300deff981f"
+    "svgBytes": 2987,
+    "svgHash": "701d558caccc713366647990afab30bbde993a477be04643e1ffe2e0e4e8ef7e"
   },
   "ref-emf-corpus/emf-valid/test-050.emf": {
     "status": "ok",
@@ -3955,8 +3955,8 @@
     "status": "ok",
     "type": "emf",
     "records": 808,
-    "svgBytes": 36414,
-    "svgHash": "364488ddd19f06a77932d42e363a5804369436f4524c2c1bd70d409d7382bf5c"
+    "svgBytes": 36478,
+    "svgHash": "b24ddfd8c7ff82a5c3b9324a7771aa8af3388c128617cc77f3136ffd334cc778"
   },
   "ref-emf-corpus/emf-valid/test-126.emf": {
     "status": "ok",

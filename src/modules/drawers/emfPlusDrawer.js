@@ -82,6 +82,8 @@ class EmfPlusDrawer {
   constructor(ctx) {
     this.ctx = ctx;
     this.coordinateTransformer = new CoordinateTransformer();
+    // 同 EmfDrawer：EMF+ 也以 libemf2svg 为对照基准，启用 point_cal 的 orgs 语义
+    this.coordinateTransformer.setIgnoreWindowOrgs(true);
     this.gdiObjectManager = new GdiObjectManager();
     this.currentPath = []; // 当前路径点集合
     this.pathState = 'idle'; // 路径状态：idle, active, completed

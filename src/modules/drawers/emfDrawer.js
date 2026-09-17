@@ -144,6 +144,10 @@ class EmfDrawer {
   constructor(ctx) {
     this.ctx = ctx;
     this.coordinateTransformer = new CoordinateTransformer();
+    // EMF 以 libemf2svg 为 RMSE 对照基准：它的 point_cal() 在 MM_TEXT/公制模式下
+    // 把 windowOrg/viewportOrg 硬编码为 0（只有 ISO/ANISO 才读 DC 状态），
+    // 故对 EMF 启用「忽略 orgs」语义（WMF 保持 GDI 语义，见 coordinateTransformer）。
+    this.coordinateTransformer.setIgnoreWindowOrgs(true);
     this.gdiObjectManager = new GdiObjectManager();
     // 注：EMF 对象统一存 gdiObjectManager（按文件句柄 createObjectAt），不再另设对象表
     this.currentPath = []; // 当前路径点集合
