@@ -1,3 +1,13 @@
+// wmf-emf-renderer - 单文件 CommonJS 产物（esbuild 自动生成，请勿直接编辑）
+if (typeof globalThis.__WMF_DEBUG__ === 'undefined') {
+  globalThis.__WMF_DEBUG__ = false;
+}
+function __wmfEmfRendererLog() {
+  if (globalThis.__WMF_DEBUG__ === true) {
+    console.log.apply(console, arguments);
+  }
+}
+
 "use strict";
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __commonJS = (cb, mod) => function __require() {
@@ -1883,182 +1893,67 @@ var require_baseDrawer = __commonJS({
         this.currentPath = [];
         this.pathState = "idle";
       }
-      // 处理剩余的路径
+      // 收尾挂钩：WmfDrawer 在记录流结束后调用（EMF/EMF+ 有各自的实现）
       finishPath() {
         __wmfEmfRendererLog("Finishing path");
       }
-      // 尝试通用处理逻辑，解析为图形数据
-      tryProcessAsCoordinates(data) {
-        __wmfEmfRendererLog("Trying to process as coordinates");
-      }
-      // 以下是一些通用的处理方法，可以在子类中覆盖
-      processSetWindowOrg(data) {
-        __wmfEmfRendererLog("Processing SetWindowOrg");
-      }
-      processSetWindowExt(data) {
-        __wmfEmfRendererLog("Processing SetWindowExt");
-      }
-      processSetViewportOrg(data) {
-        __wmfEmfRendererLog("Processing SetViewportOrg");
-      }
-      processSetViewportExt(data) {
-        __wmfEmfRendererLog("Processing SetViewportExt");
-      }
-      processMoveTo(data) {
-        __wmfEmfRendererLog("Processing MoveTo");
-      }
-      processLineTo(data) {
-        __wmfEmfRendererLog("Processing LineTo");
-      }
-      processRectangle(data) {
-        __wmfEmfRendererLog("Processing Rectangle");
-      }
-      processRoundRect(data) {
-        __wmfEmfRendererLog("Processing RoundRect");
-      }
-      processEllipse(data) {
-        __wmfEmfRendererLog("Processing Ellipse");
-      }
-      processArc(data) {
-        __wmfEmfRendererLog("Processing Arc");
-      }
-      processPie(data) {
-        __wmfEmfRendererLog("Processing Pie");
-      }
-      processChord(data) {
-        __wmfEmfRendererLog("Processing Chord");
-      }
-      processPolyline(data) {
-        __wmfEmfRendererLog("Processing Polyline");
-      }
-      processPolygon(data) {
-        __wmfEmfRendererLog("Processing Polygon");
-      }
-      processTextOut(data) {
-        __wmfEmfRendererLog("Processing TextOut");
-      }
-      processGetTextExtent(data) {
-        __wmfEmfRendererLog("Processing GetTextExtent");
-      }
-      processEscape(data) {
-        __wmfEmfRendererLog("Processing Escape");
-      }
-      processCreatePenIndirect(data) {
-        __wmfEmfRendererLog("Processing CreatePenIndirect");
-      }
-      processCreateBrushIndirect(data) {
-        __wmfEmfRendererLog("Processing CreateBrushIndirect");
-      }
-      processSelectObject(data) {
-        __wmfEmfRendererLog("Processing SelectObject");
-      }
-      processDeleteObject(data) {
-        __wmfEmfRendererLog("Processing DeleteObject");
-      }
-      processSetMapMode(data) {
-        __wmfEmfRendererLog("Processing SetMapMode");
-      }
-      processSetTextJustification(data) {
-        __wmfEmfRendererLog("Processing SetTextJustification");
-      }
-      processSetTextColor(data) {
-        __wmfEmfRendererLog("Processing SetTextColor");
-      }
-      processSetBkColor(data) {
-        __wmfEmfRendererLog("Processing SetBkColor");
-      }
-      processSetBkMode(data) {
-        __wmfEmfRendererLog("Processing SetBkMode");
-      }
-      processSetROP2(data) {
-        __wmfEmfRendererLog("Processing SetROP2");
-      }
-      processSetPolyFillMode(data) {
-        __wmfEmfRendererLog("Processing SetPolyFillMode");
-      }
-      processSetStretchBltMode(data) {
-        __wmfEmfRendererLog("Processing SetStretchBltMode");
-      }
-      processSetTextStretch(data) {
-        __wmfEmfRendererLog("Processing SetTextStretch");
-      }
-      processSetWindowOrgEx(data) {
-        __wmfEmfRendererLog("Processing SetWindowOrgEx");
-      }
-      processSetWindowExtEx(data) {
-        __wmfEmfRendererLog("Processing SetWindowExtEx");
-      }
-      processSetViewportOrgEx(data) {
-        __wmfEmfRendererLog("Processing SetViewportOrgEx");
-      }
-      processSetViewportExtEx(data) {
-        __wmfEmfRendererLog("Processing SetViewportExtEx");
-      }
-      processFillRect(data) {
-        __wmfEmfRendererLog("Processing FillRect");
-      }
-      processFrameRect(data) {
-        __wmfEmfRendererLog("Processing FrameRect");
-      }
-      processInvertRect(data) {
-        __wmfEmfRendererLog("Processing InvertRect");
-      }
-      processPaintRect(data) {
-        __wmfEmfRendererLog("Processing PaintRect");
-      }
-      processFillRgn(data) {
-        __wmfEmfRendererLog("Processing FillRgn");
-      }
-      processFrameRgn(data) {
-        __wmfEmfRendererLog("Processing FrameRgn");
-      }
-      processInvertRgn(data) {
-        __wmfEmfRendererLog("Processing InvertRgn");
-      }
-      processPaintRgn(data) {
-        __wmfEmfRendererLog("Processing PaintRgn");
-      }
-      processSetTextAlign(data) {
-        __wmfEmfRendererLog("Processing SetTextAlign");
-      }
-      processCreateFontIndirect(data) {
-        __wmfEmfRendererLog("Processing CreateFontIndirect");
-      }
-      processCreatePalette(data) {
-        __wmfEmfRendererLog("Processing CreatePalette");
-      }
-      processCreatePatternBrush(data) {
-        __wmfEmfRendererLog("Processing CreatePatternBrush");
-      }
-      processCreateRegion(data) {
-        __wmfEmfRendererLog("Processing CreateRegion");
-      }
-      processPolyPolygon(data) {
-        __wmfEmfRendererLog("Processing PolyPolygon");
-      }
-      processExtTextOut(data) {
-        __wmfEmfRendererLog("Processing ExtTextOut");
-      }
-      processDibBitBlt(data) {
-        __wmfEmfRendererLog("Processing DibBitBlt");
-      }
-      processDibStretchBlt(data) {
-        __wmfEmfRendererLog("Processing DibStretchBlt");
-      }
-      processStretchDib(data) {
-        __wmfEmfRendererLog("Processing StretchDib");
-      }
-      processFloodFill(data) {
-        __wmfEmfRendererLog("Processing FloodFill");
-      }
-      processSaveDC(data) {
-        __wmfEmfRendererLog("Processing SaveDC");
-      }
-      processRestoreDC(data) {
-        __wmfEmfRendererLog("Processing RestoreDC");
-      }
     };
     module2.exports = BaseDrawer2;
+  }
+});
+
+// src/utils/geometryUtils.js
+var require_geometryUtils = __commonJS({
+  "src/utils/geometryUtils.js"(exports2, module2) {
+    "use strict";
+    function ellipseFromCorners(c1, c2) {
+      return {
+        cx: (c1.x + c2.x) / 2,
+        cy: (c1.y + c2.y) / 2,
+        rx: (c2.x - c1.x) / 2,
+        ry: (c2.y - c1.y) / 2
+      };
+    }
+    function absEllipseFromCorners(c1, c2) {
+      const e = ellipseFromCorners(c1, c2);
+      e.rx = Math.abs(e.rx);
+      e.ry = Math.abs(e.ry);
+      return e;
+    }
+    function arcAngles(cx, cy, rx, ry, start, end, anticlockwise) {
+      return {
+        startAngle: Math.atan2((start.y - cy) / ry, (start.x - cx) / rx),
+        endAngle: Math.atan2((end.y - cy) / ry, (end.x - cx) / rx),
+        anticlockwise
+      };
+    }
+    function drawArcLike(ctx, kind, ellipse, angles) {
+      const { cx, cy, rx, ry } = ellipse;
+      const full = Math.abs(angles.endAngle - angles.startAngle) < 1e-6;
+      ctx.beginPath();
+      if (kind === "Pie") {
+        ctx.moveTo(cx, cy);
+      }
+      if (full) {
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      } else {
+        ctx.ellipse(cx, cy, rx, ry, 0, angles.startAngle, angles.endAngle, angles.anticlockwise);
+      }
+      if (kind === "Chord" || kind === "Pie") {
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        ctx.stroke();
+      }
+      return full;
+    }
+    module2.exports = {
+      ellipseFromCorners,
+      absEllipseFromCorners,
+      arcAngles,
+      drawArcLike
+    };
   }
 });
 
@@ -2184,6 +2079,7 @@ var require_emfDrawer = __commonJS({
     var GdiObjectManager2 = require_gdiObjectManager();
     var EmfPlusParser2 = require_emfPlusParser();
     var EmfPlusDrawer2 = require_emfPlusDrawer();
+    var GeometryUtils = require_geometryUtils();
     var { SIGNATURES, RECORD_TYPES, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
     var EMF_RECORD_HANDLERS = {
       // ========== 基础记录 ==========
@@ -3260,16 +3156,9 @@ var require_emfDrawer = __commonJS({
         const bottom = this.readDwordFromData(data, 12);
         const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
         const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const { cx, cy, rx, ry } = GeometryUtils.ellipseFromCorners(transformedLeftTop, transformedRightBottom);
         this.ctx.beginPath();
-        this.ctx.ellipse(
-          (transformedLeftTop.x + transformedRightBottom.x) / 2,
-          (transformedLeftTop.y + transformedRightBottom.y) / 2,
-          (transformedRightBottom.x - transformedLeftTop.x) / 2,
-          (transformedRightBottom.y - transformedLeftTop.y) / 2,
-          0,
-          0,
-          Math.PI * 2
-        );
+        this.ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
         this.ctx.fill();
         this.ctx.stroke();
       }
@@ -4316,105 +4205,41 @@ var require_emfDrawer = __commonJS({
       // GDI 坐标 Y 轴向下，"逆时针"（AD_COUNTERCLOCKWISE，
       // 默认）在屏幕上即逆时针 = 画布 anticlockwise=true（沿角度递减方向）；
       // GDI 顺时针（AD_CLOCKWISE）= 画布 anticlockwise=false。
+      // 几何计算见 utils/geometryUtils（与 WmfDrawer 共用同一实现）。
       _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {
         const st = this.coordinateTransformer.transform(startX, startY, this.ctx.canvas.width, this.ctx.canvas.height);
         const en = this.coordinateTransformer.transform(endX, endY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const startAngle = Math.atan2((st.y - cy) / ry, (st.x - cx) / rx);
-        const endAngle = Math.atan2((en.y - cy) / ry, (en.x - cx) / rx);
-        return {
-          startAngle,
-          endAngle,
-          anticlockwise: this.arcDirection !== 2
-        };
+        return GeometryUtils.arcAngles(cx, cy, rx, ry, st, en, this.arcDirection !== 2);
+      }
+      // EMR_ARC / EMR_CHORD / EMR_PIE 的记录结构完全相同
+      // （Bounds(16) + Start(8) + End(8)），差异只在收尾方式，
+      // 与 WmfDrawer._drawArcRecord 共用同一套几何实现。
+      _drawArcLikeRecord(data, kind) {
+        if (data.length < 32) return;
+        const left = this.readLongFromData(data, 0);
+        const top = this.readLongFromData(data, 4);
+        const right = this.readLongFromData(data, 8);
+        const bottom = this.readLongFromData(data, 12);
+        const startX = this.readLongFromData(data, 16);
+        const startY = this.readLongFromData(data, 20);
+        const endX = this.readLongFromData(data, 24);
+        const endY = this.readLongFromData(data, 28);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const ellipse = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
+        if (ellipse.rx === 0 || ellipse.ry === 0) return;
+        const angles = this._calcArcAngles(ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry, startX, startY, endX, endY);
+        GeometryUtils.drawArcLike(this.ctx, kind, ellipse, angles);
+        __wmfEmfRendererLog("EMF " + kind + ":", left, top, right, bottom);
       }
       processEmfArc(data) {
-        if (data.length < 32) return;
-        const left = this.readLongFromData(data, 0);
-        const top = this.readLongFromData(data, 4);
-        const right = this.readLongFromData(data, 8);
-        const bottom = this.readLongFromData(data, 12);
-        const startX = this.readLongFromData(data, 16);
-        const startY = this.readLongFromData(data, 20);
-        const endX = this.readLongFromData(data, 24);
-        const endY = this.readLongFromData(data, 28);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-        const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
-        const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
-        const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
-        const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
-        if (radiusX === 0 || radiusY === 0) return;
-        const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
-        const full = Math.abs(endAngle - startAngle) < 1e-6;
-        this.ctx.beginPath();
-        if (full) {
-          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
-        } else {
-          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
-        }
-        this.ctx.stroke();
-        __wmfEmfRendererLog("EMF Arc:", left, top, right, bottom);
+        this._drawArcLikeRecord(data, "Arc");
       }
       processEmfChord(data) {
-        if (data.length < 32) return;
-        const left = this.readLongFromData(data, 0);
-        const top = this.readLongFromData(data, 4);
-        const right = this.readLongFromData(data, 8);
-        const bottom = this.readLongFromData(data, 12);
-        const startX = this.readLongFromData(data, 16);
-        const startY = this.readLongFromData(data, 20);
-        const endX = this.readLongFromData(data, 24);
-        const endY = this.readLongFromData(data, 28);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-        const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
-        const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
-        const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
-        const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
-        if (radiusX === 0 || radiusY === 0) return;
-        const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
-        const full = Math.abs(endAngle - startAngle) < 1e-6;
-        this.ctx.beginPath();
-        if (full) {
-          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
-        } else {
-          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
-        }
-        this.ctx.closePath();
-        this.ctx.fill();
-        this.ctx.stroke();
-        __wmfEmfRendererLog("EMF Chord:", left, top, right, bottom);
+        this._drawArcLikeRecord(data, "Chord");
       }
       processEmfPie(data) {
-        if (data.length < 32) return;
-        const left = this.readLongFromData(data, 0);
-        const top = this.readLongFromData(data, 4);
-        const right = this.readLongFromData(data, 8);
-        const bottom = this.readLongFromData(data, 12);
-        const startX = this.readLongFromData(data, 16);
-        const startY = this.readLongFromData(data, 20);
-        const endX = this.readLongFromData(data, 24);
-        const endY = this.readLongFromData(data, 28);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-        const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
-        const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
-        const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
-        const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
-        if (radiusX === 0 || radiusY === 0) return;
-        const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
-        const full = Math.abs(endAngle - startAngle) < 1e-6;
-        this.ctx.beginPath();
-        this.ctx.moveTo(centerX, centerY);
-        if (full) {
-          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
-        } else {
-          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
-        }
-        this.ctx.closePath();
-        this.ctx.fill();
-        this.ctx.stroke();
-        __wmfEmfRendererLog("EMF Pie:", left, top, right, bottom);
+        this._drawArcLikeRecord(data, "Pie");
       }
       // ===== 调色板链路（对齐 POI HemfPalette / HwmfPalette） =====
       // PaletteEntry 4 字节：flags(1)+blue(1)+green(1)+red(1)
@@ -5220,6 +5045,7 @@ var require_emfPlusDrawer = __commonJS({
     "use strict";
     var CoordinateTransformer2 = require_coordinateTransformer();
     var GdiObjectManager2 = require_gdiObjectManager();
+    var GeometryUtils = require_geometryUtils();
     var { DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
     var EMF_PLUS_RECORD_HANDLERS = {
       // ========== 全局/控制记录 ==========
@@ -5916,10 +5742,7 @@ var require_emfPlusDrawer = __commonJS({
         const h = this._emfPlusReadFloat(data, 12);
         const tl = this._emfPlusMapPoint(x, y);
         const br = this._emfPlusMapPoint(x + w, y + h);
-        const cx = (tl.x + br.x) / 2;
-        const cy = (tl.y + br.y) / 2;
-        const rx = Math.abs(br.x - tl.x) / 2;
-        const ry = Math.abs(br.y - tl.y) / 2;
+        const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(tl, br);
         if (rx === 0 || ry === 0) return;
         this.ctx.strokeStyle = pen.color;
         this.ctx.lineWidth = pen.width;
@@ -5941,10 +5764,7 @@ var require_emfPlusDrawer = __commonJS({
         const h = this._emfPlusReadFloat(data, 16);
         const tl = this._emfPlusMapPoint(x, y);
         const br = this._emfPlusMapPoint(x + w, y + h);
-        const cx = (tl.x + br.x) / 2;
-        const cy = (tl.y + br.y) / 2;
-        const rx = Math.abs(br.x - tl.x) / 2;
-        const ry = Math.abs(br.y - tl.y) / 2;
+        const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(tl, br);
         if (rx === 0 || ry === 0) return;
         this.ctx.fillStyle = color;
         this.ctx.beginPath();
@@ -5973,10 +5793,7 @@ var require_emfPlusDrawer = __commonJS({
         if (w === 0 || h === 0 || sweep === 0) return;
         const tl = this._emfPlusMapPoint(x, y);
         const br = this._emfPlusMapPoint(x + w, y + h);
-        const cx = (tl.x + br.x) / 2;
-        const cy = (tl.y + br.y) / 2;
-        const rx = Math.abs(br.x - tl.x) / 2;
-        const ry = Math.abs(br.y - tl.y) / 2;
+        const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(tl, br);
         if (rx === 0 || ry === 0) return;
         const a0 = start * Math.PI / 180;
         const a1 = (start + sweep) * Math.PI / 180;
@@ -6308,6 +6125,7 @@ var require_wmfDrawer = __commonJS({
     var BaseDrawer2 = require_baseDrawer();
     var EmfPlusDrawer2 = require_emfPlusDrawer();
     var MathTypeMtefParser2 = require_mathTypeMtefParser();
+    var GeometryUtils = require_geometryUtils();
     var WMF_RECORD_HANDLERS = {
       // ========== 状态记录 (State Records) ==========
       259: "processSetMapMode",
@@ -6343,14 +6161,14 @@ var require_wmfDrawer = __commonJS({
       // META_CREATEFONTINDIRECT
       300: "processSelectClipRgn",
       // META_SELECTCLIPREGION
-      247: "processCreatePalette",
-      // META_CREATEPALETTE
-      505: "processCreatePatternBrush",
-      // META_CREATEPATTERNBRUSH
+      247: null,
+      // META_CREATEPALETTE —— 已识别但无需处理
+      505: null,
+      // META_CREATEPATTERNBRUSH —— 已识别但无需处理
       248: "processCreateBrush",
       // META_CREATEBRUSH（已废弃，占位创建画刷）
-      511: "processCreateRegion",
-      // META_CREATEREGION
+      511: null,
+      // META_CREATEREGION —— 已识别但无需处理
       // ========== 对象选择/删除记录 ==========
       301: "processSelectObject",
       // META_SELECTOBJECT
@@ -6394,8 +6212,8 @@ var require_wmfDrawer = __commonJS({
       3907: "processStretchDib",
       // META_STRETCHDIB
       // ========== 填充/裁剪记录 ==========
-      552: "processFillRgn",
-      // META_FILLREGION
+      552: null,
+      // META_FILLREGION —— 已识别但无需处理（Canvas 无区域填充）
       1045: null,
       // META_EXCLUDECLIPRECT（Canvas 不支持区域差集，跳过）
       1046: null,
@@ -7044,16 +6862,11 @@ var require_wmfDrawer = __commonJS({
       // 计算部分椭圆弧的起止角（画布角度）。
       // WMF 的 META_ARC 按 MS-WMF 规范始终逆时针绘制：
       // GDI 坐标 Y 轴向下，"逆时针" 在屏幕上即逆时针 = 画布 anticlockwise=true
+      // 几何计算见 utils/geometryUtils（与 EmfDrawer 共用同一实现）。
       _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {
         const st = this.coordinateTransformer.transform(startX, startY, this.ctx.canvas.width, this.ctx.canvas.height);
         const en = this.coordinateTransformer.transform(endX, endY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const startAngle = Math.atan2((st.y - cy) / ry, (st.x - cx) / rx);
-        const endAngle = Math.atan2((en.y - cy) / ry, (en.x - cx) / rx);
-        return {
-          startAngle,
-          endAngle,
-          anticlockwise: this.arcDirection !== 2
-        };
+        return GeometryUtils.arcAngles(cx, cy, rx, ry, st, en, this.arcDirection !== 2);
       }
       processEllipse(data) {
         if (data.length < 8) return;
@@ -7064,13 +6877,10 @@ var require_wmfDrawer = __commonJS({
         __wmfEmfRendererLog("Ellipse:", left, top, right, bottom);
         const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
         const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-        const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
-        const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
-        const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
-        const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
-        if (radiusX === 0 || radiusY === 0) return;
+        const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
+        if (rx === 0 || ry === 0) return;
         this.ctx.beginPath();
-        this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+        this.ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
         this.ctx.fill();
         this.ctx.stroke();
       }
@@ -7134,29 +6944,10 @@ var require_wmfDrawer = __commonJS({
         __wmfEmfRendererLog(kind + ":", left, top, right, bottom, "start:", startX, startY, "end:", endX, endY);
         const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
         const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-        const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
-        const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
-        const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
-        const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
-        if (radiusX === 0 || radiusY === 0) return;
-        const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
-        const full = Math.abs(endAngle - startAngle) < 1e-6;
-        this.ctx.beginPath();
-        if (kind === "Pie") {
-          this.ctx.moveTo(centerX, centerY);
-        }
-        if (full) {
-          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
-        } else {
-          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
-        }
-        if (kind === "Chord" || kind === "Pie") {
-          this.ctx.closePath();
-          this.ctx.fill();
-          this.ctx.stroke();
-        } else {
-          this.ctx.stroke();
-        }
+        const ellipse = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
+        if (ellipse.rx === 0 || ellipse.ry === 0) return;
+        const angles = this._calcArcAngles(ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry, startX, startY, endX, endY);
+        GeometryUtils.drawArcLike(this.ctx, kind, ellipse, angles);
       }
       processArc(data) {
         this._drawArcRecord(data, "Arc");
@@ -7683,8 +7474,16 @@ var require_wmfDrawer = __commonJS({
 });
 
 // packages/wmf-emf-renderer/entry.js
-globalThis.__wmfEmfRendererLog = globalThis.__wmfEmfRendererLog || function() {
-};
+if (typeof globalThis.__WMF_DEBUG__ === "undefined") {
+  globalThis.__WMF_DEBUG__ = false;
+}
+if (typeof globalThis.__wmfEmfRendererLog !== "function") {
+  globalThis.__wmfEmfRendererLog = function() {
+    if (globalThis.__WMF_DEBUG__ === true) {
+      globalThis.console.log.apply(globalThis.console, arguments);
+    }
+  };
+}
 var FileTypeDetector = require_fileTypeDetector();
 var CoordinateTransformer = require_coordinateTransformer();
 var MathTypeMtefParser = require_mathTypeMtefParser();
@@ -7700,12 +7499,7 @@ var EmfPlusDrawer = require_emfPlusDrawer();
 var SvgContext = require_svgContext();
 var MetafileParser = require_metafileParser();
 function setDebugEnabled(enabled) {
-  if (enabled) {
-    globalThis.__wmfEmfRendererLog = __wmfEmfRendererLog.bind(console);
-  } else {
-    globalThis.__wmfEmfRendererLog = function() {
-    };
-  }
+  globalThis.__WMF_DEBUG__ = !!enabled;
 }
 function detectFileType(data) {
   return new FileTypeDetector(data).detect();

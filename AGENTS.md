@@ -40,7 +40,7 @@ npm run compile
 # Watch mode for TypeScript
 npm run watch
 
-# Lint (src/ only, see Linting section)
+# Lint (src/ + scripts/, see Linting section)
 npm run lint
 
 # Type check JS with checkJs (see tsconfig.check.json)
@@ -61,6 +61,7 @@ npm run test:lib
 npm run package
 
 # Remove local render/debug output under out/ (keeps compiled extension + bundle)
+# scripts/README.md 说明哪些脚本属于构建链路、哪些是一次性调试工具
 npm run clean:render
 
 # Remove out/ entirely
@@ -117,9 +118,17 @@ async openCustomDocument(uri: vscode.Uri, _openContext: vscode.CustomDocumentOpe
 ### Console Logging
 - Use `console.log` for diagnostics: `console.log('WMF Viewer extension activated');`
 - The browser and npm bundles **rewrite `console.log` at build time** (esbuild `define`):
-  - browser bundle → `__wlog()`, gated by `globalThis.__WMF_DEBUG__` (set `true` in devtools to enable)
-  - npm bundle → `__wmfEmfRendererLog()`, gated by `setDebugEnabled(true)`
+  - browser bundle → `__wlog()`
+  - npm bundle → `__wmfEmfRendererLog()`
+- **Both read the same switch: `globalThis.__WMF_DEBUG__`** (default `false`).
+  - browser/webview: set `globalThis.__WMF_DEBUG__ = true` (the webview debug toggle does this)
+  - npm package: `setDebugEnabled(true)` — which just flips that same flag
+- The gated log functions live in the esbuild **banner** (`scripts/build-bundles.js`), because
+  banner code is not processed by `define`. Never implement the gate with
+  `console.log.bind(console)` inside `src/`: `define` would rewrite it into a self-reference and
+  the switch would silently stop working.
 - Because of this, you may write plain `console.log(...)` anywhere in `src/`; do not add your own debug flag checks.
+- For hot paths (per-record logs) guard with `if (globalThis.__WMF_DEBUG__)` so the work is skipped entirely.
 - `console.warn` / `console.error` are **not** silenced by the build, so use them only for real problems.
 - Extension-layer (`.ts`) logs run in the extension host and are not rewritten.
 

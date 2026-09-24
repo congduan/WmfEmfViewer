@@ -2,9 +2,23 @@
 // 由 scripts/build-bundles.js 用 esbuild 打包为单文件 index.js（CommonJS）。
 // 源码位于仓库根 src/，esbuild 会内联全部依赖，发布产物不含本文件。
 //
-// 注意：logger 初始化必须放在 require 之前，保证被内联模块的
-// console.log（构建时被 define 替换为 __wmfEmfRendererLog）总有兜底实现。
-globalThis.__wmfEmfRendererLog = globalThis.__wmfEmfRendererLog || function () {};
+// 调试开关：与浏览器 bundle 共用同一个全局标志 __WMF_DEBUG__（见 packages README / AGENTS.md）。
+// 构建产物中，门控日志函数由 scripts/build-bundles.js 的 banner 提供（banner 不经过 define）；
+// 下面这份等价兜底用于「未经打包、直接 require 本文件」的场景。
+//
+// ⚠️ 不要写成 console.log.bind(console)：构建期 define 会把 console.log 换成
+// __wmfEmfRendererLog，于是变成「空函数绑定自己」，setDebugEnabled(true) 将静默失效。
+// 改用 globalThis.console 绕过 define。
+if (typeof globalThis.__WMF_DEBUG__ === 'undefined') {
+    globalThis.__WMF_DEBUG__ = false;
+}
+if (typeof globalThis.__wmfEmfRendererLog !== 'function') {
+    globalThis.__wmfEmfRendererLog = function () {
+        if (globalThis.__WMF_DEBUG__ === true) {
+            globalThis.console.log.apply(globalThis.console, arguments);
+        }
+    };
+}
 
 const FileTypeDetector = require('../../src/utils/fileTypeDetector');
 const CoordinateTransformer = require('../../src/utils/coordinateTransformer');
@@ -27,11 +41,7 @@ const MetafileParser = require('../../src/utils/metafileParser');
  * @param {boolean} enabled
  */
 function setDebugEnabled(enabled) {
-    if (enabled) {
-        globalThis.__wmfEmfRendererLog = console.log.bind(console);
-    } else {
-        globalThis.__wmfEmfRendererLog = function () {};
-    }
+    globalThis.__WMF_DEBUG__ = !!enabled;
 }
 
 /**

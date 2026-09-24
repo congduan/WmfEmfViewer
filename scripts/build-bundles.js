@@ -6,6 +6,12 @@
 //
 // 日志静默通过编译期 define 完成（console.log -> 门控函数），
 // 不会误伤字符串字面量或注释，与源码书写方式解耦。
+//
+// 两个产物共用**同一个**调试开关 globalThis.__WMF_DEBUG__：
+//   - 浏览器 bundle —— 由 webview/website 的调试开关写入
+//   - npm 产物 —— 由 setDebugEnabled(true) 写入（见 packages/.../entry.js）
+// 源码中 `if (globalThis.__WMF_DEBUG__)` 形式的守卫也读同一个标志，
+// 从而不存在“两套开关、其中一套永不生效”的情况。
 const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
@@ -21,6 +27,21 @@ if (typeof globalThis.__WMF_DEBUG__ === 'undefined') {
   globalThis.__WMF_DEBUG__ = false;
 }
 function __wlog() {
+  if (globalThis.__WMF_DEBUG__ === true) {
+    console.log.apply(console, arguments);
+  }
+}
+`;
+
+// npm 包产物头部：与浏览器 banner 同构。
+// ⚠️ 该函数体必须写在 banner 里（banner 不经过 define），否则其中的
+// console.log 会被 define 替换成 __wmfEmfRendererLog 自身，导致
+// setDebugEnabled(true) 把日志函数绑定到一个空实现上（曾经的 bug）。
+const NPM_BANNER = `// wmf-emf-renderer - 单文件 CommonJS 产物（esbuild 自动生成，请勿直接编辑）
+if (typeof globalThis.__WMF_DEBUG__ === 'undefined') {
+  globalThis.__WMF_DEBUG__ = false;
+}
+function __wmfEmfRendererLog() {
   if (globalThis.__WMF_DEBUG__ === true) {
     console.log.apply(console, arguments);
   }
@@ -62,6 +83,7 @@ async function buildNpmPackage() {
         platform: 'node',
         target: ['node14'],
         outfile,
+        banner: { js: NPM_BANNER },
         define: {
             // 库默认静默；宿主通过 setDebugEnabled(true) 开启
             'console.log': '__wmfEmfRendererLog'
