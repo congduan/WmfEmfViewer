@@ -63,6 +63,22 @@ This extension contributes no settings — it just works.
 
 ## Release Notes
 
+### 0.1.2
+
+- **Fixed**: placeable WMF files could render blank (or as a single stray glyph).
+  `MM_TEXT` viewport scaling is now split by render target: **EMF** keeps the
+  reference-implementation semantics (1:1 window/viewport), while **WMF** keeps
+  GDI window/viewport scaling, which is what maps a placeable metafile's logical
+  coordinate space onto the canvas. Affected files include MathType formulas and
+  many Office/OpenOffice clip-art metafiles.
+- **Fixed**: `setDebugEnabled(true)` on the `wmf-emf-renderer` npm package had no
+  effect — the debug switch was never wired to the shared `__WMF_DEBUG__` flag.
+- **Improved**: CI now type-checks the entire JavaScript engine (`src/**/*.js`)
+  instead of two files, and this is enforced as a required check.
+- **Internal**: shared `constants` / `geometryUtils` modules; removed ~55 dead
+  `processXxx` stubs and the duplicated arc/ellipse geometry across drawers;
+  `npm run build` now also rebuilds the npm package artifact.
+
 ### 0.1.1
 
 - Major EMF / EMF+ rendering accuracy improvements, aligned with reference
