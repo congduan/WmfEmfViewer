@@ -470,14 +470,19 @@ var require_coordinateTransformer = __commonJS({
        * 计算 window→viewport 的缩放因子（sx/sy）与是否应用 viewportOrg。
        * MM_ISOTROPIC/ANISOTROPIC 用 viewportExt/windowExt 比值；当 windowExt 任一分量为 0 时，
        * 原语义为“完全不应用缩放，也不加 viewportOrg”，故 apply=false。
-       * MM_TEXT 恒为 1:1（GDI/参考实现均忽略 windowExt/viewportExt）：
-       *   - MS-EMF / GDI：MM_TEXT 下 window 与 viewport 范围不参与映射；
-       *   - LibreOffice mtftools.cxx ImplMap()：`if (meMapMode != MappingMode::MM_TEXT)` 才做
-       *     `fX2 /= mnWinExtX; fX2 *= mnDevWidth;`；
-       *   - libemf2svg 亦不使用这两个范围。
-       * 旧实现在 MM_TEXT 下也按 vpExt/winExt 缩放，导致「只设 SETWINDOWEXTEX、不设
-       * SETVIEWPORTEXTEX」的文件（如 test-068，winExt=4859x3456 vs 画布 4765x3434）
-       * 内容被整体缩到 98%，越靠右偏移越大。
+       * MM_TEXT 的语义按渲染目标分流（ignoreWindowOrgs 正是 EMF 路径的开关）：
+       *   - EMF（ignoreWindowOrgs=true）：恒 1:1，window/viewport 范围不参与映射。
+       *     MS-EMF/GDI 如此；LibreOffice mtftools.cxx ImplMap() 也是
+       *     `if (meMapMode != MappingMode::MM_TEXT)` 才做
+       *     `fX2 /= mnWinExtX; fX2 *= mnDevWidth;`；libemf2svg 同样不使用这两个范围。
+       *     旧实现（对 EMF 也按比值缩放）会让「只设 SETWINDOWEXTEX、不设
+       *     SETVIEWPORTEXTEX」的样本（test-068，winExt=4859x3456 vs 画布 4765x3434）
+       *     内容被整体缩到 98%，越靠右偏移越大。
+       *   - WMF（ignoreWindowOrgs=false）：**仍按 vpExt/winExt 缩放**。placeable WMF 的
+       *     逻辑坐标空间由 placeable header 决定（inch 换算后与画布尺寸可差一个数量级），
+       *     BaseDrawer.initCanvas 正是靠这对范围把逻辑坐标映射进画布；若在 MM_TEXT 下
+       *     一并跳过缩放，内容会整体落在画布之外——只剩零星字形/路径碰巧可见
+       *     （曾导致 sample-wmf/vegetable.wmf 全白、mathtype/example.wmf 只剩一个字形）。
        * 固定比例模式（LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS）用 pxPerMm 换算，
        * 且 Y 轴在固定比例模式下向上（负缩放，GDI 语义），始终应用 viewportOrg。
        * @returns {{sx: number, sy: number, apply: boolean, useOrg: boolean}}
@@ -485,8 +490,20 @@ var require_coordinateTransformer = __commonJS({
       _getViewportScale() {
         const textModeUseOrg = !this.ignoreWindowOrgs;
         switch (this.mapMode) {
-          case MAP_MODE.MM_TEXT:
-            return { sx: 1, sy: 1, apply: true, useOrg: textModeUseOrg };
+          case MAP_MODE.MM_TEXT: {
+            if (this.ignoreWindowOrgs) {
+              return { sx: 1, sy: 1, apply: true, useOrg: false };
+            }
+            if (this.windowExtX !== 0 && this.windowExtY !== 0) {
+              return {
+                sx: this.viewportExtX / this.windowExtX,
+                sy: this.viewportExtY / this.windowExtY,
+                apply: true,
+                useOrg: true
+              };
+            }
+            return { sx: 1, sy: 1, apply: false, useOrg: true };
+          }
           case MAP_MODE.MM_ISOTROPIC:
           case MAP_MODE.MM_ANISOTROPIC:
             if (this.windowExtX !== 0 && this.windowExtY !== 0) {
