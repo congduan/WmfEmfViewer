@@ -1,4 +1,16 @@
-// 基础绘制器类 - 提供共享的绘制方法
+// 基础绘制器类。
+//
+// 只保留**真正被复用**的能力：
+//   - 构造器：ctx / 坐标变换器 / GDI 对象表 / 公共绘制状态字段
+//   - initCanvas：按文件头计算画布尺寸并设置 window/viewport 映射（WmfDrawer 使用）
+//   - finishPath：收尾挂钩（WmfDrawer 调用；EMF/EMF+ 有自己的实现）
+//
+// 历史说明：本类原先还带 ~55 个仅打印日志的 `processXxx` 桩方法。
+// 其中 36 个被 WmfDrawer 覆盖（基类版本即死代码），15 个全库零引用，
+// 4 个（FillRgn/CreatePalette/CreatePatternBrush/CreateRegion）仅作为分发表的
+// 静默兜底——已在 WMF_RECORD_HANDLERS 中直接登记为 null（该表约定 null = 已识别但无需处理）。
+// 三个绘制器之间真正的公共逻辑（字节读取、椭圆/弧几何）已下沉到
+// utils/binaryReader 与 utils/geometryUtils，而不是堆在基类的桩方法里。
 const CoordinateTransformer = require('../../utils/coordinateTransformer');
 const GdiObjectManager = require('../../utils/gdiObjectManager');
 const { DEFAULT_DPI, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require('../../utils/constants');
@@ -122,235 +134,9 @@ class BaseDrawer {
         this.pathState = 'idle';
     }
 
-    // 处理剩余的路径
+    // 收尾挂钩：WmfDrawer 在记录流结束后调用（EMF/EMF+ 有各自的实现）
     finishPath() {
         console.log('Finishing path');
-    }
-
-    // 尝试通用处理逻辑，解析为图形数据
-    tryProcessAsCoordinates(data) {
-        console.log('Trying to process as coordinates');
-    }
-
-    // 以下是一些通用的处理方法，可以在子类中覆盖
-    processSetWindowOrg(data) {
-        console.log('Processing SetWindowOrg');
-    }
-
-    processSetWindowExt(data) {
-        console.log('Processing SetWindowExt');
-    }
-
-    processSetViewportOrg(data) {
-        console.log('Processing SetViewportOrg');
-    }
-
-    processSetViewportExt(data) {
-        console.log('Processing SetViewportExt');
-    }
-
-    processMoveTo(data) {
-        console.log('Processing MoveTo');
-    }
-
-    processLineTo(data) {
-        console.log('Processing LineTo');
-    }
-
-    processRectangle(data) {
-        console.log('Processing Rectangle');
-    }
-
-    processRoundRect(data) {
-        console.log('Processing RoundRect');
-    }
-
-    processEllipse(data) {
-        console.log('Processing Ellipse');
-    }
-
-    processArc(data) {
-        console.log('Processing Arc');
-    }
-
-    processPie(data) {
-        console.log('Processing Pie');
-    }
-
-    processChord(data) {
-        console.log('Processing Chord');
-    }
-
-    processPolyline(data) {
-        console.log('Processing Polyline');
-    }
-
-    processPolygon(data) {
-        console.log('Processing Polygon');
-    }
-
-    processTextOut(data) {
-        console.log('Processing TextOut');
-    }
-
-    processGetTextExtent(data) {
-        console.log('Processing GetTextExtent');
-    }
-
-    processEscape(data) {
-        console.log('Processing Escape');
-    }
-
-    processCreatePenIndirect(data) {
-        console.log('Processing CreatePenIndirect');
-    }
-
-    processCreateBrushIndirect(data) {
-        console.log('Processing CreateBrushIndirect');
-    }
-
-    processSelectObject(data) {
-        console.log('Processing SelectObject');
-    }
-
-    processDeleteObject(data) {
-        console.log('Processing DeleteObject');
-    }
-
-    processSetMapMode(data) {
-        console.log('Processing SetMapMode');
-    }
-
-    processSetTextJustification(data) {
-        console.log('Processing SetTextJustification');
-    }
-
-    processSetTextColor(data) {
-        console.log('Processing SetTextColor');
-    }
-
-    processSetBkColor(data) {
-        console.log('Processing SetBkColor');
-    }
-
-    processSetBkMode(data) {
-        console.log('Processing SetBkMode');
-    }
-
-    processSetROP2(data) {
-        console.log('Processing SetROP2');
-    }
-
-    processSetPolyFillMode(data) {
-        console.log('Processing SetPolyFillMode');
-    }
-
-    processSetStretchBltMode(data) {
-        console.log('Processing SetStretchBltMode');
-    }
-
-    processSetTextStretch(data) {
-        console.log('Processing SetTextStretch');
-    }
-
-    processSetWindowOrgEx(data) {
-        console.log('Processing SetWindowOrgEx');
-    }
-
-    processSetWindowExtEx(data) {
-        console.log('Processing SetWindowExtEx');
-    }
-
-    processSetViewportOrgEx(data) {
-        console.log('Processing SetViewportOrgEx');
-    }
-
-    processSetViewportExtEx(data) {
-        console.log('Processing SetViewportExtEx');
-    }
-
-    processFillRect(data) {
-        console.log('Processing FillRect');
-    }
-
-    processFrameRect(data) {
-        console.log('Processing FrameRect');
-    }
-
-    processInvertRect(data) {
-        console.log('Processing InvertRect');
-    }
-
-    processPaintRect(data) {
-        console.log('Processing PaintRect');
-    }
-
-    processFillRgn(data) {
-        console.log('Processing FillRgn');
-    }
-
-    processFrameRgn(data) {
-        console.log('Processing FrameRgn');
-    }
-
-    processInvertRgn(data) {
-        console.log('Processing InvertRgn');
-    }
-
-    processPaintRgn(data) {
-        console.log('Processing PaintRgn');
-    }
-
-    processSetTextAlign(data) {
-        console.log('Processing SetTextAlign');
-    }
-
-    processCreateFontIndirect(data) {
-        console.log('Processing CreateFontIndirect');
-    }
-
-    processCreatePalette(data) {
-        console.log('Processing CreatePalette');
-    }
-
-    processCreatePatternBrush(data) {
-        console.log('Processing CreatePatternBrush');
-    }
-
-    processCreateRegion(data) {
-        console.log('Processing CreateRegion');
-    }
-
-    processPolyPolygon(data) {
-        console.log('Processing PolyPolygon');
-    }
-
-    processExtTextOut(data) {
-        console.log('Processing ExtTextOut');
-    }
-
-    processDibBitBlt(data) {
-        console.log('Processing DibBitBlt');
-    }
-
-    processDibStretchBlt(data) {
-        console.log('Processing DibStretchBlt');
-    }
-
-    processStretchDib(data) {
-        console.log('Processing StretchDib');
-    }
-
-    processFloodFill(data) {
-        console.log('Processing FloodFill');
-    }
-
-    processSaveDC(data) {
-        console.log('Processing SaveDC');
-    }
-
-    processRestoreDC(data) {
-        console.log('Processing RestoreDC');
     }
 }
 

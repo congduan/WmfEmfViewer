@@ -3,6 +3,7 @@ const CoordinateTransformer = require('../../utils/coordinateTransformer');
 const GdiObjectManager = require('../../utils/gdiObjectManager');
 const EmfPlusParser = require('../parsers/emfPlusParser');
 const EmfPlusDrawer = require('./emfPlusDrawer');
+const GeometryUtils = require('../../utils/geometryUtils');
 const { SIGNATURES, RECORD_TYPES, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require('../../utils/constants');
 
 // EMF 记录分派表：记录类型 -> 处理方法名（processEmfRecordType 中调用 this[方法名](data)）。
@@ -1229,16 +1230,10 @@ class EmfDrawer {
     const bottom = this.readDwordFromData(data, 12);
     const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
     const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    // 注意：此处刻意**不**对半轴取绝对值，与既有行为保持一致（见 geometryUtils 顶部说明）
+    const { cx, cy, rx, ry } = GeometryUtils.ellipseFromCorners(transformedLeftTop, transformedRightBottom);
     this.ctx.beginPath();
-    this.ctx.ellipse(
-      (transformedLeftTop.x + transformedRightBottom.x) / 2,
-      (transformedLeftTop.y + transformedRightBottom.y) / 2,
-      (transformedRightBottom.x - transformedLeftTop.x) / 2,
-      (transformedRightBottom.y - transformedLeftTop.y) / 2,
-      0,
-      0,
-      Math.PI * 2
-    );
+    this.ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
     this.ctx.fill();  // GDI ELLIPSE = 当前画刷填充 + 画笔描边
     this.ctx.stroke();
   }
@@ -2463,123 +2458,49 @@ class EmfDrawer {
   // GDI 坐标 Y 轴向下，"逆时针"（AD_COUNTERCLOCKWISE，
   // 默认）在屏幕上即逆时针 = 画布 anticlockwise=true（沿角度递减方向）；
   // GDI 顺时针（AD_CLOCKWISE）= 画布 anticlockwise=false。
+  // 几何计算见 utils/geometryUtils（与 WmfDrawer 共用同一实现）。
   _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {
     const st = this.coordinateTransformer.transform(startX, startY, this.ctx.canvas.width, this.ctx.canvas.height);
     const en = this.coordinateTransformer.transform(endX, endY, this.ctx.canvas.width, this.ctx.canvas.height);
-    const startAngle = Math.atan2((st.y - cy) / ry, (st.x - cx) / rx);
-    const endAngle = Math.atan2((en.y - cy) / ry, (en.x - cx) / rx);
-    // 画布会按 anticlockwise 标志沿对应方向自动取 (start-end) mod 2π 的扫过量
-    return {
-      startAngle,
-      endAngle,
-      anticlockwise: this.arcDirection !== 0x02,
-    };
+    return GeometryUtils.arcAngles(cx, cy, rx, ry, st, en, this.arcDirection !== 0x02);
+  }
+
+  // EMR_ARC / EMR_CHORD / EMR_PIE 的记录结构完全相同
+  // （Bounds(16) + Start(8) + End(8)），差异只在收尾方式，
+  // 与 WmfDrawer._drawArcRecord 共用同一套几何实现。
+  _drawArcLikeRecord(data, kind) {
+    if (data.length < 32) return;
+    const left = this.readLongFromData(data, 0);
+    const top = this.readLongFromData(data, 4);
+    const right = this.readLongFromData(data, 8);
+    const bottom = this.readLongFromData(data, 12);
+    const startX = this.readLongFromData(data, 16);
+    const startY = this.readLongFromData(data, 20);
+    const endX = this.readLongFromData(data, 24);
+    const endY = this.readLongFromData(data, 28);
+
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const ellipse = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
+    if (ellipse.rx === 0 || ellipse.ry === 0) return;
+
+    const angles = this._calcArcAngles(ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry, startX, startY, endX, endY);
+    GeometryUtils.drawArcLike(this.ctx, kind, ellipse, angles);
+    console.log('EMF ' + kind + ':', left, top, right, bottom);
   }
 
   processEmfArc(data) {
-    if (data.length < 32) return;
-    const left = this.readLongFromData(data, 0);
-    const top = this.readLongFromData(data, 4);
-    const right = this.readLongFromData(data, 8);
-    const bottom = this.readLongFromData(data, 12);
-    const startX = this.readLongFromData(data, 16);
-    const startY = this.readLongFromData(data, 20);
-    const endX = this.readLongFromData(data, 24);
-    const endY = this.readLongFromData(data, 28);
-
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-    const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
-    const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
-    const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
-    const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
-
-    if (radiusX === 0 || radiusY === 0) return;
-
-    const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
-    const full = Math.abs(endAngle - startAngle) < 1e-6;
-
-    this.ctx.beginPath();
-    if (full) {
-      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
-    } else {
-      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
-    }
-    this.ctx.stroke();
-    console.log('EMF Arc:', left, top, right, bottom);
+    this._drawArcLikeRecord(data, 'Arc');
   }
 
   processEmfChord(data) {
-    // EMR_CHORD结构与EMR_ARC相同，用弦连接起止点
-    if (data.length < 32) return;
-    const left = this.readLongFromData(data, 0);
-    const top = this.readLongFromData(data, 4);
-    const right = this.readLongFromData(data, 8);
-    const bottom = this.readLongFromData(data, 12);
-    const startX = this.readLongFromData(data, 16);
-    const startY = this.readLongFromData(data, 20);
-    const endX = this.readLongFromData(data, 24);
-    const endY = this.readLongFromData(data, 28);
-
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-    const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
-    const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
-    const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
-    const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
-
-    if (radiusX === 0 || radiusY === 0) return;
-
-    const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
-    const full = Math.abs(endAngle - startAngle) < 1e-6;
-
-    this.ctx.beginPath();
-    if (full) {
-      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
-    } else {
-      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
-    }
-    this.ctx.closePath(); // 弦
-    this.ctx.fill();
-    this.ctx.stroke();
-    console.log('EMF Chord:', left, top, right, bottom);
+    // EMR_CHORD：用弦连接起止点
+    this._drawArcLikeRecord(data, 'Chord');
   }
 
   processEmfPie(data) {
-    // EMR_PIE结构与EMR_ARC相同，用半径连接圆心闭合
-    if (data.length < 32) return;
-    const left = this.readLongFromData(data, 0);
-    const top = this.readLongFromData(data, 4);
-    const right = this.readLongFromData(data, 8);
-    const bottom = this.readLongFromData(data, 12);
-    const startX = this.readLongFromData(data, 16);
-    const startY = this.readLongFromData(data, 20);
-    const endX = this.readLongFromData(data, 24);
-    const endY = this.readLongFromData(data, 28);
-
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-    const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
-    const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
-    const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
-    const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
-
-    if (radiusX === 0 || radiusY === 0) return;
-
-    const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
-    const full = Math.abs(endAngle - startAngle) < 1e-6;
-
-    this.ctx.beginPath();
-    this.ctx.moveTo(centerX, centerY);
-    if (full) {
-      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
-    } else {
-      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
-    }
-    this.ctx.closePath(); // 回到圆心
-    this.ctx.fill();
-    this.ctx.stroke();
-    console.log('EMF Pie:', left, top, right, bottom);
+    // EMR_PIE：用半径连接圆心闭合
+    this._drawArcLikeRecord(data, 'Pie');
   }
 
   // ===== 调色板链路（对齐 POI HemfPalette / HwmfPalette） =====

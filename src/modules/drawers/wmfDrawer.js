@@ -2,6 +2,7 @@
 const BaseDrawer = require('./baseDrawer');
 const EmfPlusDrawer = require('./emfPlusDrawer');
 const MathTypeMtefParser = require('../../utils/mathTypeMtefParser');
+const GeometryUtils = require('../../utils/geometryUtils');
 
 // WMF 记录分派表：functionId -> 处理方法名（processRecord 中调用 this[方法名](record.data)）。
 // 值为 null 表示已识别但无需处理/Canvas 不支持（与原 switch 的空分支等价，不打未知记录日志）。
@@ -26,10 +27,10 @@ const WMF_RECORD_HANDLERS = {
   0x02FC: 'processCreateBrushIndirect', // META_CREATEBRUSHINDIRECT
   0x02FB: 'processCreateFontIndirect',  // META_CREATEFONTINDIRECT
   0x012C: 'processSelectClipRgn',       // META_SELECTCLIPREGION
-  0x00F7: 'processCreatePalette',       // META_CREATEPALETTE
-  0x01F9: 'processCreatePatternBrush',  // META_CREATEPATTERNBRUSH
+  0x00F7: null,                          // META_CREATEPALETTE —— 已识别但无需处理
+  0x01F9: null,                          // META_CREATEPATTERNBRUSH —— 已识别但无需处理
   0x00F8: 'processCreateBrush',         // META_CREATEBRUSH（已废弃，占位创建画刷）
-  0x01FF: 'processCreateRegion',        // META_CREATEREGION
+  0x01FF: null,                          // META_CREATEREGION —— 已识别但无需处理
 
   // ========== 对象选择/删除记录 ==========
   0x012D: 'processSelectObject', // META_SELECTOBJECT
@@ -59,7 +60,7 @@ const WMF_RECORD_HANDLERS = {
   0x0F43: 'processStretchDib',     // META_STRETCHDIB
 
   // ========== 填充/裁剪记录 ==========
-  0x0228: 'processFillRgn',           // META_FILLREGION
+  0x0228: null,                       // META_FILLREGION —— 已识别但无需处理（Canvas 无区域填充）
   0x0415: null,                       // META_EXCLUDECLIPRECT（Canvas 不支持区域差集，跳过）
   0x0416: null,                       // META_INTERSECTCLIPRECT（Canvas 不支持区域交集裁剪，跳过）
   0x0419: null,                       // META_FLOODFILL（Canvas 无泛洪填充，跳过）
@@ -757,16 +758,11 @@ class WmfDrawer extends BaseDrawer {
   // 计算部分椭圆弧的起止角（画布角度）。
   // WMF 的 META_ARC 按 MS-WMF 规范始终逆时针绘制：
   // GDI 坐标 Y 轴向下，"逆时针" 在屏幕上即逆时针 = 画布 anticlockwise=true
+  // 几何计算见 utils/geometryUtils（与 EmfDrawer 共用同一实现）。
   _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {
     const st = this.coordinateTransformer.transform(startX, startY, this.ctx.canvas.width, this.ctx.canvas.height);
     const en = this.coordinateTransformer.transform(endX, endY, this.ctx.canvas.width, this.ctx.canvas.height);
-    const startAngle = Math.atan2((st.y - cy) / ry, (st.x - cx) / rx);
-    const endAngle = Math.atan2((en.y - cy) / ry, (en.x - cx) / rx);
-    return {
-      startAngle,
-      endAngle,
-      anticlockwise: this.arcDirection !== 0x02,
-    };
+    return GeometryUtils.arcAngles(cx, cy, rx, ry, st, en, this.arcDirection !== 0x02);
   }
 
   processEllipse(data) {
@@ -780,14 +776,11 @@ class WmfDrawer extends BaseDrawer {
 
     const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
     const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-    const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
-    const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
-    const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
-    const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
-    if (radiusX === 0 || radiusY === 0) return;
+    const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
+    if (rx === 0 || ry === 0) return;
 
     this.ctx.beginPath();
-    this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+    this.ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
     this.ctx.fill();
     this.ctx.stroke();
   }
@@ -861,31 +854,11 @@ class WmfDrawer extends BaseDrawer {
 
     const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
     const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-    const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
-    const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
-    const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
-    const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
-    if (radiusX === 0 || radiusY === 0) return;
+    const ellipse = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
+    if (ellipse.rx === 0 || ellipse.ry === 0) return;
 
-    const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
-    const full = Math.abs(endAngle - startAngle) < 1e-6;
-
-    this.ctx.beginPath();
-    if (kind === 'Pie') {
-      this.ctx.moveTo(centerX, centerY);
-    }
-    if (full) {
-      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
-    } else {
-      this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
-    }
-    if (kind === 'Chord' || kind === 'Pie') {
-      this.ctx.closePath(); // 弦：连接起止点；饼：回到圆心
-      this.ctx.fill();
-      this.ctx.stroke();
-    } else {
-      this.ctx.stroke();
-    }
+    const angles = this._calcArcAngles(ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry, startX, startY, endX, endY);
+    GeometryUtils.drawArcLike(this.ctx, kind, ellipse, angles);
   }
 
   processArc(data) {

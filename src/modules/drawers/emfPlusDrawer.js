@@ -1,6 +1,7 @@
 // EMF+绘制模块
 const CoordinateTransformer = require('../../utils/coordinateTransformer');
 const GdiObjectManager = require('../../utils/gdiObjectManager');
+const GeometryUtils = require('../../utils/geometryUtils');
 const { DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require('../../utils/constants');
 
 // EMF+ 记录分派表：记录类型 -> 处理方法名（processEmfPlusRecordType 中调用 this[方法名](flags, data)）。
@@ -713,10 +714,7 @@ class EmfPlusDrawer {
     const h = this._emfPlusReadFloat(data, 12);
     const tl = this._emfPlusMapPoint(x, y);
     const br = this._emfPlusMapPoint(x + w, y + h);
-    const cx = (tl.x + br.x) / 2;
-    const cy = (tl.y + br.y) / 2;
-    const rx = Math.abs(br.x - tl.x) / 2;
-    const ry = Math.abs(br.y - tl.y) / 2;
+    const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(tl, br);
     if (rx === 0 || ry === 0) return;
     this.ctx.strokeStyle = pen.color;
     this.ctx.lineWidth = pen.width;
@@ -739,10 +737,7 @@ class EmfPlusDrawer {
     const h = this._emfPlusReadFloat(data, 16);
     const tl = this._emfPlusMapPoint(x, y);
     const br = this._emfPlusMapPoint(x + w, y + h);
-    const cx = (tl.x + br.x) / 2;
-    const cy = (tl.y + br.y) / 2;
-    const rx = Math.abs(br.x - tl.x) / 2;
-    const ry = Math.abs(br.y - tl.y) / 2;
+    const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(tl, br);
     if (rx === 0 || ry === 0) return;
     this.ctx.fillStyle = color;
     this.ctx.beginPath();
@@ -773,10 +768,7 @@ class EmfPlusDrawer {
     if (w === 0 || h === 0 || sweep === 0) return;
     const tl = this._emfPlusMapPoint(x, y);
     const br = this._emfPlusMapPoint(x + w, y + h);
-    const cx = (tl.x + br.x) / 2;
-    const cy = (tl.y + br.y) / 2;
-    const rx = Math.abs(br.x - tl.x) / 2;
-    const ry = Math.abs(br.y - tl.y) / 2;
+    const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(tl, br);
     if (rx === 0 || ry === 0) return;
     const a0 = start * Math.PI / 180;
     const a1 = (start + sweep) * Math.PI / 180;
