@@ -63,6 +63,21 @@ This extension contributes no settings — it just works.
 
 ## Release Notes
 
+### 0.1.1
+
+- Major EMF / EMF+ rendering accuracy improvements, aligned with reference
+  implementations (libemf2svg / Apache POI): world & DC transform semantics,
+  bitmap BLT sizing and alpha rules, text placement/rotation and metrics,
+  pen width, end caps and dash patterns, brush/pen/clip state snapshots.
+- Coordinate mapping fixed for fixed-scale modes (MM_LOMETRIC / HIMETRIC /
+  LOENGLISH / HIENGLISH / TWIPS) and for MM_TEXT / metric window-vs-viewport
+  origin handling.
+- Full region chain, palette chain and GDI path record semantics implemented;
+  dual-mode (GDI + EMF+) files no longer render duplicate shapes.
+- New: standalone zero-dependency renderer published as the
+  [`wmf-emf-renderer`](https://www.npmjs.com/package/wmf-emf-renderer) npm
+  package, sharing the same engine as this extension.
+
 ### 0.0.1
 
 - Initial release: WMF / Placeable WMF / EMF / EMF+ preview support

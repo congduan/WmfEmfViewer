@@ -19,6 +19,9 @@ coverage/
 node_modules/
 .workbuddy/
 output/
+# 本地回归/调试输出（与 .gitignore 同步，否则会混入 120MB+ 的图片产物）
+test-107.emf/
+test-*.emf/
 *.vsix
 package-lock.json
 tsconfig.json
