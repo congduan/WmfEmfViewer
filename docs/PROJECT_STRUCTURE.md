@@ -184,7 +184,8 @@ Supporting modules:
    - Generates source maps for debugging
 
 4. **npm run build**:
-   - Runs `build:bundle` then `compile`
+   - Runs `build:bundle` → `build:lib` → `compile`, emitting all three artifacts in one go so
+     the tracked `packages/wmf-emf-renderer/index.js` never goes stale
 
 ### Output Files
 - `out/extension.js`: Main extension entry

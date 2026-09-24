@@ -71,7 +71,7 @@ A Visual Studio Code extension for previewing **WMF** (Windows Metafile), **EMF*
 
 ```bash
 npm install        # install dependencies
-npm run build      # build browser bundle + compile TypeScript
+npm run build      # build browser bundle + npm package + compile TypeScript
 ```
 
 Press `F5` in VS Code to launch the Extension Development Host, then open a `.wmf` or `.emf` file from `test_files/`.
@@ -178,7 +178,7 @@ npm test           # smoke test: parse + render sample files
 
 | Command | Description |
 | ------- | ----------- |
-| `npm run build` | Full build (browser bundle + TypeScript compile) |
+| `npm run build` | Full build (browser bundle + npm package + TypeScript compile) |
 | `npm run build:bundle` | Build the browser/website bundle only |
 | `npm run build:lib` | Build the npm package bundle only |
 | `npm run compile` | Compile TypeScript to `out/` |

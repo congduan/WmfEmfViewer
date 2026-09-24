@@ -318,7 +318,9 @@ It runs with `noImplicitAny: false` on purpose: annotating every internal parser
   - Commands for manual preview triggering
 
 ### Build Scripts
-- **build**: `npm run build:bundle && npm run compile`
+- **build**: `npm run build:bundle && npm run build:lib && npm run compile` — emits all three
+  artifacts in one go; the npm bundle `packages/wmf-emf-renderer/index.js` is tracked in git, so
+  skipping it would leave a stale artifact behind in the repo
 - **build:bundle**: `node scripts/build-bundles.js browser`
 - **build:lib**: `node scripts/build-bundles.js npm`
 - **compile**: TypeScript compilation via `tsc`
