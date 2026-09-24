@@ -85,6 +85,34 @@ function summarize(relPath) {
     }
 }
 
+/** 单条基线的简要描述（用于 --update 的变更清单） */
+function describe(rec) {
+    if (!rec) return '(无)';
+    if (rec.status !== 'ok') return rec.status;
+    return `${rec.type} records=${rec.records} svgBytes=${rec.svgBytes}`;
+}
+
+/**
+ * 汇总 next 相对 baseline 的变化。
+ * --update 必须显式列出「哪些样例的渲染结果变了」：否则一次基线重生就能把真实
+ * 回归悄悄写进基线（历史教训：coordinateTransformer 的 MM_TEXT 语义变更与基线重生
+ * 位于同一提交，导致 sample-wmf/vegetable.wmf 全白、mathtype/example.wmf 只剩一个
+ * 字形，长期无人发现）。
+ */
+function summarizeChanges(baseline, next) {
+    const added = [];
+    const removed = [];
+    const changed = [];
+    for (const rel of Object.keys(next)) {
+        if (!baseline[rel]) added.push(rel);
+        else if (JSON.stringify(baseline[rel]) !== JSON.stringify(next[rel])) changed.push(rel);
+    }
+    for (const rel of Object.keys(baseline)) {
+        if (!next[rel]) removed.push(rel);
+    }
+    return { added, removed, changed };
+}
+
 function main() {
     const update = process.argv.includes('--update');
     const samples = collectSamples(TEST_FILES_DIR, '');
@@ -127,6 +155,31 @@ function main() {
     }
 
     if (update) {
+        const { added, removed, changed } = summarizeChanges(baseline, next);
+
+        if (changed.length > 0) {
+            console.error(`⚠️ 以下 ${changed.length} 个样例的渲染结果发生变化：`);
+            for (const rel of changed.slice(0, 30)) {
+                console.error(`  ~ ${rel}`);
+                console.error(`      旧: ${describe(baseline[rel])}`);
+                console.error(`      新: ${describe(next[rel])}`);
+            }
+            if (changed.length > 30) {
+                console.error(`  ... 以及另外 ${changed.length - 30} 个（本清单已截断）`);
+            }
+        }
+        if (added.length > 0) {
+            console.error(`+ ${added.length} 个新样例将纳入基线`);
+            for (const rel of added.slice(0, 10)) console.error(`  + ${rel}`);
+            if (added.length > 10) console.error(`  ... 以及另外 ${added.length - 10} 个`);
+        }
+        if (removed.length > 0) {
+            console.error(`- ${removed.length} 个样例将从基线移除`);
+        }
+        if (changed.length === 0 && added.length === 0 && removed.length === 0) {
+            console.error('基线与当前渲染完全一致，无需改动');
+        }
+
         fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
         fs.writeFileSync(SNAPSHOT_FILE, JSON.stringify(next, null, 2) + '\n');
         console.error(`基线已更新: ${SNAPSHOT_FILE}（${samples.length} 个样例）`);
