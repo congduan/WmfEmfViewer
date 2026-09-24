@@ -17,18 +17,20 @@ const MetafileParser = require('./utils/metafileParser');
 
 // 在浏览器环境中导出全局变量
 if (typeof window !== 'undefined') {
-    window.MetafileParser = MetafileParser;
-    window.FileTypeDetector = FileTypeDetector;
-    window.CoordinateTransformer = CoordinateTransformer;
-    window.MathTypeMtefParser = MathTypeMtefParser;
-    window.GdiObjectManager = GdiObjectManager;
-    window.BaseParser = BaseParser;
-    window.WmfParser = WmfParser;
-    window.EmfParser = EmfParser;
-    window.EmfPlusParser = EmfPlusParser;
-    window.BaseDrawer = BaseDrawer;
-    window.WmfDrawer = WmfDrawer;
-    window.EmfDrawer = EmfDrawer;
-    window.EmfPlusDrawer = EmfPlusDrawer;
-    window.SvgContext = SvgContext;
+    // window 上的自定义全局由本 bundle 约定产生，用断言声明以免 TS 报未知属性
+    const g = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (window));
+    g.MetafileParser = MetafileParser;
+    g.FileTypeDetector = FileTypeDetector;
+    g.CoordinateTransformer = CoordinateTransformer;
+    g.MathTypeMtefParser = MathTypeMtefParser;
+    g.GdiObjectManager = GdiObjectManager;
+    g.BaseParser = BaseParser;
+    g.WmfParser = WmfParser;
+    g.EmfParser = EmfParser;
+    g.EmfPlusParser = EmfPlusParser;
+    g.BaseDrawer = BaseDrawer;
+    g.WmfDrawer = WmfDrawer;
+    g.EmfDrawer = EmfDrawer;
+    g.EmfPlusDrawer = EmfPlusDrawer;
+    g.SvgContext = SvgContext;
 }

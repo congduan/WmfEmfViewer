@@ -14,7 +14,7 @@ const r = p.parse();
 const all = [];
 for (const rec of r.records) {
   if (rec.type === 0x46) {
-    try { for (const x of new EP(rec.data).parseEmfPlusRecords(rec.data)) all.push(x); } catch (e) {}
+    try { for (const x of new EP(rec.data).parseEmfPlusRecords(rec.data)) all.push(x); } catch (e) { /* 无效记录：忽略 */ }
   }
 }
 const cnt = {};

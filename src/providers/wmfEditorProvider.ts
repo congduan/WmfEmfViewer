@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
+import { buildWebviewHtml, getWebviewOptions } from '../utils/webviewHtml';
 
 export class WmfEditorProvider implements vscode.CustomEditorProvider {
     public static register(context: vscode.ExtensionContext): vscode.Disposable {
@@ -18,9 +17,6 @@ export class WmfEditorProvider implements vscode.CustomEditorProvider {
 
     private _onDidChangeCustomDocument = new vscode.EventEmitter<vscode.CustomDocumentEditEvent>();
     public readonly onDidChangeCustomDocument = this._onDidChangeCustomDocument.event;
-
-    // 性能：webview 模板为静态文件，缓存避免每次打开文件都读磁盘
-    private static webviewHtmlCache: string | null = null;
 
     constructor(private context: vscode.ExtensionContext) {}
 
@@ -40,36 +36,14 @@ export class WmfEditorProvider implements vscode.CustomEditorProvider {
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken
     ): Promise<void> {
-        // 配置WebView选项
-        webviewPanel.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [
-                vscode.Uri.file(path.join(this.context.extensionPath, 'src')),
-                vscode.Uri.file(path.join(this.context.extensionPath, 'out'))
-            ]
-        };
+        webviewPanel.webview.options = getWebviewOptions(this.context);
 
-        // 读取WMF文件内容（异步，避免阻塞扩展主线程）
-        const wmfContent = await fs.promises.readFile(document.uri.fsPath);
-        const wmfBase64 = wmfContent.toString('base64');
-
-        // 读取webview.html文件内容（优先使用缓存）
-        if (WmfEditorProvider.webviewHtmlCache === null) {
-            const webviewPath = path.join(this.context.extensionPath, 'src', 'resources', 'webview.html');
-            WmfEditorProvider.webviewHtmlCache = await fs.promises.readFile(webviewPath, 'utf8');
-        }
-        let webviewHtml = WmfEditorProvider.webviewHtmlCache;
-        
-        // 创建metafileParser.browser.js的本地URI（从out目录）
-        const parserScriptPath = vscode.Uri.file(path.join(this.context.extensionPath, 'out', 'metafileParser.browser.js'));
-        const parserScriptUri = webviewPanel.webview.asWebviewUri(parserScriptPath);
-        
-        // 替换WMF数据占位符和脚本路径
-        webviewHtml = webviewHtml.replace('${wmfBase64}', wmfBase64);
-        webviewHtml = webviewHtml.replace('metafileParser.browser.js', parserScriptUri.toString());
-
-        // 设置WebView内容
-        webviewPanel.webview.html = webviewHtml;
+        // 数据注入逻辑与预览命令共用同一实现（见 utils/webviewHtml）
+        webviewPanel.webview.html = await buildWebviewHtml(
+            this.context,
+            webviewPanel.webview,
+            document.uri.fsPath
+        );
     }
 
     async saveCustomDocument(

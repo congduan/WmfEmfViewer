@@ -4,45 +4,73 @@ This file contains essential information for agentic coding agents working in th
 
 ## Project Overview
 
-**WMF/EMF Viewer** is a Visual Studio Code extension that allows previewing WMF (Windows Metafile), EMF (Enhanced Metafile), and EMF+ (Enhanced Metafile Plus) images directly in the editor. It's built with TypeScript for extension logic and modular JavaScript for format parsing and rendering.
+**WMF/EMF Viewer** is a Visual Studio Code extension that previews WMF (Windows Metafile), EMF (Enhanced Metafile) and EMF+ (Enhanced Metafile Plus) images directly in the editor. The same parsing/rendering engine is also published as a standalone npm library and used by a static website.
 
-- **Type**: VSCode Extension
-- **Languages**: TypeScript (extension), JavaScript (parsers/drawers)
-- **Target**: VSCode ^1.75.0
-- **Output**: `./out/` directory (compiled JS)
+- **Type**: VSCode Extension + npm library + static website
+- **Languages**: TypeScript (extension layer), JavaScript (parsers/drawers)
+- **Target**: VSCode `^1.75.0`; npm library `node >= 14`
 - **Formats Supported**: WMF, Placeable WMF, EMF, EMF+
+
+### Single source of truth
+
+Everything is implemented once under `src/`. `scripts/build-bundles.js` (esbuild) produces two artifacts from that single source:
+
+| Artifact | Entry | Consumer |
+|---|---|---|
+| `out/metafileParser.browser.js` (IIFE) | `src/browser.js` | VSCode webview, `website/` |
+| `packages/wmf-emf-renderer/index.js` (CJS) | `packages/wmf-emf-renderer/entry.js` | npm package `wmf-emf-renderer` |
+
+Both artifacts are **generated and gitignored** — never edit them by hand. `packages/wmf-emf-renderer/entry.js` is the only hand-written file in that package (plus `index.d.ts` / `index.mjs` / README / LICENSE).
 
 ## Build & Development Commands
 
-### Essential Commands
 ```bash
-# Full build (browser bundle + TypeScript compilation)
+# Full build (browser bundle + npm package + TypeScript compilation)
 npm run build
 
-# Build browser bundle only
+# Browser/website bundle only  -> out/metafileParser.browser.js + website copy
 npm run build:bundle
 
-# Compile TypeScript to JavaScript
+# npm package bundle only      -> packages/wmf-emf-renderer/index.js
+npm run build:lib
+
+# Compile TypeScript -> out/
 npm run compile
 
-# Watch for changes and compile automatically
+# Watch mode for TypeScript
 npm run watch
 
-# Lint TypeScript files
+# Lint (src/ only, see Linting section)
 npm run lint
 
-# Run tests (includes compilation and linting)
+# Type check JS with checkJs (see tsconfig.check.json)
+npm run typecheck
+
+# Smoke tests against the built browser bundle (out/) 
+# + full-corpus snapshot regression against src/
 npm run test
 
-# Package extension into VSIX file
+# Snapshot regression only / regenerate baseline
+npm run test:snapshot
+npm run test:snapshot:update
+
+# Smoke-test the npm package artifact
+npm run test:lib
+
+# Package the extension into a VSIX (Marketplace readme = MARKETPLACE.md)
 npm run package
 
-# Development: Run extension in debug mode (F5 in VSCode)
+# Remove local render/debug output under out/ (keeps compiled extension + bundle)
+npm run clean:render
+
+# Remove out/ entirely
+npm run clean
 ```
 
 ### Before Making Changes
-Always run `npm run build` to ensure both bundling and TypeScript compilation work.  
-For production builds, run `npm run package` to create the VSIX.
+
+Always run `npm run build` to verify bundling and TypeScript compilation, then `npm test`.
+There is **no separate bundle-before-compile ordering requirement** anymore: esbuild handles the browser bundle, `tsc` only compiles the `.ts` extension layer, and the two do not depend on each other.
 
 ## Code Style Guidelines
 
@@ -51,7 +79,7 @@ For production builds, run `npm run package` to create the VSIX.
 - **Module**: CommonJS
 - **Strict mode**: Enabled
 - **Source maps**: Enabled
-- **Input**: `./src/**/*`
+- **Input**: `./src/**/*` (only `.ts` is emitted; `.js` passes through untouched)
 - **Output**: `./out/`
 
 ### Import Style
@@ -66,8 +94,8 @@ import * as path from 'path';
 - **Classes**: PascalCase (`WmfEditorProvider`, `WmfParser`, `WmfDrawer`, `EmfParser`)
 - **Methods**: camelCase (`openCustomDocument`, `processRecord`, `parseEmf`)
 - **Variables**: camelCase (`wmfContent`, `canvasWidth`, `fileType`)
-- **Constants**: UPPER_SNAKE_CASE (rare, use camelCase mostly)
-- **File names**: 
+- **Constants**: UPPER_SNAKE_CASE in `src/constants.js`, camelCase elsewhere
+- **File names**:
   - TypeScript: camelCase with descriptive names (`extension.ts`, `previewCommand.ts`, `wmfEditorProvider.ts`)
   - JavaScript: camelCase for modules (`wmfParser.js`, `emfDrawer.js`, `coordinateTransformer.js`)
   - Directories: lowercase (`parsers`, `drawers`, `utils`, `commands`)
@@ -87,82 +115,95 @@ async openCustomDocument(uri: vscode.Uri, _openContext: vscode.CustomDocumentOpe
 ```
 
 ### Console Logging
-- Use consistent logging: `console.log('WMF Viewer extension activated');`
-- Include context in logs: `console.log('Processing record', i, ':', record);`
-- Error logs: `console.error('Error in preview:', error);`
+- Use `console.log` for diagnostics: `console.log('WMF Viewer extension activated');`
+- The browser and npm bundles **rewrite `console.log` at build time** (esbuild `define`):
+  - browser bundle → `__wlog()`, gated by `globalThis.__WMF_DEBUG__` (set `true` in devtools to enable)
+  - npm bundle → `__wmfEmfRendererLog()`, gated by `setDebugEnabled(true)`
+- Because of this, you may write plain `console.log(...)` anywhere in `src/`; do not add your own debug flag checks.
+- `console.warn` / `console.error` are **not** silenced by the build, so use them only for real problems.
+- Extension-layer (`.ts`) logs run in the extension host and are not rewritten.
 
 ## File Structure & Architecture
 
 ### Project Directory Structure
 ```
 WmfEmfViewer/
-├── .vscode/              # VSCode workspace configuration
-│   ├── extensions.json   # Recommended extensions
-│   ├── launch.json      # Debug configurations
-│   ├── settings.json    # Workspace settings
-│   └── tasks.json       # Build tasks
+├── .github/workflows/        # CI: ci.yml, deploy-website.yml, publish.yml
+├── .vscode/                  # VSCode workspace configuration
+│   ├── extensions.json       # Recommended extensions
+│   ├── launch.json           # Debug configurations
+│   ├── settings.json         # Workspace settings
+│   └── tasks.json            # Build tasks
 │
-├── docs/                 # Documentation and specifications
+├── docs/                     # Documentation and specifications
 │   ├── PROJECT_STRUCTURE.md  # Detailed structure documentation
-│   ├── [MS-WMF].pdf     # WMF format specification
-│   ├── [MS-EMF].pdf     # EMF format specification
-│   └── [MS-EMFPLUS].pdf # EMF+ format specification
+│   ├── POI-COMPARE-CHECKLIST.md
+│   ├── [MS-WMF].pdf          # WMF format specification
+│   ├── [MS-EMF].pdf          # EMF format specification
+│   └── [MS-EMFPLUS].pdf      # EMF+ format specification
 │
-├── scripts/              # Development scripts
-│   ├── analyze-wmf.js   # WMF analysis tool
-│   └── install.sh       # Installation script
+├── packages/
+│   └── wmf-emf-renderer/     # npm package (entry.js + index.d.ts + generated index.js)
 │
-├── src/                  # Source code (detailed below)
-├── test/                 # Test files
-│   ├── fixtures/        # Test fixtures
-│   ├── test-wmf.js      # WMF unit tests
-│   ├── test-all-formats.js  # Multi-format tests
-│   ├── test-browser-bundle.html  # Browser test
-│   └── test-vscode-fix.html     # VSCode integration test
+├── scripts/                  # Development scripts (build + local analysis/debug tools)
+│   ├── build-bundles.js      # THE build script (esbuild; browser + npm)
+│   ├── install.sh
+│   └── [dbg|scan|dump|analyze]-*.js  # ad-hoc local debugging tools, not part of the build
 │
-├── test_files/          # Sample files (221 WMF/EMF files)
-├── out/                 # Compiled output (gitignored)
-├── package.json         # NPM package configuration
-├── tsconfig.json        # TypeScript configuration
-├── AGENTS.md            # This file
-└── README.md            # User documentation
+├── src/                      # Source code (single source of truth)
+├── test/                     # Tests
+│   ├── runTest.js            # Smoke tests against the built browser bundle
+│   ├── snapshot-test.js      # Full-corpus snapshot regression against src/
+│   └── snapshots/            # SVG hash baselines
+│
+├── test_files/               # Sample WMF/EMF corpus (403 .wmf + 229 .emf on the dev machine)
+├── website/                  # Static site (consumes the browser bundle)
+├── out/                      # Build output + local render outputs (gitignored)
+├── package.json              # Root workspace manifest
+├── tsconfig.json             # TypeScript compilation config
+├── tsconfig.check.json       # checkJs config (JS type checking)
+├── .eslintrc.js              # ESLint configuration
+└── README.md                 # User documentation
 ```
 
 ### Source Code Structure (`src/`)
 ```
 src/
-├── build/               # Build scripts
-│   └── build-browser-bundle.js  # Bundles modules for browser
-│
 ├── commands/            # VSCode command implementations
 │   └── previewCommand.ts        # Preview command handler
 │
-├── modules/             # Core parsing and rendering modules
+├── modules/             # Core parsing and rendering
 │   ├── parsers/        # Format-specific parsers
 │   │   ├── baseParser.js       # Base parser class
 │   │   ├── wmfParser.js        # WMF format parser
 │   │   ├── emfParser.js        # EMF format parser
 │   │   └── emfPlusParser.js    # EMF+ format parser
 │   │
-│   └── drawers/        # Format-specific renderers
-│       ├── baseDrawer.js       # Base drawer with Canvas utils
-│       ├── wmfDrawer.js        # WMF renderer (39KB)
-│       ├── emfDrawer.js        # EMF renderer (63KB)
-│       └── emfPlusDrawer.js    # EMF+ renderer (18KB)
+│   ├── drawers/        # Format-specific renderers
+│   │   ├── baseDrawer.js       # Base drawer with Canvas utils
+│   │   ├── wmfDrawer.js        # WMF renderer
+│   │   ├── emfDrawer.js        # EMF renderer
+│   │   └── emfPlusDrawer.js    # EMF+ renderer
+│   │
+│   └── svgContext.js   # Canvas2D-compatible context that emits SVG
 │
 ├── providers/           # VSCode provider implementations
 │   └── wmfEditorProvider.ts    # Custom editor provider
 │
 ├── resources/           # Static resources
-│   └── webview.html            # Webview HTML template
+│   ├── webview.html            # Webview HTML template
+│   └── icon.png                # Extension icon
 │
 ├── utils/               # Utility modules
-│   ├── coordinateTransformer.js  # Coordinate transformations
+│   ├── constants.js             # Shared file types, signatures, defaults
+│   ├── coordinateTransformer.js # Coordinate transformations
 │   ├── fileTypeDetector.js      # Auto file type detection
 │   ├── gdiObjectManager.js      # GDI object state manager
+│   ├── mathTypeMtefParser.js    # MathType MTEF payload reader
 │   ├── metafileParser.js        # Main parser orchestrator
-│   └── recordParser.js          # Record parsing utilities
+│   └── webviewHtml.ts           # Shared webview HTML builder (extension layer)
 │
+├── browser.js           # Browser bundle entry (esbuild IIFE, exposes window globals)
 └── extension.ts         # Main extension entry point
 ```
 
@@ -170,20 +211,20 @@ src/
 
 #### Modular Design
 - **Separation of Concerns**: Extension logic (TS) separated from parsing/rendering (JS)
-- **Format-Specific Modules**: Each format (WMF/EMF/EMF+) has dedicated parser and drawer
+- **Format-Specific Modules**: Each format (WMF/EMF/EMF+) has a dedicated parser and drawer
 - **Base Classes**: Shared functionality in `BaseParser` and `BaseDrawer`
 - **Utility Modules**: Reusable components (coordinate transformation, GDI management)
 
 #### VSCode Integration
 - **CustomEditorProvider**: Seamless integration with VSCode editor system
 - **Commands**: Separate command handlers in `commands/` directory
-- **WebView**: Secure webview with base64 data embedding
+- **WebView**: Secure webview with base64 data embedding (via `utils/webviewHtml.ts`)
 - **Context Management**: Proper VSCode extension context handling
 
 #### Build System
-- **Browser Bundling**: `build-browser-bundle.js` creates single-file browser bundle
-- **Module Syntax Removal**: Strips Node.js `require`/`module.exports` for browser
-- **TypeScript Compilation**: Separate TS compilation to `out/` directory
+- **Single esbuild script**: `scripts/build-bundles.js` produces both bundles; adding a module requires no build-script change (esbuild follows `require` graph automatically)
+- **Log gating by `define`**: `console.log` is rewritten at compile time, so source stays readable
+- **TypeScript Compilation**: `tsc` compiles only the `.ts` extension layer into `out/`
 
 ### Key Components
 
@@ -191,6 +232,7 @@ src/
 - **extension.ts**: Main entry point, registers providers and commands
 - **wmfEditorProvider.ts**: Custom editor provider for `.wmf`/`.emf` files
 - **previewCommand.ts**: Preview command implementation
+- **utils/webviewHtml.ts**: Shared "read file → base64 → inject into template" logic
 
 #### Parsing Layer (JavaScript)
 - **FileTypeDetector**: Auto-detects WMF, EMF, EMF+ format from binary signature
@@ -201,30 +243,35 @@ src/
 #### Rendering Layer (JavaScript)
 - **BaseDrawer**: Canvas 2D utilities, common drawing operations
 - **WmfDrawer/EmfDrawer/EmfPlusDrawer**: Format-specific Canvas rendering
+- **SvgContext**: Canvas2D-compatible surface that serializes to SVG (used by tests and `renderToSvg`)
 - **CoordinateTransformer**: Handles coordinate system transformations
 - **GdiObjectManager**: Manages GDI objects (pens, brushes, fonts)
 
 ## Testing
 
 ### Test Files
-Test files are organized in the `test/` directory:
-- **test-wmf.js**: WMF parsing unit tests with mock Canvas
-- **test-all-formats.js**: Multi-format support tests
-- **test-browser-bundle.html**: Browser rendering tests
-- **test-vscode-fix.html**: VSCode integration tests
-- **fixtures/**: Test fixtures and sample data
+Only two test entry points are live; both are wired into `npm test`:
+
+- **`test/runTest.js`**: smoke tests that load the **built browser bundle** (`out/metafileParser.browser.js`) and render a handful of samples through `SvgContext`, including MathType and image regression cases.
+- **`test/snapshot-test.js`**: loads the **`src/` sources** and renders every `.wmf`/`.emf` under `test_files/`, comparing a sha256 of the produced SVG against `test/snapshots/snapshots.json`.
+- **`packages/wmf-emf-renderer/test/smoke-test.js`**: validates the **npm package artifact** (`npm run test:lib`).
+
+```bash
+npm test                      # smoke (bundle) + snapshot (src)
+npm run test:snapshot         # snapshot only
+npm run test:snapshot:update  # regenerate the baseline after intentional rendering changes
+npm run test:lib              # npm package artifact smoke test
+```
+
+When you intentionally change rendering output, run `npm run test:snapshot:update` and commit the updated `snapshots.json`.
 
 ### Sample Files
-`test_files/` directory contains 221+ sample files:
-- 212 WMF files
-- 2 EMF files
-- Various image formats for comparison (JPEG, JPG, SVG)
+`test_files/` holds the regression corpus (403 `.wmf` + 229 `.emf` on a dev machine with the full corpora present; 222 files are committed). The large corpora (`ref-emf-corpus/`, `lo-wmf-corpus/`, `sample-wmf/`) are **gitignored** and generated/downloaded locally.
 
 ### Manual Testing
 ```bash
-# Run standalone tests
-node test/test-wmf.js
-node test/test-all-formats.js
+# Render a single file for eyeballing
+node scripts/render-one.js <path>
 
 # Test extension in VSCode
 # 1. Open project in VSCode
@@ -235,14 +282,20 @@ node test/test-all-formats.js
 ## Linting
 
 ### ESLint Configuration
-- Uses @typescript-eslint/parser and @typescript-eslint/eslint-plugin
-- Configured for TypeScript files in `src/` directory
-- Run with: `npm run lint`
+- `.eslintrc.js` (ESLint 8 flat-less config) with `@typescript-eslint/parser` + `plugin:@typescript-eslint/recommended`
+- Scans `src/` **and** `scripts/` (`npm run lint`)
+- `no-console` is intentionally off: bundling rewrites `console.log`
+- Unused identifiers may be prefixed with `_` (e.g. VSCode provider placeholder params)
 
 ### Common Lint Issues
 - Always run lint before committing
 - Fix TypeScript strict mode errors
 - Ensure proper type annotations
+
+### Type Checking JavaScript
+`npm run typecheck` runs `tsc -p tsconfig.check.json` with `allowJs` + `checkJs` over **all** `.js` modules under `src/`, and must stay green in CI.
+
+It runs with `noImplicitAny: false` on purpose: annotating every internal parser/drawer parameter would mean thousands of `@param` tags for little benefit. What it *does* catch — and what you must keep clean — is the classes of error that signal real bugs: missing properties (TS2339), incompatible assignments (TS2322), `unknown` from `catch` (TS18046), possibly-undefined access (TS2532).
 
 ## VSCode Extension Specifics
 
@@ -250,14 +303,15 @@ node test/test-all-formats.js
 - **Activation Events**: `onCommand:wmfViewer.preview`, `onFileSystem:file`
 - **Main Entry**: `./out/extension.js`
 - **Custom Editor**: `wmfViewer.editor` for `.wmf` and `.emf` files
-- **Contributions**: 
+- **Contributions**:
   - Explorer context menu for preview command
   - Custom editor for seamless file opening
   - Commands for manual preview triggering
 
 ### Build Scripts
-- **build**: Full build (bundle + compile)
-- **build:bundle**: Run `src/build/build-browser-bundle.js`
+- **build**: `npm run build:bundle && npm run compile`
+- **build:bundle**: `node scripts/build-bundles.js browser`
+- **build:lib**: `node scripts/build-bundles.js npm`
 - **compile**: TypeScript compilation via `tsc`
 - **watch**: Watch mode for development
 
@@ -272,16 +326,17 @@ node test/test-all-formats.js
 
 ### Before Starting Work
 1. Run `npm install` to ensure dependencies
-2. Run `npm run build` to verify both bundling and compilation
+2. Run `npm run build` to verify bundling and compilation
 3. Check existing code patterns in relevant files
 4. Review `docs/PROJECT_STRUCTURE.md` for detailed architecture
 
 ### When Adding Features
-1. **New Format Support**: 
+1. **New Format Support**:
    - Add parser in `src/modules/parsers/`
    - Add drawer in `src/modules/drawers/`
    - Update `FileTypeDetector` and `MetafileParser`
-   - Add to build bundle script
+   - Export it from `src/browser.js` and `packages/wmf-emf-renderer/entry.js` (build scripts need no change)
+   - Update `packages/wmf-emf-renderer/index.d.ts`
 
 2. **New Commands**:
    - Create in `src/commands/`
@@ -291,20 +346,20 @@ node test/test-all-formats.js
 3. **Utility Functions**:
    - Add to appropriate file in `src/utils/`
    - Follow existing module patterns
-   - Update build bundle if needed
+   - Prefer extending `src/utils/constants.js` over adding new magic numbers
 
 4. Follow existing naming conventions and patterns
 5. Add proper TypeScript types for TS files
 6. Include error handling and logging
-7. Test with sample files from `test_files/`
+7. Test with sample files from `test_files/` and run `npm test`
 
 ### Common Patterns
-- **File Operations**: Use `fs.readFileSync()` with proper error handling
+- **File Operations**: `fs.promises.readFile()` in the extension layer (avoid `readFileSync`, it blocks the extension host); `readFileSync` is fine inside synchronous parsers/drawers
 - **Path Operations**: Use `path.join()` for cross-platform compatibility
 - **Base64 Handling**: Convert binary data with `.toString('base64')`
-- **WebView HTML**: Use template replacement for dynamic content (`${placeholder}`)
+- **WebView HTML**: Use `utils/webviewHtml.ts` rather than re-implementing template injection
 - **Resource Loading**: Use `asWebviewUri()` for secure webview resource loading
-- **Module Bundling**: Update `src/build/build-browser-bundle.js` when adding modules
+- **Module Bundling**: Just add a `require`; esbuild inlines it automatically
 
 ## WMF/EMF/EMF+ Format Considerations
 
@@ -338,32 +393,33 @@ Official Microsoft specifications available in `docs/`:
 
 ## Common Gotchas
 
-- **Build Order**: Must run `npm run build:bundle` before `compile` for browser bundle
-- **TypeScript Compilation**: Always compile before testing
-- **Path Updates**: When moving files, update paths in:
-  - `build-browser-bundle.js` (module paths)
-  - `extension.ts` and providers (import paths)
+- **Generated files**: `out/**`, `website/metafileParser.browser.js` and `packages/wmf-emf-renderer/index.js` are build outputs — edit `src/` instead
+- **Path Updates**: When moving files, update:
+  - `src/browser.js` and `packages/wmf-emf-renderer/entry.js` (exports)
+  - `extension.ts`, providers and commands (import paths)
   - `package.json` (script paths)
 - **WebView Paths**: Use `asWebviewUri()` for secure resource loading
 - **Binary Data**: Handle Uint8Array conversions properly
 - **Extension Context**: Pass context correctly to resource loaders
 - **File Extensions**: Ensure both `.wmf` and `.emf` files are properly associated
-- **Module System**: Browser bundle removes Node.js module syntax
-- **Resource Locations**: 
+- **Log gating**: `console.log` is rewritten by the bundler — don't rely on it in unit tests that load `src/` directly unless you silence it yourself
+- **Resource Locations**:
   - Webview HTML: `src/resources/webview.html`
   - Browser bundle output: `out/metafileParser.browser.js`
 
 ## Dependencies
 
 ### Runtime Dependencies
-- None (self-contained extension)
+- None (self-contained extension and library)
 
 ### Development Dependencies
 - @types/vscode: VSCode API types
 - @typescript-eslint/*: TypeScript linting
 - typescript: TypeScript compiler
-- eslint: JavaScript linting
-- @vscode/test-electron: VSCode testing utilities
+- esbuild: bundle builder (browser IIFE + npm CJS)
+- eslint: JavaScript/TypeScript linting
+- mocha, @vscode/test-electron: VSCode extension testing utilities
+- pngjs: image regression helpers
 
 ## Security Notes
 

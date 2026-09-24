@@ -3,13 +3,15 @@ const FileTypeDetector = require('./fileTypeDetector');
 const WmfParser = require('../modules/parsers/wmfParser');
 const EmfParser = require('../modules/parsers/emfParser');
 const EmfPlusParser = require('../modules/parsers/emfPlusParser');
+const { FILE_TYPES } = require('./constants');
 
 class MetafileParser {
+    /** @param {Uint8Array|ArrayBuffer|number[]} data */
     constructor(data) {
         this.data = new Uint8Array(data);
         this.fileTypeDetector = new FileTypeDetector(data);
         this.fileType = this.fileTypeDetector.detect();
-        console.log('Metafile Parser initialized with data length:', data.length, 'type:', this.fileType);
+        console.log('Metafile Parser initialized with data length:', this.data.length, 'type:', this.fileType);
     }
 
     parse() {
@@ -17,14 +19,14 @@ class MetafileParser {
 
         try {
             switch (this.fileType) {
-                case 'emf+':
+                case FILE_TYPES.EMF_PLUS:
                     return this.parseEmfPlus();
-                case 'emf':
+                case FILE_TYPES.EMF:
                     return this.parseEmf();
-                case 'wmf':
-                case 'placeable-wmf':
+                case FILE_TYPES.WMF:
+                case FILE_TYPES.PLACEABLE_WMF:
                     return this.parseWmf();
-                default:
+                default: {
                     console.log('Unknown file type, trying all methods...');
                     const emfPlusResult = this.tryParseEmfPlus();
                     if (emfPlusResult && emfPlusResult.records.length > 0) {
@@ -39,13 +41,16 @@ class MetafileParser {
                         return wmfResult;
                     }
                     throw new Error('Failed to parse file with any format');
+                }
             }
         } catch (error) {
-            console.error('Parsing error:', error.message);
+            // JSDoc 断言而非转换：运行时取值与之前完全一致
+            const err = /** @type {Error} */ (error);
+            console.error('Parsing error:', err.message);
             return {
                 header: null,
                 records: [],
-                error: error.message
+                error: err.message
             };
         }
     }
@@ -68,9 +73,9 @@ class MetafileParser {
     tryParseWmf() {
         try {
             const wmfParser = new WmfParser(this.data);
-            return wmfParser.parse('wmf');
+            return wmfParser.parse(FILE_TYPES.WMF);
         } catch (error) {
-            console.log('WMF parsing failed:', error.message);
+            console.log('WMF parsing failed:', /** @type {Error} */ (error).message);
             return null;
         }
     }
@@ -80,7 +85,7 @@ class MetafileParser {
             const emfParser = new EmfParser(this.data);
             return emfParser.parse();
         } catch (error) {
-            console.log('EMF parsing failed:', error.message);
+            console.log('EMF parsing failed:', /** @type {Error} */ (error).message);
             return null;
         }
     }
@@ -90,7 +95,7 @@ class MetafileParser {
             const emfPlusParser = new EmfPlusParser(this.data);
             return emfPlusParser.parse();
         } catch (error) {
-            console.log('EMF+ parsing failed:', error.message);
+            console.log('EMF+ parsing failed:', /** @type {Error} */ (error).message);
             return null;
         }
     }

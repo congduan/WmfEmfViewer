@@ -102,14 +102,21 @@ function main() {
     let failed = 0;
     const next = {};
     const failures = [];
+    /** @type {string[]} 尚未纳入基线的样例 */
+    const addedSamples = [];
 
     for (const rel of samples) {
         const actual = summarize(rel);
         next[rel] = actual;
         const expected = baseline[rel];
 
-        if (update || !expected) {
-            continue; // --update 或新样例：仅记录
+        if (!expected) {
+            // 新样例**不**静默写入基线：需显式运行 --update，否则会掩盖真实回归
+            addedSamples.push(rel);
+            continue;
+        }
+        if (update) {
+            continue;
         }
         if (JSON.stringify(expected) === JSON.stringify(actual)) {
             passed++;
@@ -130,13 +137,6 @@ function main() {
     console.error(`WMF/EMF/EMF+ 快照测试（${samples.length} 个样例）`);
     console.error('='.repeat(70));
 
-    if (update) {
-        fs.writeFileSync(SNAPSHOT_FILE, JSON.stringify(next, null, 2) + '\n');
-        console.error(`基线已更新: ${SNAPSHOT_FILE}（${samples.length} 个样例）`);
-        return;
-    }
-
-    const added = samples.filter((rel) => !baseline[rel]).length;
     const removed = Object.keys(baseline).filter((rel) => !next[rel]).length;
 
     for (const f of failures.slice(0, 20)) {
@@ -148,16 +148,23 @@ function main() {
         console.error(`... 以及另外 ${failures.length - 20} 个失败`);
     }
 
-    if (added > 0) console.error(`+ ${added} 个新样例已纳入（本次记录基线）`);
+    if (addedSamples.length > 0) {
+        console.error(`+ ${addedSamples.length} 个新样例尚未纳入基线:`);
+        for (const rel of addedSamples.slice(0, 10)) console.error(`    + ${rel}`);
+        if (addedSamples.length > 10) console.error(`    ... 以及另外 ${addedSamples.length - 10} 个`);
+    }
     if (removed > 0) console.error(`- ${removed} 个样例已移除`);
 
     console.error('='.repeat(70));
-    console.error(`结果: ${passed} 通过, ${failed} 失败`);
+    console.error(`结果: ${passed} 通过, ${failed} 失败, ${addedSamples.length} 新样例待纳入`);
     console.error('='.repeat(70));
     if (failed > 0) {
         console.error('渲染行为发生变化。若为有意变更，请运行: npm run test:snapshot:update');
     }
-    process.exit(failed > 0 ? 1 : 0);
+    if (addedSamples.length > 0) {
+        console.error('存在未纳入基线的新样例。确认渲染结果无误后运行: npm run test:snapshot:update');
+    }
+    process.exit(failed > 0 || addedSamples.length > 0 ? 1 : 0);
 }
 
 main();

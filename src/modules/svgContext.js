@@ -2,6 +2,9 @@
 // 将 WmfDrawer/EmfDrawer/EmfPlusDrawer 调用的 Canvas 2D 绘制指令
 // 转换为 SVG 元素（<path>/<rect>/<text>/<clipPath> 等），最后可序列化为完整 SVG 文档。
 
+/** PNG CRC32 查表（进程内惰性初始化）@type {Uint32Array|null} */
+let crcTableCache = null;
+
 class SvgContext {
     constructor() {
         this.canvas = { width: 0, height: 0, style: {} };
@@ -28,6 +31,7 @@ class SvgContext {
         this._images = [];      // putImageData 保存的位图（getSvg 时编码为 PNG）
         this._segments = [];    // 当前路径段
         this._hasSubpath = false;
+        /** @type {{clip: string|null}} 当前裁剪状态（_save/_restore 快照用） */
         this._state = { clip: null };
         this._stack = [];
         this._clipCount = 0;
@@ -72,6 +76,7 @@ class SvgContext {
 
     // 剔除 XML 1.0 非法字符（控制字符），避免渲染失败
     static _sanitizeXml(s) {
+        // eslint-disable-next-line no-control-regex -- 此处正是要有意匹配控制字符
         return String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '');
     }
 
@@ -479,7 +484,7 @@ class SvgContext {
         zlib[p++] = (adler >>> 8) & 0xFF; zlib[p++] = adler & 0xFF;
 
         // PNG chunk 组装
-        const crcTable = SvgContext._crcTable || (SvgContext._crcTable = (() => {
+        const crcTable = crcTableCache || (crcTableCache = (() => {
             const t = new Uint32Array(256);
             for (let n = 0; n < 256; n++) {
                 let c = n;
@@ -518,7 +523,7 @@ class SvgContext {
         let bin = '';
         const CH = 0x8000;
         for (let i = 0; i < bytes.length; i += CH) {
-            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+            bin += String.fromCharCode.apply(null, /** @type {any} */ (bytes.subarray(i, i + CH)));
         }
         return 'data:image/png;base64,' + btoa(bin);
     }
@@ -557,7 +562,7 @@ class SvgContext {
      * 注册 DIB 图案刷（EMR_CREATEDIBPATTERNBRUSHPT）。
      * @param {{width:number,height:number,data:Uint8ClampedArray}} dib RGBA 像素（height 可正负，负=top-down）
      * @param {{orgX?:number,orgY?:number}} [opts] 画刷原点（用于图案平移对齐）
-     * @returns {string} 形如 "url(#pat-3)"，作为 fillStyle 即可平铺填充
+     * @returns {string|null} 形如 "url(#pat-3)"，作为 fillStyle 即可平铺填充；参数非法时返回 null
      */
     addPattern(dib, opts) {
         const { width, height, data } = dib;

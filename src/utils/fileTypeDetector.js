@@ -2,6 +2,8 @@
 // 文件类型检测模块
 // 通过二进制签名自动识别 WMF / Placeable WMF / EMF / EMF+ 四种格式。
 
+const { FILE_TYPES, SIGNATURES, RECORD_TYPES, EMF_HEADER_SIZE } = require('./constants');
+
 /**
  * WMF/EMF/EMF+ 元文件格式类型
  * @typedef {'wmf'|'placeable-wmf'|'emf'|'emf+'|'unknown'} MetafileType
@@ -26,34 +28,33 @@ class FileTypeDetector {
      */
     detect() {
         // 检查文件类型
-        if (this.data.length < 4) return 'unknown';
+        if (this.data.length < 4) return FILE_TYPES.UNKNOWN;
 
         // 检查Placeable WMF标识: D7 CD C6 9A (placeable WMF signature)
-        if (this.data[0] === 0xD7 && this.data[1] === 0xCD &&
-            this.data[2] === 0xC6 && this.data[3] === 0x9A) {
-            return 'placeable-wmf';
+        if (this.readDwordAt(0) === SIGNATURES.PLACEABLE_WMF_KEY) {
+            return FILE_TYPES.PLACEABLE_WMF;
         }
 
         // 检查标准WMF标识: 0x00090001 或 0x00090000
         const signature = this.readDwordAt(0);
-        if (signature === 0x00090001 || signature === 0x00090000) {
-            return 'wmf';
+        if (SIGNATURES.WMF_HEADER_WORDS.includes(signature)) {
+            return FILE_TYPES.WMF;
         }
 
         // 检查EMF/EMF+标识 (需要更长头)
-        if (this.data.length >= 88) {
+        if (this.data.length >= EMF_HEADER_SIZE) {
             // EMF文件头在offset 40处有dSignature字段，值为0x464D4520 (" EMF")
             const dSignature = this.readDwordAt(40);
-            if (dSignature === 0x464D4520) { // " EMF"
+            if (dSignature === SIGNATURES.EMF_SIGNATURE) {
                 // EMF+ 是 EMF 的超集：其 EMF+ 记录经 EMR_GDICOMMENT 内嵌于
                 // 标准 EMF 记录流中（Windows 按记录序交织播放）。
                 // 统一按 'emf' 解析全量记录，由 EmfDrawer 在遇到 GDICOMMENT 时
                 // 派发内嵌 EMF+ 记录；'emf+' 类型保留供 isEmfPlusFile() 单独查询。
-                return 'emf';
+                return FILE_TYPES.EMF;
             }
         }
 
-        return 'unknown';
+        return FILE_TYPES.UNKNOWN;
     }
 
     /**
@@ -65,7 +66,7 @@ class FileTypeDetector {
      */
     isEmfPlusFile() {
         try {
-            if (this.data.length < 88) return false;
+            if (this.data.length < EMF_HEADER_SIZE) return false;
 
             // 读取EMF头大小（在offset 4处）
             const headerSize = this.readDwordAt(4);
@@ -77,17 +78,17 @@ class FileTypeDetector {
                 const size = this.readDwordAt(offset + 4);
                 if (size < 8 || offset + size > this.data.length) break;
 
-                if (type === 0x46 && size >= 12) {
+                if (type === RECORD_TYPES.EMR_GDICOMMENT && size >= 12) {
                     // 规范布局：DataSize@+8、CommentIdentifier@+12
-                    if (size >= 16 && this.readDwordAt(offset + 12) === 0x2B464D45) {
+                    if (size >= 16 && this.readDwordAt(offset + 12) === SIGNATURES.EMF_PLUS_COMMENT_ID) {
                         return true;
                     }
                     // 兼容变体：CommentIdentifier 紧跟记录头
-                    if (this.readDwordAt(offset + 8) === 0x2B464D45) {
+                    if (this.readDwordAt(offset + 8) === SIGNATURES.EMF_PLUS_COMMENT_ID) {
                         return true;
                     }
                 }
-                if (type === 0x0E) break; // EMR_EOF
+                if (type === RECORD_TYPES.EMR_EOF) break; // EMR_EOF
                 offset += size;
             }
             return false;

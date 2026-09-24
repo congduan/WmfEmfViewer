@@ -1,5 +1,6 @@
 // WMF解析器模块
 const BaseParser = require('./baseParser');
+const { FILE_TYPES, SIGNATURES } = require('../../utils/constants');
 
 // WMF指令类型映射
 const WMF_FUNCTIONS = {
@@ -72,7 +73,7 @@ class WmfParser extends BaseParser {
     };
 
     // 验证Placeable WMF签名
-    if (placeableHeader.key !== 0x9AC6CDD7) {
+    if (placeableHeader.key !== SIGNATURES.PLACEABLE_WMF_KEY) {
       console.warn('Invalid Placeable WMF key:', placeableHeader.key.toString(16));
     }
 
@@ -144,7 +145,7 @@ class WmfParser extends BaseParser {
       console.log('Starting WMF parsing...');
       // 解析placeable WMF文件头（如果存在）
       let placeableHeader = null;
-      if (fileType === 'placeable-wmf') {
+      if (fileType === FILE_TYPES.PLACEABLE_WMF) {
         placeableHeader = this.parsePlaceableHeader();
         console.log('Placeable WMF Header:', placeableHeader);
       }
@@ -192,7 +193,7 @@ class WmfParser extends BaseParser {
             break;
           }
         } catch (error) {
-          console.warn('Error parsing WMF record at offset', this.getOffset(), ':', error.message);
+          console.warn('Error parsing WMF record at offset', this.getOffset(), ':', /** @type {Error} */ (error).message);
           this.setOffset(this.getOffset() + 2);
         }
       }
@@ -201,11 +202,12 @@ class WmfParser extends BaseParser {
       console.log('Total WMF records parsed:', records.length);
       return { header: { ...header, placeableHeader }, records };
     } catch (error) {
-      console.error('WMF parsing error:', error.message);
+      const err = /** @type {Error} */ (error);
+      console.error('WMF parsing error:', err.message);
       return {
         header: null,
         records: [],
-        error: error.message
+        error: err.message
       };
     }
   }

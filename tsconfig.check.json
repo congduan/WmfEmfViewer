@@ -1,9 +1,15 @@
 {
+  // JS 引擎的渐进式类型检查（npm run typecheck，CI 强制为绿）。
+  // 范围：src/ 下全部 .js（解析器、绘制器、工具）。
+  // 说明：noImplicitAny 关闭是为了避免为上千个内部参数补写 @param——
+  // 此处优先捕获「真正会出错」的类别（属性不存在、赋值不兼容、unknown、可能 undefined）。
   "compilerOptions": {
     "target": "ES2020",
+    "lib": ["ES2020", "DOM"],
     "module": "commonjs",
     "moduleResolution": "node",
     "strict": true,
+    "noImplicitAny": false,
     "noEmit": true,
     "allowJs": true,
     "checkJs": true,
@@ -11,7 +17,6 @@
     "skipLibCheck": true
   },
   "include": [
-    "src/utils/fileTypeDetector.js",
-    "src/utils/coordinateTransformer.js"
+    "src/**/*.js"
   ]
 }

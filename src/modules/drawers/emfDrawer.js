@@ -3,6 +3,7 @@ const CoordinateTransformer = require('../../utils/coordinateTransformer');
 const GdiObjectManager = require('../../utils/gdiObjectManager');
 const EmfPlusParser = require('../parsers/emfPlusParser');
 const EmfPlusDrawer = require('./emfPlusDrawer');
+const { SIGNATURES, RECORD_TYPES, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require('../../utils/constants');
 
 // EMF 记录分派表：记录类型 -> 处理方法名（processEmfRecordType 中调用 this[方法名](data)）。
 // 值为 null 表示已识别但无需处理/暂不支持（与原 switch 的空分支等价，不打未知记录日志）。
@@ -174,9 +175,9 @@ class EmfDrawer {
     console.log('Drawing EMF with header:', metafileData.header);
     console.log('Number of records:', metafileData.records.length);
 
-    // 获取view尺寸，默认为800x600
-    const viewWidth = options.viewWidth || 800;
-    const viewHeight = options.viewHeight || 600;
+    // 获取view尺寸，默认见 constants.DEFAULT_VIEW_*
+    const viewWidth = options.viewWidth || DEFAULT_VIEW_WIDTH;
+    const viewHeight = options.viewHeight || DEFAULT_VIEW_HEIGHT;
 
     // 设置Canvas大小和坐标转换
     // 设备空间模型：canvas = EMF 设备坐标系（header rclBounds 内容设备包围盒）。
@@ -1014,7 +1015,7 @@ class EmfDrawer {
     let hasGdiDraw = false;
     for (const r of records) {
       const t = (r.type >>> 0);
-      if (t === 0x46) {
+      if (t === RECORD_TYPES.EMR_GDICOMMENT) {
         // GDICOMMENT 数据起始 "EMF+" 签名（0x2B464D45 LE：45 4D 46 2B）
         if (r.data && r.data.length >= 8 && r.data[4] === 0x45 && r.data[5] === 0x4D && r.data[6] === 0x46 && r.data[7] === 0x2B) {
           hasEmfPlus = true;
@@ -1031,7 +1032,7 @@ class EmfDrawer {
 
   processEmfGdiComment(data) {
     if (!data || data.length < 8) return;
-    if (this.readDwordFromData(data, 4) !== 0x2B464D45) return; // 非 EMF+ 注释
+    if (this.readDwordFromData(data, 4) !== SIGNATURES.EMF_PLUS_COMMENT_ID) return; // 非 EMF+ 注释
     try {
       if (this._skipEmfPlusPlayback) return; // 双模式：GDI 记录已覆盖内容，跳过 EMF+ 回放
       const parser = new EmfPlusParser(data); // parseEmfPlusRecords 只依赖入参
@@ -1050,7 +1051,7 @@ class EmfDrawer {
         this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
       }
     } catch (e) {
-      console.log('EMF+ GDIComment playback failed:', e.message);
+      console.log('EMF+ GDIComment playback failed:', /** @type {Error} */ (e).message);
     }
   }
 
@@ -1592,7 +1593,7 @@ class EmfDrawer {
           console.log('  Rendered text:', text.substring(0, 50));
         }
       } catch (error) {
-        console.log('  Error reading text:', error.message);
+        console.log('  Error reading text:', /** @type {Error} */ (error).message);
       }
     }
   }
@@ -1787,7 +1788,7 @@ class EmfDrawer {
 
       return { width, height, data: out };
     } catch (e) {
-      console.log('DIB decode failed:', e.message);
+      console.log('DIB decode failed:', /** @type {Error} */ (e).message);
       return null;
     }
   }

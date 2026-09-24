@@ -1,6 +1,7 @@
 // EMF+绘制模块
 const CoordinateTransformer = require('../../utils/coordinateTransformer');
 const GdiObjectManager = require('../../utils/gdiObjectManager');
+const { DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require('../../utils/constants');
 
 // EMF+ 记录分派表：记录类型 -> 处理方法名（processEmfPlusRecordType 中调用 this[方法名](flags, data)）。
 // 值为 null 表示已识别但无需处理（与原 switch 的空分支等价）。
@@ -275,9 +276,9 @@ class EmfPlusDrawer {
     console.log('Drawing EMF+ with header:', metafileData.header);
     console.log('Number of records:', metafileData.records.length);
 
-    // 获取view尺寸，默认为800x600
-    const viewWidth = options.viewWidth || 800;
-    const viewHeight = options.viewHeight || 600;
+    // 获取view尺寸，默认见 constants.DEFAULT_VIEW_*
+    const viewWidth = options.viewWidth || DEFAULT_VIEW_WIDTH;
+    const viewHeight = options.viewHeight || DEFAULT_VIEW_HEIGHT;
 
     let canvasWidth, canvasHeight;
     if (metafileData.header.bounds) {
@@ -596,7 +597,7 @@ class EmfPlusDrawer {
         defs + body + '</g>'
       );
     } catch (e) {
-      console.log('EMF+ DrawImage failed:', e.message);
+      console.log('EMF+ DrawImage failed:', /** @type {Error} */ (e).message);
     }
   }
 
@@ -617,14 +618,16 @@ class EmfPlusDrawer {
       const drawer = new EmfDrawerCtor(subCtx);
       drawer.draw(result, { viewWidth: 800, viewHeight: 600 });
       // 嵌套 EMF 画布尺寸（bounds）作为源坐标空间
-      let W = 800, H = 600;
-      if (result.header && result.header.bounds) {
-        W = Math.abs(result.header.bounds.right - result.header.bounds.left);
-        H = Math.abs(result.header.bounds.bottom - result.header.bounds.top);
+      // header 可能是 WMF/EMF 任一头结构（联合类型），此处只关心 EMF 的 bounds
+      const header = /** @type {{bounds?: {left:number,top:number,right:number,bottom:number}}} */ (result.header);
+      let W = DEFAULT_VIEW_WIDTH, H = DEFAULT_VIEW_HEIGHT;
+      if (header && header.bounds) {
+        W = Math.abs(header.bounds.right - header.bounds.left);
+        H = Math.abs(header.bounds.bottom - header.bounds.top);
       }
       return { nodes: subCtx.nodes, defs: subCtx.defs, width: W || 1, height: H || 1 };
     } catch (e) {
-      console.log('EMF+ nested EMF render failed:', e.message);
+      console.log('EMF+ nested EMF render failed:', /** @type {Error} */ (e).message);
       return null;
     }
   }

@@ -87,6 +87,10 @@ class WmfDrawer extends BaseDrawer {
     this.currentFontFace = 'Arial';
     this.currentCharset = 0; // 当前字体的 CharSet（DBCS 判定用）
     this.arcDirection = 0x01; // 弧方向：默认 AD_COUNTERCLOCKWISE (1)
+    /** @type {any[][]} MathType MTEF 流（仅诊断，draw() 中重置） */
+    this.mathTypeMtefStreams = [];
+    /** @type {number} 多块 MathML 注释剩余待跳过的数据字节数（draw() 中重置） */
+    this.appsMfccSkipping = 0;
   }
 
   draw(metafileData, options = {}) {
@@ -157,9 +161,10 @@ class WmfDrawer extends BaseDrawer {
               EmfParser = require('../parsers/emfParser');
               EmfDrawer = require('./emfDrawer');
             } else if (typeof window !== 'undefined') {
-              // 浏览器环境 - 使用全局类
-              EmfParser = window.EmfParser;
-              EmfDrawer = window.EmfDrawer;
+              // 浏览器环境 - 使用全局类（由 browser.js bundle 挂载）
+              const g = /** @type {Record<string, any>} */ (/** @type {unknown} */ (window));
+              EmfParser = g.EmfParser;
+              EmfDrawer = g.EmfDrawer;
             } else {
               throw new Error('Unsupported environment');
             }
@@ -1028,7 +1033,7 @@ class WmfDrawer extends BaseDrawer {
       }
       return true;
     } catch (error) {
-      console.log('  Failed to render DIB:', error.message);
+      console.log('  Failed to render DIB:', /** @type {Error} */ (error).message);
       return false;
     }
   }

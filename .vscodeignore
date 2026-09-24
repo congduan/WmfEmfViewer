@@ -38,6 +38,7 @@ out/**
 !out/metafileParser.browser.js
 !out/commands/**
 !out/providers/**
+!out/utils/**
 
 # ── src/ 白名单：只保留 resources（扩展图标 + webview 模板）──
 # TS/JS 源码在打包前已被 tsc/esbuild 编译进 out/，无需随包发布。

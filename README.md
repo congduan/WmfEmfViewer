@@ -179,11 +179,14 @@ npm test           # smoke test: parse + render sample files
 | Command | Description |
 | ------- | ----------- |
 | `npm run build` | Full build (browser bundle + TypeScript compile) |
-| `npm run build:bundle` | Build the browser bundle only |
+| `npm run build:bundle` | Build the browser/website bundle only |
+| `npm run build:lib` | Build the npm package bundle only |
 | `npm run compile` | Compile TypeScript to `out/` |
 | `npm run watch` | Compile in watch mode |
-| `npm run lint` | Lint TypeScript sources |
-| `npm run test` | Run tests (builds, lints, runs test suite) |
+| `npm run lint` | Lint `src/` and `scripts/` sources |
+| `npm run typecheck` | Type check the JavaScript engine (`checkJs`) |
+| `npm run test` | Smoke tests (bundle) + snapshot regression (src) |
+| `npm run test:lib` | Smoke test the npm package artifact |
 | `npm run package` | Package the extension into a `.vsix` file |
 
 ## Project Structure
@@ -191,15 +194,18 @@ npm test           # smoke test: parse + render sample files
 ```
 packages/
 └── wmf-emf-renderer/    # Standalone npm library extracted from src/
+scripts/
+└── build-bundles.js     # esbuild: browser IIFE bundle + npm CJS bundle
 src/
-├── build/               # Browser bundling script
 ├── commands/            # VSCode command implementations
 ├── modules/             # Core logic
 │   ├── parsers/        # WMF / EMF / EMF+ binary parsers
-│   └── drawers/        # Canvas 2D renderers
+│   ├── drawers/        # Canvas 2D renderers
+│   └── svgContext.js   # Canvas2D-compatible SVG-emitting context
 ├── providers/           # VSCode custom editor provider
 ├── resources/           # Webview HTML template, extension icon
-├── utils/               # Coordinate transforms, GDI object manager, etc.
+├── utils/               # Constants, coordinate transforms, GDI object manager, etc.
+├── browser.js           # Browser bundle entry point
 └── extension.ts         # Extension entry point
 ```
 
@@ -210,13 +216,13 @@ See [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) for the full architec
 - **Separation of concerns**: TypeScript extension layer, JavaScript parsing/rendering layer
 - **Format-specific modules**: each format has a dedicated parser and drawer
 - **Shared base classes**: `BaseParser` / `BaseDrawer` provide common functionality
-- **Browser bundling**: `build-browser-bundle.js` produces a single-file browser bundle for the webview
+- **Browser bundling**: `scripts/build-bundles.js` (esbuild) produces a single-file browser bundle for the webview and a CommonJS bundle for the npm package
 
 ## Testing
 
-- `test/test-wmf.js` — WMF parsing unit tests
-- `test/test-all-formats.js` — multi-format support tests
-- `test_files/` — 200+ sample WMF/EMF files
+- `test/runTest.js` — smoke tests against the built browser bundle
+- `test/snapshot-test.js` — full-corpus snapshot regression against `src/`
+- `test_files/` — sample WMF/EMF corpus
 
 ## Format Specifications
 

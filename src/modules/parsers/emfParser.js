@@ -1,5 +1,6 @@
 // EMF解析器模块
 const BaseParser = require('./baseParser');
+const { SIGNATURES } = require('../../utils/constants');
 
 // EMF指令类型映射
 // EMF 记录类型映射（依据 [MS-EMF] 2.1.1 RecordType 枚举）
@@ -188,7 +189,7 @@ class EmfParser extends BaseParser {
         };
         
         // 验证EMF签名
-        if (header.dSignature !== 0x464D4520) {
+        if (header.dSignature !== SIGNATURES.EMF_SIGNATURE) {
             console.error('Invalid EMF signature:', header.dSignature.toString(16), 'expected: 464d4520');
             return null;
         }
@@ -283,7 +284,7 @@ class EmfParser extends BaseParser {
                         break;
                     }
                 } catch (error) {
-                    console.warn('Error parsing EMF record:', error.message);
+                    console.warn('Error parsing EMF record:', /** @type {Error} */ (error).message);
                     // 跳过错误记录，继续解析下一条
                     this.setOffset(this.getOffset() + 8);
                 }
@@ -292,11 +293,12 @@ class EmfParser extends BaseParser {
             console.log('Total EMF records parsed:', records.length);
             return { header, records };
         } catch (error) {
-            console.error('EMF parsing error:', error.message);
+            const err = /** @type {Error} */ (error);
+            console.error('EMF parsing error:', err.message);
             return {
                 header: null,
                 records: [],
-                error: error.message
+                error: err.message
             };
         }
     }

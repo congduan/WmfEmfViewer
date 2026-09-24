@@ -2,6 +2,8 @@
 // 坐标转换模块
 // 实现 GDI 的 window/viewport（窗口/视口）逻辑坐标到设备坐标的映射。
 
+const { DEFAULT_DPI } = require('./constants');
+
 /**
  * 映射模式（GDI Map Modes）
  * @readonly
@@ -76,10 +78,10 @@ class CoordinateTransformer {
     /**
      * 每毫米的设备像素数（来自 EMF header.szlDevice.cx / szlMillimeters.cx）
      * 仅用于 MM_LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS 这五个固定比例模式；
-     * 默认 3.7795（约 96 DPI），调用方应在解析 EMF 头后用 setPxPerMm 覆盖。
+     * 默认 3.7795（约默认 DPI），调用方应在解析 EMF 头后用 setPxPerMm 覆盖。
      * @type {number}
      */
-    this.pxPerMm = 96 / 25.4;
+    this.pxPerMm = DEFAULT_DPI / 25.4;
     // 世界变换（GM_ADVANCED / EMR_SETWORLDTRANSFORM），行向量约定 [x y 1] * M：
     // x' = x*eM11 + y*eM21 + eDx; y' = x*eM12 + y*eM22 + eDy
     this.worldM11 = 1; this.worldM12 = 0;
@@ -395,7 +397,7 @@ class CoordinateTransformer {
    * 内容被整体缩到 98%，越靠右偏移越大。
    * 固定比例模式（LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS）用 pxPerMm 换算，
    * 且 Y 轴在固定比例模式下向上（负缩放，GDI 语义），始终应用 viewportOrg。
-   * @returns {{sx: number, sy: number, apply: boolean}}
+   * @returns {{sx: number, sy: number, apply: boolean, useOrg: boolean}}
    */
   _getViewportScale() {
     // useOrg：是否应用 windowOrg/viewportOrg。

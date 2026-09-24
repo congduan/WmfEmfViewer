@@ -1,6 +1,7 @@
 // 基础绘制器类 - 提供共享的绘制方法
 const CoordinateTransformer = require('../../utils/coordinateTransformer');
 const GdiObjectManager = require('../../utils/gdiObjectManager');
+const { DEFAULT_DPI, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require('../../utils/constants');
 
 class BaseDrawer {
     constructor(ctx) {
@@ -18,9 +19,9 @@ class BaseDrawer {
     initCanvas(metafileData, options = {}) {
         let canvasWidth, canvasHeight;
 
-        // 获取view尺寸，默认为800x600
-        const viewWidth = options.viewWidth || 800;
-        const viewHeight = options.viewHeight || 600;
+        // 获取view尺寸，默认见 constants.DEFAULT_VIEW_*
+        const viewWidth = options.viewWidth || DEFAULT_VIEW_WIDTH;
+        const viewHeight = options.viewHeight || DEFAULT_VIEW_HEIGHT;
 
         if (metafileData.header.placeableHeader) {
             const ph = metafileData.header.placeableHeader;
@@ -34,9 +35,9 @@ class BaseDrawer {
             const widthInInch = logicalWidth / inch;
             const heightInInch = logicalHeight / inch;
 
-            // 转换为像素（使用96 DPI）
-            let pixelWidth = widthInInch * 96;
-            let pixelHeight = heightInInch * 96;
+            // 转换为像素（使用默认 DPI）
+            let pixelWidth = widthInInch * DEFAULT_DPI;
+            let pixelHeight = heightInInch * DEFAULT_DPI;
 
             // 在保持宽高比的情况下，尽可能占满view
             // 使用统一的缩放因子，避免宽高比被扭曲

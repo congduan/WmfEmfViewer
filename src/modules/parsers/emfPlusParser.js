@@ -1,5 +1,6 @@
 // EMF+解析器模块
 const BaseParser = require('./baseParser');
+const { SIGNATURES } = require('../../utils/constants');
 
 // EMF+指令类型映射
 const EMFPLUS_FUNCTIONS = {
@@ -86,7 +87,7 @@ class EmfPlusParser extends BaseParser {
                          ((emfRecordData[2] & 0xFF) << 16) | ((emfRecordData[3] & 0xFF) << 24);
         const commentId = (emfRecordData[4] & 0xFF) | ((emfRecordData[5] & 0xFF) << 8) |
                           ((emfRecordData[6] & 0xFF) << 16) | ((emfRecordData[7] & 0xFF) << 24);
-        if (commentId !== 0x2B464D45) return results; // 'EMF+'
+        if (commentId !== SIGNATURES.EMF_PLUS_COMMENT_ID) return results; // 'EMF+'
 
         // EMF+ 记录流起始于偏移 8（DataSize + 'EMF+' 之后），总长受 DataSize 约束
         const end = Math.min(8 + dataSize, emfRecordData.length);
@@ -188,7 +189,7 @@ class EmfPlusParser extends BaseParser {
                                 records.push(r);
                                 // 性能：每条记录一次日志会拖慢大文件解析，仅在调试模式输出
                                 if (globalThis.__WMF_DEBUG__) {
-                                    console.log('Parsed EMF+ record:', r.type, '(0x' + r.type.toString(16).padStart(4, '0') + ')', 'flags:', r.flags);
+                                    console.log('Parsed EMF+ record:', r.type, '(0x' + r.type.toString(16).padStart(4, '0') + ')', 'flags:', /** @type {any} */ (r).flags);
                                 }
                             } else {
                                 if (globalThis.__WMF_DEBUG__) {
@@ -202,7 +203,7 @@ class EmfPlusParser extends BaseParser {
                         break;
                     }
                 } catch (error) {
-                    console.warn('Error parsing record:', error.message);
+                    console.warn('Error parsing record:', /** @type {Error} */ (error).message);
                     // 跳过错误记录
                     this.setOffset(this.getOffset() + 8);
                 }
@@ -211,11 +212,12 @@ class EmfPlusParser extends BaseParser {
             console.log('Total EMF+ records parsed:', records.length);
             return { header: emfHeader, records };
         } catch (error) {
-            console.error('EMF+ parsing error:', error.message);
+            const err = /** @type {Error} */ (error);
+            console.error('EMF+ parsing error:', err.message);
             return {
                 header: null,
                 records: [],
-                error: error.message
+                error: err.message
             };
         }
     }
@@ -264,7 +266,7 @@ class EmfPlusParser extends BaseParser {
         };
         
         // 验证EMF头
-        if (header.dSignature !== 0x464D4520) {
+        if (header.dSignature !== SIGNATURES.EMF_SIGNATURE) {
             return null;
         }
         

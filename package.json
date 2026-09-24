@@ -13,6 +13,9 @@
   "engines": {
     "vscode": "^1.75.0"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "categories": [
     "Visualization"
   ],
@@ -60,8 +63,10 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run build && npm run lint",
-    "lint": "eslint src --ext .js,.ts",
+    "lint": "eslint src scripts --ext .js,.ts",
     "typecheck": "tsc -p tsconfig.check.json",
+    "clean": "node scripts/clean.js",
+    "clean:render": "node scripts/clean.js --render-only",
     "test": "node test/runTest.js && node test/snapshot-test.js",
     "test:snapshot": "node test/snapshot-test.js",
     "test:snapshot:update": "node test/snapshot-test.js --update",

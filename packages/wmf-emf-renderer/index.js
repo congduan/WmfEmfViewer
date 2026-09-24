@@ -8,10 +8,59 @@ var __commonJS = (cb, mod) => function __require() {
   }
 };
 
+// src/utils/constants.js
+var require_constants = __commonJS({
+  "src/utils/constants.js"(exports2, module2) {
+    "use strict";
+    var FILE_TYPES = {
+      /** 标准 WMF（16 位记录） */
+      WMF: "wmf",
+      /** 带定位头的 WMF */
+      PLACEABLE_WMF: "placeable-wmf",
+      /** EMF（32 位记录；EMF+ 亦按 emf 解析，见 fileTypeDetector 说明） */
+      EMF: "emf",
+      /** EMF+（EMR_GDICOMMENT 内嵌的增强记录流） */
+      EMF_PLUS: "emf+",
+      /** 无法识别 */
+      UNKNOWN: "unknown"
+    };
+    var SIGNATURES = {
+      /** Placeable WMF 头 DWORD（首 4 字节 D7 CD C6 9A，小端） */
+      PLACEABLE_WMF_KEY: 2596720087,
+      /** 标准 WMF 头 DWORD 的合法取值 */
+      WMF_HEADER_WORDS: [589825, 589824],
+      /** EMF 头 offset 40 处 dSignature：" EMF" */
+      EMF_SIGNATURE: 1179469088,
+      /** EMF+ 注释标识 "EMF+"（EMR_GDICOMMENT 的 CommentIdentifier） */
+      EMF_PLUS_COMMENT_ID: 726027589
+    };
+    var RECORD_TYPES = {
+      /** EMR_GDICOMMENT：EMF+ 记录流以内嵌注释的形式承载 */
+      EMR_GDICOMMENT: 70,
+      /** EMR_EOF：记录流结束 */
+      EMR_EOF: 14
+    };
+    var EMF_HEADER_SIZE = 88;
+    var DEFAULT_DPI = 96;
+    var DEFAULT_VIEW_WIDTH = 800;
+    var DEFAULT_VIEW_HEIGHT = 600;
+    module2.exports = {
+      FILE_TYPES,
+      SIGNATURES,
+      RECORD_TYPES,
+      EMF_HEADER_SIZE,
+      DEFAULT_DPI,
+      DEFAULT_VIEW_WIDTH,
+      DEFAULT_VIEW_HEIGHT
+    };
+  }
+});
+
 // src/utils/fileTypeDetector.js
 var require_fileTypeDetector = __commonJS({
   "src/utils/fileTypeDetector.js"(exports2, module2) {
     "use strict";
+    var { FILE_TYPES, SIGNATURES, RECORD_TYPES, EMF_HEADER_SIZE } = require_constants();
     var FileTypeDetector2 = class {
       /**
        * @param {Uint8Array|ArrayBuffer|number[]} data 元文件二进制数据
@@ -28,21 +77,21 @@ var require_fileTypeDetector = __commonJS({
        * @returns {MetafileType}
        */
       detect() {
-        if (this.data.length < 4) return "unknown";
-        if (this.data[0] === 215 && this.data[1] === 205 && this.data[2] === 198 && this.data[3] === 154) {
-          return "placeable-wmf";
+        if (this.data.length < 4) return FILE_TYPES.UNKNOWN;
+        if (this.readDwordAt(0) === SIGNATURES.PLACEABLE_WMF_KEY) {
+          return FILE_TYPES.PLACEABLE_WMF;
         }
         const signature = this.readDwordAt(0);
-        if (signature === 589825 || signature === 589824) {
-          return "wmf";
+        if (SIGNATURES.WMF_HEADER_WORDS.includes(signature)) {
+          return FILE_TYPES.WMF;
         }
-        if (this.data.length >= 88) {
+        if (this.data.length >= EMF_HEADER_SIZE) {
           const dSignature = this.readDwordAt(40);
-          if (dSignature === 1179469088) {
-            return "emf";
+          if (dSignature === SIGNATURES.EMF_SIGNATURE) {
+            return FILE_TYPES.EMF;
           }
         }
-        return "unknown";
+        return FILE_TYPES.UNKNOWN;
       }
       /**
        * 检查是否为 EMF+ 文件：扫描 EMR_GDICOMMENT (0x46) 记录。
@@ -53,22 +102,22 @@ var require_fileTypeDetector = __commonJS({
        */
       isEmfPlusFile() {
         try {
-          if (this.data.length < 88) return false;
+          if (this.data.length < EMF_HEADER_SIZE) return false;
           const headerSize = this.readDwordAt(4);
           let offset = headerSize;
           while (offset + 12 <= this.data.length) {
             const type = this.readDwordAt(offset);
             const size = this.readDwordAt(offset + 4);
             if (size < 8 || offset + size > this.data.length) break;
-            if (type === 70 && size >= 12) {
-              if (size >= 16 && this.readDwordAt(offset + 12) === 726027589) {
+            if (type === RECORD_TYPES.EMR_GDICOMMENT && size >= 12) {
+              if (size >= 16 && this.readDwordAt(offset + 12) === SIGNATURES.EMF_PLUS_COMMENT_ID) {
                 return true;
               }
-              if (this.readDwordAt(offset + 8) === 726027589) {
+              if (this.readDwordAt(offset + 8) === SIGNATURES.EMF_PLUS_COMMENT_ID) {
                 return true;
               }
             }
-            if (type === 14) break;
+            if (type === RECORD_TYPES.EMR_EOF) break;
             offset += size;
           }
           return false;
@@ -97,6 +146,7 @@ var require_fileTypeDetector = __commonJS({
 var require_coordinateTransformer = __commonJS({
   "src/utils/coordinateTransformer.js"(exports2, module2) {
     "use strict";
+    var { DEFAULT_DPI } = require_constants();
     var MAP_MODE = {
       /** 逻辑单位 = 设备像素（默认） */
       MM_TEXT: 1,
@@ -126,7 +176,7 @@ var require_coordinateTransformer = __commonJS({
         this.viewportOrgY = 0;
         this.viewportExtX = 800;
         this.viewportExtY = 600;
-        this.pxPerMm = 96 / 25.4;
+        this.pxPerMm = DEFAULT_DPI / 25.4;
         this.worldM11 = 1;
         this.worldM12 = 0;
         this.worldM21 = 0;
@@ -420,7 +470,7 @@ var require_coordinateTransformer = __commonJS({
        * 内容被整体缩到 98%，越靠右偏移越大。
        * 固定比例模式（LOMETRIC/HIMETRIC/LOENGLISH/HIENGLISH/TWIPS）用 pxPerMm 换算，
        * 且 Y 轴在固定比例模式下向上（负缩放，GDI 语义），始终应用 viewportOrg。
-       * @returns {{sx: number, sy: number, apply: boolean}}
+       * @returns {{sx: number, sy: number, apply: boolean, useOrg: boolean}}
        */
       _getViewportScale() {
         const textModeUseOrg = !this.ignoreWindowOrgs;
@@ -986,6 +1036,7 @@ var require_wmfParser = __commonJS({
   "src/modules/parsers/wmfParser.js"(exports2, module2) {
     "use strict";
     var BaseParser2 = require_baseParser();
+    var { FILE_TYPES, SIGNATURES } = require_constants();
     var WMF_FUNCTIONS = {
       0: "META_EOF",
       259: "META_SETMAPMODE",
@@ -1061,7 +1112,7 @@ var require_wmfParser = __commonJS({
           checksum: this.readWord()
           // 校验和
         };
-        if (placeableHeader.key !== 2596720087) {
+        if (placeableHeader.key !== SIGNATURES.PLACEABLE_WMF_KEY) {
           console.warn("Invalid Placeable WMF key:", placeableHeader.key.toString(16));
         }
         return placeableHeader;
@@ -1123,7 +1174,7 @@ var require_wmfParser = __commonJS({
         try {
           __wmfEmfRendererLog("Starting WMF parsing...");
           let placeableHeader = null;
-          if (fileType === "placeable-wmf") {
+          if (fileType === FILE_TYPES.PLACEABLE_WMF) {
             placeableHeader = this.parsePlaceableHeader();
             __wmfEmfRendererLog("Placeable WMF Header:", placeableHeader);
           }
@@ -1162,7 +1213,13 @@ var require_wmfParser = __commonJS({
                 break;
               }
             } catch (error) {
-              console.warn("Error parsing WMF record at offset", this.getOffset(), ":", error.message);
+              console.warn(
+                "Error parsing WMF record at offset",
+                this.getOffset(),
+                ":",
+                /** @type {Error} */
+                error.message
+              );
               this.setOffset(this.getOffset() + 2);
             }
           }
@@ -1170,11 +1227,15 @@ var require_wmfParser = __commonJS({
           __wmfEmfRendererLog("Total WMF records parsed:", records.length);
           return { header: { ...header, placeableHeader }, records };
         } catch (error) {
-          console.error("WMF parsing error:", error.message);
+          const err = (
+            /** @type {Error} */
+            error
+          );
+          console.error("WMF parsing error:", err.message);
           return {
             header: null,
             records: [],
-            error: error.message
+            error: err.message
           };
         }
       }
@@ -1188,6 +1249,7 @@ var require_emfParser = __commonJS({
   "src/modules/parsers/emfParser.js"(exports2, module2) {
     "use strict";
     var BaseParser2 = require_baseParser();
+    var { SIGNATURES } = require_constants();
     var EMF_FUNCTIONS = {
       1: "EMR_HEADER",
       2: "EMR_POLYBEZIER",
@@ -1373,7 +1435,7 @@ var require_emfParser = __commonJS({
             cy: this.readLong()
           }
         };
-        if (header.dSignature !== 1179469088) {
+        if (header.dSignature !== SIGNATURES.EMF_SIGNATURE) {
           console.error("Invalid EMF signature:", header.dSignature.toString(16), "expected: 464d4520");
           return null;
         }
@@ -1443,18 +1505,26 @@ var require_emfParser = __commonJS({
                 break;
               }
             } catch (error) {
-              console.warn("Error parsing EMF record:", error.message);
+              console.warn(
+                "Error parsing EMF record:",
+                /** @type {Error} */
+                error.message
+              );
               this.setOffset(this.getOffset() + 8);
             }
           }
           __wmfEmfRendererLog("Total EMF records parsed:", records.length);
           return { header, records };
         } catch (error) {
-          console.error("EMF parsing error:", error.message);
+          const err = (
+            /** @type {Error} */
+            error
+          );
+          console.error("EMF parsing error:", err.message);
           return {
             header: null,
             records: [],
-            error: error.message
+            error: err.message
           };
         }
       }
@@ -1468,6 +1538,7 @@ var require_emfPlusParser = __commonJS({
   "src/modules/parsers/emfPlusParser.js"(exports2, module2) {
     "use strict";
     var BaseParser2 = require_baseParser();
+    var { SIGNATURES } = require_constants();
     var EMFPLUS_FUNCTIONS = {
       16385: "EmfPlusHeader",
       16386: "EmfPlusEndOfFile",
@@ -1546,7 +1617,7 @@ var require_emfPlusParser = __commonJS({
         if (emfRecordData.length < 16) return results;
         const dataSize = emfRecordData[0] & 255 | (emfRecordData[1] & 255) << 8 | (emfRecordData[2] & 255) << 16 | (emfRecordData[3] & 255) << 24;
         const commentId = emfRecordData[4] & 255 | (emfRecordData[5] & 255) << 8 | (emfRecordData[6] & 255) << 16 | (emfRecordData[7] & 255) << 24;
-        if (commentId !== 726027589) return results;
+        if (commentId !== SIGNATURES.EMF_PLUS_COMMENT_ID) return results;
         const end = Math.min(8 + dataSize, emfRecordData.length);
         let offset = 8;
         while (offset + 12 <= end) {
@@ -1623,7 +1694,14 @@ var require_emfPlusParser = __commonJS({
                   if (r.isEmfPlus) {
                     records.push(r);
                     if (globalThis.__WMF_DEBUG__) {
-                      __wmfEmfRendererLog("Parsed EMF+ record:", r.type, "(0x" + r.type.toString(16).padStart(4, "0") + ")", "flags:", r.flags);
+                      __wmfEmfRendererLog(
+                        "Parsed EMF+ record:",
+                        r.type,
+                        "(0x" + r.type.toString(16).padStart(4, "0") + ")",
+                        "flags:",
+                        /** @type {any} */
+                        r.flags
+                      );
                     }
                   } else {
                     if (globalThis.__WMF_DEBUG__) {
@@ -1637,18 +1715,26 @@ var require_emfPlusParser = __commonJS({
                 break;
               }
             } catch (error) {
-              console.warn("Error parsing record:", error.message);
+              console.warn(
+                "Error parsing record:",
+                /** @type {Error} */
+                error.message
+              );
               this.setOffset(this.getOffset() + 8);
             }
           }
           __wmfEmfRendererLog("Total EMF+ records parsed:", records.length);
           return { header: emfHeader, records };
         } catch (error) {
-          console.error("EMF+ parsing error:", error.message);
+          const err = (
+            /** @type {Error} */
+            error
+          );
+          console.error("EMF+ parsing error:", err.message);
           return {
             header: null,
             records: [],
-            error: error.message
+            error: err.message
           };
         }
       }
@@ -1692,7 +1778,7 @@ var require_emfPlusParser = __commonJS({
             cy: this.readLong()
           }
         };
-        if (header.dSignature !== 1179469088) {
+        if (header.dSignature !== SIGNATURES.EMF_SIGNATURE) {
           return null;
         }
         if (header.iType !== 1) {
@@ -1711,6 +1797,7 @@ var require_baseDrawer = __commonJS({
     "use strict";
     var CoordinateTransformer2 = require_coordinateTransformer();
     var GdiObjectManager2 = require_gdiObjectManager();
+    var { DEFAULT_DPI, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
     var BaseDrawer2 = class {
       constructor(ctx) {
         this.ctx = ctx;
@@ -1725,8 +1812,8 @@ var require_baseDrawer = __commonJS({
       // 初始化画布
       initCanvas(metafileData, options = {}) {
         let canvasWidth, canvasHeight;
-        const viewWidth = options.viewWidth || 800;
-        const viewHeight = options.viewHeight || 600;
+        const viewWidth = options.viewWidth || DEFAULT_VIEW_WIDTH;
+        const viewHeight = options.viewHeight || DEFAULT_VIEW_HEIGHT;
         if (metafileData.header.placeableHeader) {
           const ph = metafileData.header.placeableHeader;
           const inch = ph.inch || 1e3;
@@ -1734,8 +1821,8 @@ var require_baseDrawer = __commonJS({
           const logicalHeight = Math.abs(ph.bottom - ph.top);
           const widthInInch = logicalWidth / inch;
           const heightInInch = logicalHeight / inch;
-          let pixelWidth = widthInInch * 96;
-          let pixelHeight = heightInInch * 96;
+          let pixelWidth = widthInInch * DEFAULT_DPI;
+          let pixelHeight = heightInInch * DEFAULT_DPI;
           const scaleToFit = Math.min(
             viewWidth / pixelWidth,
             viewHeight / pixelHeight
@@ -1983,25 +2070,27 @@ var require_metafileParser = __commonJS({
     var WmfParser2 = require_wmfParser();
     var EmfParser2 = require_emfParser();
     var EmfPlusParser2 = require_emfPlusParser();
+    var { FILE_TYPES } = require_constants();
     var MetafileParser2 = class {
+      /** @param {Uint8Array|ArrayBuffer|number[]} data */
       constructor(data) {
         this.data = new Uint8Array(data);
         this.fileTypeDetector = new FileTypeDetector2(data);
         this.fileType = this.fileTypeDetector.detect();
-        __wmfEmfRendererLog("Metafile Parser initialized with data length:", data.length, "type:", this.fileType);
+        __wmfEmfRendererLog("Metafile Parser initialized with data length:", this.data.length, "type:", this.fileType);
       }
       parse() {
         __wmfEmfRendererLog("Starting", this.fileType.toUpperCase(), "parsing...");
         try {
           switch (this.fileType) {
-            case "emf+":
+            case FILE_TYPES.EMF_PLUS:
               return this.parseEmfPlus();
-            case "emf":
+            case FILE_TYPES.EMF:
               return this.parseEmf();
-            case "wmf":
-            case "placeable-wmf":
+            case FILE_TYPES.WMF:
+            case FILE_TYPES.PLACEABLE_WMF:
               return this.parseWmf();
-            default:
+            default: {
               __wmfEmfRendererLog("Unknown file type, trying all methods...");
               const emfPlusResult = this.tryParseEmfPlus();
               if (emfPlusResult && emfPlusResult.records.length > 0) {
@@ -2016,13 +2105,18 @@ var require_metafileParser = __commonJS({
                 return wmfResult;
               }
               throw new Error("Failed to parse file with any format");
+            }
           }
         } catch (error) {
-          console.error("Parsing error:", error.message);
+          const err = (
+            /** @type {Error} */
+            error
+          );
+          console.error("Parsing error:", err.message);
           return {
             header: null,
             records: [],
-            error: error.message
+            error: err.message
           };
         }
       }
@@ -2041,9 +2135,13 @@ var require_metafileParser = __commonJS({
       tryParseWmf() {
         try {
           const wmfParser = new WmfParser2(this.data);
-          return wmfParser.parse("wmf");
+          return wmfParser.parse(FILE_TYPES.WMF);
         } catch (error) {
-          __wmfEmfRendererLog("WMF parsing failed:", error.message);
+          __wmfEmfRendererLog(
+            "WMF parsing failed:",
+            /** @type {Error} */
+            error.message
+          );
           return null;
         }
       }
@@ -2052,7 +2150,11 @@ var require_metafileParser = __commonJS({
           const emfParser = new EmfParser2(this.data);
           return emfParser.parse();
         } catch (error) {
-          __wmfEmfRendererLog("EMF parsing failed:", error.message);
+          __wmfEmfRendererLog(
+            "EMF parsing failed:",
+            /** @type {Error} */
+            error.message
+          );
           return null;
         }
       }
@@ -2061,7 +2163,11 @@ var require_metafileParser = __commonJS({
           const emfPlusParser = new EmfPlusParser2(this.data);
           return emfPlusParser.parse();
         } catch (error) {
-          __wmfEmfRendererLog("EMF+ parsing failed:", error.message);
+          __wmfEmfRendererLog(
+            "EMF+ parsing failed:",
+            /** @type {Error} */
+            error.message
+          );
           return null;
         }
       }
@@ -2078,6 +2184,7 @@ var require_emfDrawer = __commonJS({
     var GdiObjectManager2 = require_gdiObjectManager();
     var EmfPlusParser2 = require_emfPlusParser();
     var EmfPlusDrawer2 = require_emfPlusDrawer();
+    var { SIGNATURES, RECORD_TYPES, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
     var EMF_RECORD_HANDLERS = {
       // ========== 基础记录 ==========
       1: "processEmfHeader",
@@ -2324,8 +2431,8 @@ var require_emfDrawer = __commonJS({
       draw(metafileData, options = {}) {
         __wmfEmfRendererLog("Drawing EMF with header:", metafileData.header);
         __wmfEmfRendererLog("Number of records:", metafileData.records.length);
-        const viewWidth = options.viewWidth || 800;
-        const viewHeight = options.viewHeight || 600;
+        const viewWidth = options.viewWidth || DEFAULT_VIEW_WIDTH;
+        const viewHeight = options.viewHeight || DEFAULT_VIEW_HEIGHT;
         let canvasWidth, canvasHeight;
         if (metafileData.header.bounds) {
           const bounds = metafileData.header.bounds;
@@ -2984,7 +3091,7 @@ var require_emfDrawer = __commonJS({
         let hasGdiDraw = false;
         for (const r of records) {
           const t = r.type >>> 0;
-          if (t === 70) {
+          if (t === RECORD_TYPES.EMR_GDICOMMENT) {
             if (r.data && r.data.length >= 8 && r.data[4] === 69 && r.data[5] === 77 && r.data[6] === 70 && r.data[7] === 43) {
               hasEmfPlus = true;
               if (hasGdiDraw) return true;
@@ -2999,7 +3106,7 @@ var require_emfDrawer = __commonJS({
       }
       processEmfGdiComment(data) {
         if (!data || data.length < 8) return;
-        if (this.readDwordFromData(data, 4) !== 726027589) return;
+        if (this.readDwordFromData(data, 4) !== SIGNATURES.EMF_PLUS_COMMENT_ID) return;
         try {
           if (this._skipEmfPlusPlayback) return;
           const parser = new EmfPlusParser2(data);
@@ -3013,7 +3120,11 @@ var require_emfDrawer = __commonJS({
             this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
           }
         } catch (e) {
-          __wmfEmfRendererLog("EMF+ GDIComment playback failed:", e.message);
+          __wmfEmfRendererLog(
+            "EMF+ GDIComment playback failed:",
+            /** @type {Error} */
+            e.message
+          );
         }
       }
       processEmfSetWindowExtEx(data) {
@@ -3420,7 +3531,11 @@ var require_emfDrawer = __commonJS({
               __wmfEmfRendererLog("  Rendered text:", text.substring(0, 50));
             }
           } catch (error) {
-            __wmfEmfRendererLog("  Error reading text:", error.message);
+            __wmfEmfRendererLog(
+              "  Error reading text:",
+              /** @type {Error} */
+              error.message
+            );
           }
         }
       }
@@ -3617,7 +3732,11 @@ var require_emfDrawer = __commonJS({
           }
           return { width, height, data: out };
         } catch (e) {
-          __wmfEmfRendererLog("DIB decode failed:", e.message);
+          __wmfEmfRendererLog(
+            "DIB decode failed:",
+            /** @type {Error} */
+            e.message
+          );
           return null;
         }
       }
@@ -4524,6 +4643,7 @@ var require_emfDrawer = __commonJS({
 var require_svgContext = __commonJS({
   "src/modules/svgContext.js"(exports2, module2) {
     "use strict";
+    var crcTableCache = null;
     var SvgContext2 = class _SvgContext {
       constructor() {
         this.canvas = { width: 0, height: 0, style: {} };
@@ -4907,7 +5027,7 @@ var require_svgContext = __commonJS({
         zlib[p++] = adler >>> 16 & 255;
         zlib[p++] = adler >>> 8 & 255;
         zlib[p++] = adler & 255;
-        const crcTable = _SvgContext._crcTable || (_SvgContext._crcTable = (() => {
+        const crcTable = crcTableCache || (crcTableCache = (() => {
           const t = new Uint32Array(256);
           for (let n = 0; n < 256; n++) {
             let c = n;
@@ -4953,7 +5073,11 @@ var require_svgContext = __commonJS({
         let bin = "";
         const CH = 32768;
         for (let i = 0; i < bytes.length; i += CH) {
-          bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+          bin += String.fromCharCode.apply(
+            null,
+            /** @type {any} */
+            bytes.subarray(i, i + CH)
+          );
         }
         return "data:image/png;base64," + btoa(bin);
       }
@@ -4989,7 +5113,7 @@ var require_svgContext = __commonJS({
        * 注册 DIB 图案刷（EMR_CREATEDIBPATTERNBRUSHPT）。
        * @param {{width:number,height:number,data:Uint8ClampedArray}} dib RGBA 像素（height 可正负，负=top-down）
        * @param {{orgX?:number,orgY?:number}} [opts] 画刷原点（用于图案平移对齐）
-       * @returns {string} 形如 "url(#pat-3)"，作为 fillStyle 即可平铺填充
+       * @returns {string|null} 形如 "url(#pat-3)"，作为 fillStyle 即可平铺填充；参数非法时返回 null
        */
       addPattern(dib, opts) {
         const { width, height, data } = dib;
@@ -5096,6 +5220,7 @@ var require_emfPlusDrawer = __commonJS({
     "use strict";
     var CoordinateTransformer2 = require_coordinateTransformer();
     var GdiObjectManager2 = require_gdiObjectManager();
+    var { DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
     var EMF_PLUS_RECORD_HANDLERS = {
       // ========== 全局/控制记录 ==========
       16385: "processEmfPlusHeader",
@@ -5406,8 +5531,8 @@ var require_emfPlusDrawer = __commonJS({
       draw(metafileData, options = {}) {
         __wmfEmfRendererLog("Drawing EMF+ with header:", metafileData.header);
         __wmfEmfRendererLog("Number of records:", metafileData.records.length);
-        const viewWidth = options.viewWidth || 800;
-        const viewHeight = options.viewHeight || 600;
+        const viewWidth = options.viewWidth || DEFAULT_VIEW_WIDTH;
+        const viewHeight = options.viewHeight || DEFAULT_VIEW_HEIGHT;
         let canvasWidth, canvasHeight;
         if (metafileData.header.bounds) {
           const width = metafileData.header.bounds.right - metafileData.header.bounds.left;
@@ -5676,7 +5801,11 @@ var require_emfPlusDrawer = __commonJS({
             '<g transform="matrix(' + this._fmtN(a) + " " + this._fmtN(b) + " " + this._fmtN(c) + " " + this._fmtN(d) + " " + this._fmtN(e) + " " + this._fmtN(f) + ')">' + defs + body + "</g>"
           );
         } catch (e) {
-          __wmfEmfRendererLog("EMF+ DrawImage failed:", e.message);
+          __wmfEmfRendererLog(
+            "EMF+ DrawImage failed:",
+            /** @type {Error} */
+            e.message
+          );
         }
       }
       _fmtN(v) {
@@ -5694,14 +5823,22 @@ var require_emfPlusDrawer = __commonJS({
           const subCtx = new SvgContextCtor();
           const drawer = new EmfDrawerCtor(subCtx);
           drawer.draw(result, { viewWidth: 800, viewHeight: 600 });
-          let W = 800, H = 600;
-          if (result.header && result.header.bounds) {
-            W = Math.abs(result.header.bounds.right - result.header.bounds.left);
-            H = Math.abs(result.header.bounds.bottom - result.header.bounds.top);
+          const header = (
+            /** @type {{bounds?: {left:number,top:number,right:number,bottom:number}}} */
+            result.header
+          );
+          let W = DEFAULT_VIEW_WIDTH, H = DEFAULT_VIEW_HEIGHT;
+          if (header && header.bounds) {
+            W = Math.abs(header.bounds.right - header.bounds.left);
+            H = Math.abs(header.bounds.bottom - header.bounds.top);
           }
           return { nodes: subCtx.nodes, defs: subCtx.defs, width: W || 1, height: H || 1 };
         } catch (e) {
-          __wmfEmfRendererLog("EMF+ nested EMF render failed:", e.message);
+          __wmfEmfRendererLog(
+            "EMF+ nested EMF render failed:",
+            /** @type {Error} */
+            e.message
+          );
           return null;
         }
       }
@@ -6289,6 +6426,8 @@ var require_wmfDrawer = __commonJS({
         this.currentFontFace = "Arial";
         this.currentCharset = 0;
         this.arcDirection = 1;
+        this.mathTypeMtefStreams = [];
+        this.appsMfccSkipping = 0;
       }
       draw(metafileData, options = {}) {
         __wmfEmfRendererLog("Drawing WMF with header:", metafileData.header);
@@ -6339,8 +6478,13 @@ var require_wmfDrawer = __commonJS({
                   EmfParser2 = require_emfParser();
                   EmfDrawer2 = require_emfDrawer();
                 } else if (typeof window !== "undefined") {
-                  EmfParser2 = window.EmfParser;
-                  EmfDrawer2 = window.EmfDrawer;
+                  const g = (
+                    /** @type {Record<string, any>} */
+                    /** @type {unknown} */
+                    window
+                  );
+                  EmfParser2 = g.EmfParser;
+                  EmfDrawer2 = g.EmfDrawer;
                 } else {
                   throw new Error("Unsupported environment");
                 }
@@ -7143,7 +7287,11 @@ var require_wmfDrawer = __commonJS({
           }
           return true;
         } catch (error) {
-          __wmfEmfRendererLog("  Failed to render DIB:", error.message);
+          __wmfEmfRendererLog(
+            "  Failed to render DIB:",
+            /** @type {Error} */
+            error.message
+          );
           return false;
         }
       }
