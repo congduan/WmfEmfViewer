@@ -84,7 +84,7 @@ class EmfPlusDrawer {
   constructor(ctx) {
     this.ctx = ctx;
     this.coordinateTransformer = new CoordinateTransformer();
-    // 同 EmfDrawer：EMF+ 也以 libemf2svg 为对照基准，启用 point_cal 的 orgs 语义
+    // 同 EmfDrawer：EMF+ 也采用简化 orgs 语义（MM_TEXT/公制忽略 windowOrg/viewportOrg）
     this.coordinateTransformer.setIgnoreWindowOrgs(true);
     this.gdiObjectManager = new GdiObjectManager();
     this.currentPath = []; // 当前路径点集合
@@ -144,7 +144,7 @@ class EmfPlusDrawer {
 
   // 根据 flags 与 BrushId 解析画刷颜色：
   // flags 的 0x8000 位（U_PPF_B）为 1 时 BrushId 直接是 ARGB 颜色，否则是对象表索引。
-  // 参考实现（libemf2svg U_PMR_FILLRECTS_get）对损坏文件的容错：
+  // 对损坏文件的容错：
   //   非 solid 模式下 BrushId > 63 时按 ARGB 颜色处理（对象表索引只有 0-63）。
   _emfPlusResolveBrush(flags, brushId, data, offset) {
     if (flags & 0x8000) {
@@ -154,7 +154,7 @@ class EmfPlusDrawer {
     if (obj && obj.type === 'solidBrush') {
       return obj.color;
     }
-    // 兜底（对齐参考实现的容错）：BrushId 超出对象表范围则视为 ARGB 颜色直传
+    // 兜底（容错）：BrushId 超出对象表范围则视为 ARGB 颜色直传
     if (brushId > 63 || brushId >= 0x01000000) {
       return this._emfPlusArgbToColor(brushId);
     }
@@ -178,7 +178,7 @@ class EmfPlusDrawer {
 
   // EmfPlusPath (MS-EMFPLUS 2.2.1.6) 解析：data 起点（已跳过 EmfPlusObject 的 GraphicsVersion）
 // 实际 layout: PathPointCount(4) + PathPointFlags(4) + PathPoints(Count × stride) + PathPointTypes(Count if non-RLE) + AlignmentPadding(0..3)
-// 注意：graphicsVersion 是 EmfPlusPath 自身 Version 字段（spec 2.2.1.6）；POI 的 EmfPlusObject.init 先读 graphicsVersion 后再传给 EmfPlusPath.init
+// 注意：graphicsVersion 是 EmfPlusPath 自身 Version 字段（spec 2.2.1.6）；解析 EmfPlusObject 时先读 graphicsVersion 再交给 EmfPlusPath。
 // PathPointFlags:
 //   0x0800 RELATIVE_POSITION — 坐标相对于前一点（PathPointR，否则 PathPoint/PathPointF）
 //   0x1000 RLE_COMPRESSED    — PathPointTypes 为 RLE 编码
@@ -391,7 +391,7 @@ class EmfPlusDrawer {
   }
 
   // 处理EMF+填充多边形记录：data = BrushId(4) + Count(4) + PointF[Count](8 each)
-  // （对齐 libemf2svg U_PMR_FILLPOLYGON_get：BrushId 在 data 首字段）
+  // （BrushId 在 data 首字段）
   processEmfPlusFillPolygon(flags, data) {
     if (data.length < 8) return;
     const brushId = this._emfPlusReadInt32(data, 0);
@@ -469,7 +469,7 @@ class EmfPlusDrawer {
     this.ctx.stroke();
   }
 
-  // 处理EMF+绘制图像记录（0x401A，MS-EMFPLUS 2.3.4.9；对齐 POI HemfPlusDraw.EmfPlusDrawImage）：
+  // 处理EMF+绘制图像记录（0x401A，MS-EMFPLUS 2.3.4.9）：
   // data = imageAttributesId(4) + srcUnit(4) + srcRect RectF(16，源裁剪，像素单位)
   //        + RectData（目标框：flags&0x4000(C) 压缩为 EmfPlusRect(4×int16)，否则 EmfPlusRectF(4×float)）。
   // srcRect 被缩放填充到 RectData；此前漏读 RectData 导致图被画到源坐标位置。
@@ -633,7 +633,7 @@ class EmfPlusDrawer {
     }
   }
 
-  // EmfPlusDrawString（0x401C，MS-EMFPLUS 2.3.4.14 / libemf2svg U_PMR_DRAWSTRING_get）：
+  // EmfPlusDrawString（0x401C，MS-EMFPLUS 2.3.4.14）：
   // FontId = flags 低字节；data = BrushId(4) + FormatId(4) + Length(4) + RectF(16) + UTF16LE[Length]
   // 字距/字符间距暂忽略（PNG→SVG 静态图对齐为主）。
   processEmfPlusDrawString(flags, data) {
@@ -725,7 +725,7 @@ class EmfPlusDrawer {
   }
 
   // 处理EMF+填充椭圆记录：data = BrushId(4) + RectF(16)
-  // （对齐 libemf2svg U_PMR_FILLELLIPSE_get：BrushId 在 data 首字段）
+  // （BrushId 在 data 首字段）
   processEmfPlusFillEllipse(flags, data) {
     if (data.length < 20) return;
     const brushId = this._emfPlusReadInt32(data, 0);
@@ -753,7 +753,7 @@ class EmfPlusDrawer {
   }
 
   // 处理EMF+填充饼图记录：data = BrushId(4) + StartAngle(float) + SweepAngle(float) + RectF(16)
-  // （对齐 libemf2svg U_PMR_FILLPIE_get；角度为度，顺时针自 3 点方向）
+  // （角度为度，顺时针自 3 点方向）
   processEmfPlusFillPie(flags, data) {
     if (data.length < 28) return;
     const brushId = this._emfPlusReadInt32(data, 0);
@@ -935,7 +935,7 @@ class EmfPlusDrawer {
     const objectId = flags & 0xFF;
     const objectType = flags & 0x7F00;
     // EmfPlusObject record 数据起点：EmfPlusGraphicsVersion (4 bytes, signature 0xDBC01001) + object-specific data
-    // POI HemfPlusObject.init 先读 graphicsVersion 后再传给 EmfPlusObjectData.init
+    // 即先读 graphicsVersion 再交给对象自身的解析
     if (data.length >= 4) data = data.slice(4);
     if (!this._objTypeStats) this._objTypeStats = {};
     this._objTypeStats['0x'+objectType.toString(16)] = (this._objTypeStats['0x'+objectType.toString(16)]||0)+1;
@@ -953,7 +953,7 @@ class EmfPlusDrawer {
       }
       // Texture 后续扩展
     } else if (objectType === 0x0200) { // EmfPlusPen
-      // EmfPlusPen（data 已剥离 GraphicsVersion，MS-EMFPLUS 2.2.2.27；对齐 POI HemfPlusPen.init）：
+      // EmfPlusPen（data 已剥离 GraphicsVersion，MS-EMFPLUS 2.2.2.27）：
       // PenType(4,=0) + PenDataFlags(4) + UnitType(4) + PenWidth(float,4) + OptionalData[flags] + Brush
       // OptionalData 顺序：Transform(24) StartCap(4) EndCap(4) Join(4) MiterLimit(4) LineStyle(4)
       //   DashedLineCap(4) DashedLineOffset(4) DashedLineData(4+n*4) Alignment(4)
@@ -1000,8 +1000,8 @@ class EmfPlusDrawer {
           if (c) color = c;
         }
       }
-      // PenWidth 与坐标同空间使用（对齐 POI：applyObject 未做单位换算，注释为 TODO；
-      // 参考实现 libemf2svg 也输出原始宽度）。仅当 width<=0 时取最小值 1。
+      // PenWidth 与坐标同空间使用（不做单位换算，直接输出原始宽度）。
+      // 仅当 width<=0 时取最小值 1。
       if (width <= 0) width = 1;
       this.emfPlusObjects[objectId] = { type: 'pen', color, width, penUnit: unitType };
     } else if (objectType === 0x0600) { // EmfPlusFont（U_OT_Font=6）
@@ -1077,7 +1077,7 @@ class EmfPlusDrawer {
     console.log('EMF+ Clear:', color);
   }
 
-  // EmfPlusFillRects（0x400A，MS-EMFPLUS 2.3.4.20 / libemf2svg U_PMR_FILLRECTS_get）：
+  // EmfPlusFillRects（0x400A，MS-EMFPLUS 2.3.4.20）：
   // data = BrushId(4) + Count(4) + Rect[Count]。BrushId 为 ARGB（flags&0x8000）或对象表索引；
   // flags&0x4000（U_PPF_C）为 1 时矩形是 4×int16（8 字节），否则 4×float32（16 字节）。
   processEmfPlusFillRectangles(flags, data) {

@@ -20,7 +20,7 @@
 临时工具：
 
 - **不在任何 CI / npm script 中**，不会随发布产物分发；
-- 多数依赖本机才有的目录：`out/<批次名>/` 渲染产物、`test_files/ref-emf-corpus/`
+- 多数依赖本机才有的目录：`out/<批次名>/` 渲染产物、`test_files/emf-corpus/`
   等被 gitignore 的大语料——干净 checkout 上通常会直接失败；
 - 使用 `__dirname` 拼 `..` 指向仓库根（`../out`、`../test_files`），因此**移动这些
   文件必须同步修正路径**；

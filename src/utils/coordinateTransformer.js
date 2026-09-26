@@ -88,22 +88,22 @@ class CoordinateTransformer {
     this.worldM21 = 0; this.worldM22 = 1;
     this.worldDx = 0; this.worldDy = 0;
     // device→canvas 平移：把 header rclBounds 原点（内容在设备空间的位置）
-    // 平移到画布 (0,0)，使内容铺满 canvas 且不超界（与各参考实现一致）。
+    // 平移到画布 (0,0)，使内容铺满 canvas 且不超界。
     this.deviceOrgX = 0;
     this.deviceOrgY = 0;
     /**
      * MM_TEXT / 固定比例模式下是否**忽略** windowOrg/viewportOrg。
      *
-     * 语义分叉（两套实现的真实差异，不是可随意取舍的偏好）：
-     *  - GDI（正确语义）：device = (logical − windowOrg) × s + viewportOrg，所有模式都减 windowOrg。
-     *  - libemf2svg（EMF 对照基准）：`point_cal()` 把 orgs 初值硬编码为 0.0，
+     * 语义分叉（两套映射语义的真实差异，不是可随意取舍的偏好）：
+     *  - GDI 语义：device = (logical − windowOrg) × s + viewportOrg，所有模式都减 windowOrg。
+     *  - 简化语义：orgs 初值恒为 0，
      *    只有 ISO/ANISO 分支才从 DC 状态读入 —— 于是 MM_TEXT 与公制模式下
      *    生产者写的 windowOrg/viewportOrg **被完全忽略**。
-     *    实证 test-125：文件设 SETWINDOWORGEX(48,17)（MM_TEXT），ref 把内容画在
-     *    (48,17)（相对它的 translate(1,0) 即 49,17），我们减掉后整图偏 (−48,−17)，
+     *    实证 test-125：文件设 SETWINDOWORGEX(48,17)（MM_TEXT），该语义下内容画在
+     *    (48,17)，减掉 windowOrg 后整图偏 (−48,−17)，
      *    RMSE 0.1105；忽略后 0.0024。
      *
-     * EMF 路径以 ref 为对照基准 → 置 true；WMF 路径没有 EMF 式参考实现可比，
+     * EMF 路径采用简化语义 → 置 true；WMF 路径
      * 且 placeable WMF 依赖 windowOrg 表达 bbox 原点 → 保持 false（GDI 语义）。
      * @type {boolean}
      */
@@ -112,7 +112,7 @@ class CoordinateTransformer {
 
   /**
    * 设置「MM_TEXT/公制模式下忽略 windowOrg/viewportOrg」。
-   * 仅供 EMF 绘制路径启用（对齐 libemf2svg point_cal），见 ignoreWindowOrgs 说明。
+   * 仅供 EMF 绘制路径启用，见 ignoreWindowOrgs 说明。
    * @param {boolean} on
    */
   setIgnoreWindowOrgs(on) {
@@ -126,17 +126,17 @@ class CoordinateTransformer {
   }
 
   /**
-   * 世界矩阵分量量化到 4 位小数——复刻参考实现 libemf2svg 的输出精度缺陷。
+   * 世界矩阵分量量化到 4 位小数——复刻「4 位小数输出世界矩阵」的精度行为。
    *
-   * 参考实现把世界矩阵直接写进 SVG：`matrix(%.4f %.4f %.4f %.4f %.4f %.4f)`。
+   * 该行为把世界矩阵直接写进 SVG：`matrix(%.4f %.4f %.4f %.4f %.4f %.4f)`。
    * 四位小数对 ~1 量级的值无损，但对「极小比例」的 world 变换是灾难性的：
    * test-179 的 SETWORLDTRANSFORM 比例是 0.004962134641，%.4f 写成 **0.0050**，
-   * 于是 ref 的全图被放大 0.763%（x）/ 0.973%（y）——实测按该比例重采样后
+   * 于是全图被放大 0.763%（x）/ 0.973%（y）——实测按该比例重采样后
    * RMSE 0.2507→0.0243，即差异几乎全部来自这一处四舍五入。
-   * 既然对照基准是 ref 的渲染结果，就必须用 ref 实际使用的（已四舍五入的）矩阵。
+   * 为与 4 位小数输出保持一致，这里同样使用已四舍五入的矩阵。
    *
    * 唯一偏离：非 0 值若被舍入成 0（world 比例 < 5e-5 的极端文件）会保留原值，
-   * 否则该轴内容整体塌缩，ref 亦输出空白，保留原值不影响对齐且更稳健。
+   * 否则该轴内容整体塌缩，输出亦为空白，保留原值更稳健。
    * @param {number} v
    * @returns {number}
    */
@@ -146,7 +146,7 @@ class CoordinateTransformer {
     return q;
   }
 
-  /** 把当前世界矩阵的 6 个分量按参考实现的 %.4f 输出精度量化 */
+  /** 把当前世界矩阵的 6 个分量按 %.4f 输出精度量化 */
   _quantizeWorld() {
     this.worldM11 = this._q4(this.worldM11); this.worldM12 = this._q4(this.worldM12);
     this.worldM21 = this._q4(this.worldM21); this.worldM22 = this._q4(this.worldM22);
@@ -240,7 +240,7 @@ class CoordinateTransformer {
    * 与 transform() 的线性部分完全一致：先 world 变换线性部分（行向量约定），
    * 再 window/viewport 缩放（apply=false 时跳过，同 transform 原语义）。
    * 供位图 BLT 类记录把带符号的 (cxDest, cyDest) 映射为目标宽高使用
-   * （对齐 libemf2svg 对 size 做 point_cal 的行为）。
+   * （尺寸向量与点走同一套线性映射）。
    * @param {number} dx
    * @param {number} dy
    * @returns {Point}
@@ -259,15 +259,15 @@ class CoordinateTransformer {
 
   /**
    * 把尺寸向量按「点」映射
-   * U_EMRSTRETCHDIBITS_draw 用 point_cal(cDest) 计算 <image> 的 width/height，
+   * 位图记录用点映射(cDest)计算 <image> 的 width/height，
    * 而 world 变换经外层 SVG 矩阵组后置作用。因此：
-   *   size = world线性( point_cal_无world(cDest) )
-   * point_cal 的 mapMode 分支差异（libemf2svg emf2svg_utils.c）：
+   *   size = world线性( 点映射_无world(cDest) )
+   * 点映射的 mapMode 分支差异：
    *   - MM_TEXT / default：恒等（orgs 硬编码 0，不参与）；
    *   - 固定比例模式（LOMETRIC~TWIPS）：仅 pxPerMm 缩放，sy 取负，orgs 不参与；
    *   - MM_ISOTROPIC / MM_ANISOTROPIC：减 windowOrg、加 viewportOrg。
-   * viewportOrg ≠ 0 时该缺陷会放大目标矩形（test-118 表格右移一列即此因），
-   * 参考实现为 RMSE 对照的权威，故照抄。
+   * viewportOrg ≠ 0 时该行为会放大目标矩形（test-118 表格右移一列即此因），
+   * 为保证与既有渲染基线对齐，此处照此实现。
    * @param {number} dx
    * @param {number} dy
    * @returns {Point}
@@ -308,8 +308,8 @@ class CoordinateTransformer {
 
   /**
    * 当前 world 变换的线性缩放系数（用于笔宽换算）。
-   * 仅 world 变换参与：参考实现（libemf2svg）把 world 变换作为 SVG matrix
-   * 输出，笔宽在 matrix 内因此被等比缩放；而 window/viewport 比例由参考实现
+   * 仅 world 变换参与：world 变换作为 SVG matrix 输出时，
+   * 笔宽在 matrix 内被等比缩放；而 window/viewport 比例
    * 预变换到坐标里、不作用于笔宽（test-182 需 ×0.0625，test-027 需 ×1）。
    * 非等比时取行列式的几何平均。
    * @returns {number}
@@ -322,15 +322,15 @@ class CoordinateTransformer {
   /**
    * world 变换是否「非等比」（两轴缩放不同）。
    *
-   * 参考实现把 world 矩阵放在外层 `<g transform="matrix(...)">` 里，而
-   * `point_cal(cDest)` 只含统一的 `states->scaling`——因此 ref 的 `<image>`
-   * 框**不含** world 的各向异性，各向异性由外层组施加。我们是烘焙式实现，
+   * 当 world 矩阵放在外层 `<g transform="matrix(...)">` 里时，
+   * 点映射只含统一的 `scaling` 因子——因此 `<image>`
+   * 框**不含** world 的各向异性，各向异性由外层组施加。本实现是烘焙式，
    * world 的各向异性会进到框里；此时必须用 `preserveAspectRatio="none"` 把
    * 它施加回去，否则 SVG 默认的 `xMidYMid meet` 会把各向异性 letterbox 掉。
    *
-   * test-155：world = [0.587692,0,0,0.584140,307,118]（= ref 的组矩阵），
-   * 各向异性 0.6%，butter 后 RMSE 0.0303→0.0489。
-   * test-142：无 world（恒等组）→ 默认 meet 与 ref 一致（0.0755→0.0206）。
+   * test-155：world = [0.587692,0,0,0.584140,307,118]，
+   * 各向异性 0.6%，烘焙后 RMSE 0.0303→0.0489。
+   * test-142：无 world（恒等组）→ 默认 meet 与基准一致（0.0755→0.0206）。
    *
    * @returns {boolean}
    */
@@ -343,12 +343,12 @@ class CoordinateTransformer {
 
   /**
    * 逻辑坐标 -> 设备坐标。
-   * 参考实现（libemf2svg）的复合顺序：SVG 根 translate(-deviceOrg) 包裹
-   * world 矩阵组，组内坐标为 point_cal 结果。即：
+   * 复合顺序：SVG 根 translate(-deviceOrg) 包裹
+   * world 矩阵组，组内坐标为点映射结果。即：
    *   device = world_M( (p - windowOrg) * s + viewportOrg ) - deviceOrg
    * world 变换**后置**作用于映射结果（而非 GDI 语义的先 world 后映射）。
    * 当 world 含缩放且 viewportOrg ≠ 0 时两种顺序结果不同（test-118 圈注
-   * 椭圆偏移一列、test-171/125 残差的根因），以参考实现为准。
+   * 椭圆偏移一列、test-171/125 残差的根因），此处采用后置顺序。
    * apply=false（windowExt 退化）时跳过缩放与 viewportOrg，仅减 windowOrg。
    * @param {number} x
    * @param {number} y
@@ -370,7 +370,7 @@ class CoordinateTransformer {
       cy = cy * vp.sy;
     }
     // world 仿射后置（行向量约定：x' = x*M11 + y*M21 + Dx）。
-    // 参考实现 transform_draw：matrix(eM11,eM12,eM21,eM22, scaleX(eDx), scaleY(eDy))
+    // world 矩阵写入 SVG：matrix(eM11,eM12,eM21,eM22, scaleX(eDx), scaleY(eDy))
     // —— 平移分量也要经过 window/viewport 缩放（不含 org）。
     if (this.worldM11 !== 1 || this.worldM12 !== 0 || this.worldM21 !== 0 ||
       this.worldM22 !== 1 || this.worldDx !== 0 || this.worldDy !== 0) {
@@ -389,9 +389,8 @@ class CoordinateTransformer {
    * 原语义为“完全不应用缩放，也不加 viewportOrg”，故 apply=false。
    * MM_TEXT 的语义按渲染目标分流（ignoreWindowOrgs 正是 EMF 路径的开关）：
    *   - EMF（ignoreWindowOrgs=true）：恒 1:1，window/viewport 范围不参与映射。
-   *     MS-EMF/GDI 如此；LibreOffice mtftools.cxx ImplMap() 也是
-   *     `if (meMapMode != MappingMode::MM_TEXT)` 才做
-   *     `fX2 /= mnWinExtX; fX2 *= mnDevWidth;`；libemf2svg 同样不使用这两个范围。
+   *     即只有 `mapMode != MM_TEXT` 时才做
+   *     `fX2 /= mnWinExtX; fX2 *= mnDevWidth;`，MM_TEXT 下不使用这两个范围。
    *     旧实现（对 EMF 也按比值缩放）会让「只设 SETWINDOWEXTEX、不设
    *     SETVIEWPORTEXTEX」的样本（test-068，winExt=4859x3456 vs 画布 4765x3434）
    *     内容被整体缩到 98%，越靠右偏移越大。
@@ -406,26 +405,26 @@ class CoordinateTransformer {
    */
   _getViewportScale() {
     // useOrg：是否应用 windowOrg/viewportOrg。
-    // 逐字对照参考实现 point_cal()（libemf2svg src/lib/emf2svg_utils.c）：
-    //   double windowOrgX = 0.0, viewPortOrgX = 0.0;   ← 初值恒 0
+    // 简化语义的 orgs 规则：
+    //   windowOrgX / viewPortOrgX 初值恒 0
     //   switch (MapMode) {
-    //     case U_MM_TEXT:          scalingX = 1.0; ...              // 不改 orgs
-    //     case U_MM_LOMETRIC: ...  scalingX = pxPerMm*0.1; ...      // 不改 orgs
-    //     case U_MM_ISOTROPIC/ANISOTROPIC:
+    //     case MM_TEXT:            scalingX = 1.0; ...              // 不改 orgs
+    //     case MM_LOMETRIC: ...    scalingX = pxPerMm*0.1; ...      // 不改 orgs
+    //     case MM_ISOTROPIC/ANISOTROPIC:
     //         if (windowExSet && viewPortExSet) scalingX = viewPortExX/windowExX;
     //         else scalingX = 1.0;
     //         windowOrgX = states->windowOrgX;  viewPortOrgX = states->viewPortOrgX;
     //     default:                 scalingX = 1.0;                  // 不改 orgs
     //   }
     //   ret.x = ((x - windowOrgX) * scalingX + viewPortOrgX) * states->scaling;
-    // 也就是说：libemf2svg **只有 ISOTROPIC/ANISOTROPIC 才应用 orgs**，
+    // 也就是说：**只有 ISOTROPIC/ANISOTROPIC 才应用 orgs**，
     // MM_TEXT 与公制模式下 windowOrg/viewportOrg 恒为 0（既不减 windowOrg，也不加 viewportOrg）。
     // 另注意 ISO/ANISO 即使 windowEx/viewPortEx 未设（scaling=1）**仍然**应用 orgs。
     // 该行为只在 EMF 路径启用（ignoreWindowOrgs）——WMF 走 GDI 语义，见字段说明。
     const textModeUseOrg = !this.ignoreWindowOrgs;
     switch (this.mapMode) {
       case MAP_MODE.MM_TEXT: {
-        // EMF：恒 1:1（见上方说明），且 useOrg=false 对齐 libemf2svg point_cal
+        // EMF：恒 1:1（见上方说明），且 useOrg=false
         if (this.ignoreWindowOrgs) {
           return { sx: 1, sy: 1, apply: true, useOrg: false };
         }
@@ -447,9 +446,9 @@ class CoordinateTransformer {
           let sy = this.viewportExtY / this.windowExtY;
           if (this.mapMode === MAP_MODE.MM_ISOTROPIC) {
             // 等比模式：逻辑单位两轴等长。生产者写出的 vpExt/winExt 两轴比例
-            // 常有微小出入。参考实现（libemf2svg）实证**恒用 x 轴比例**作用于
-            // 两轴（test-164/174 sx<sy 且 ref 取 sx；test-165 sx>sy 亦取 sx——
-            // 用 min() 会在后者退化），ref 字号与 y 坐标均按 sx 缩放。
+            // 常有微小出入。实证**恒用 x 轴比例**作用于
+            // 两轴（test-164/174 sx<sy 取 sx；test-165 sx>sy 亦取 sx——
+            // 用 min() 会在后者退化），字号与 y 坐标均按 sx 缩放。
             sy = sx;
           }
           return { sx, sy, apply: true, useOrg: true };
@@ -494,7 +493,7 @@ class CoordinateTransformer {
    * 列向量约定输出（x' = a*x + c*y + e, y' = b*x + d*y + f）。
    * 合成顺序：先世界变换（world，行向量 [x y 1]·M），再 window→viewport 缩放/平移，
    * 最后减 deviceOrg（把 header rclBounds 原点平移到画布原点）。
-   * 供文字渲染等需要“原始逻辑坐标 + 原始字号 + transform 矩阵”对齐参考实现的场景使用。
+   * 供文字渲染等需要“原始逻辑坐标 + 原始字号 + transform 矩阵”的场景使用。
    * @returns {{a:number,b:number,c:number,d:number,e:number,f:number}}
    */
   getSvgMatrix() {

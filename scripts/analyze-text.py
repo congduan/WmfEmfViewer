@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""对比输出与参考实现（libemf2svg）文本的有效字号/位置，推导字号换算系数。
+"""对比输出与外部渲染器文本的有效字号/位置，推导字号换算系数。
 
 从 <base>.ours.svg 的 <text> 提取 (x, y, font-size, transform matrix)，
 计算经 matrix 后的有效坐标与有效字号；再与 <base>.ref.svg 的 (x, y, font-size) 比较。

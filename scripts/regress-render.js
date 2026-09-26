@@ -6,7 +6,7 @@ const P = window.MetafileParser, E = window.EmfDrawer, EP = window.EmfPlusDrawer
 const SvgContext = require('../src/modules/svgContext.js');
 
 const dirs = process.argv.slice(2).length ? process.argv.slice(2)
-  : ['test_files/ref-emf-corpus/emf-ea', 'test_files/lo-wmf-corpus', 'test_files/sample-wmf'];
+  : ['test_files/emf-corpus/emf-ea', 'test_files/wmf-corpus', 'test_files/sample-wmf'];
 const realErr = console.error;
 console.log = () => {}; console.warn = () => {}; console.error = () => {};
 

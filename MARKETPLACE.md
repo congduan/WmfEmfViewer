@@ -81,8 +81,8 @@ This extension contributes no settings — it just works.
 
 ### 0.1.1
 
-- Major EMF / EMF+ rendering accuracy improvements, aligned with reference
-  implementations (libemf2svg / Apache POI): world & DC transform semantics,
+- Major EMF / EMF+ rendering accuracy improvements, verified against the
+  metafile format specifications: world & DC transform semantics,
   bitmap BLT sizing and alpha rules, text placement/rotation and metrics,
   pen width, end caps and dash patterns, brush/pen/clip state snapshots.
 - Coordinate mapping fixed for fixed-scale modes (MM_LOMETRIC / HIMETRIC /

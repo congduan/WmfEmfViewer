@@ -1,4 +1,4 @@
-// 把单个 WMF/EMF 渲染成 SVG + PNG，便于人工目检（对比参考实现时用于快速预览）。
+// 把单个 WMF/EMF 渲染成 SVG + PNG，便于人工目检（对比外部渲染结果时用于快速预览）。
 // 用法：node scripts/render-one.js <file> [outPng]
 const fs = require('fs');
 const path = require('path');

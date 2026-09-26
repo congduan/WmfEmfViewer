@@ -21,8 +21,7 @@ class SvgContext {
         // 笔的端帽/连接样式（SVG stroke-linecap / stroke-linejoin）。
         // null = 不输出该属性（与 SVG 默认 butt/miter 相同，保守行为，WMF 路径保持原状）。
         // EMF 路径由 applyGdiObject 按 pen style 的 PS_ENDCAP_*/PS_JOIN_* 位设置，
-        // 对齐 libemf2svg stroke_draw（PS_ENDCAP_ROUND/PS_JOIN_ROUND 的值都是 0，
-        // 故 style=0 的笔 ref 也会输出 round/round）。
+        // 且 style=0 的笔也输出 round/round（PS_ENDCAP_ROUND / PS_JOIN_ROUND 的值都是 0）。
         this.lineCap = null;
         this.lineJoin = null;
 
@@ -48,7 +47,7 @@ class SvgContext {
         const ch = this.canvas.height || 600;
         const cap = Math.sqrt(cw * cw + ch * ch) * 2;
         // GDI 笔宽为逻辑单位，需按当前 逻辑→设备 缩放系数换算
-        //（对齐 libemf2svg/Windows：笔宽与坐标经过同一变换）。
+        //（笔宽与坐标经过同一变换）。
         // strokeScaleProvider 由 EMF drawer 注入，实时反映 world/viewport 变换。
         let scale = this.strokeScale;
         if (typeof this.strokeScaleProvider === 'function') {
@@ -87,7 +86,7 @@ class SvgContext {
     }
 
     // 描边专用的 stroke-linecap / stroke-linejoin（仅描边元素输出，fill-only 元素不带）。
-    // 对齐 libemf2svg stroke_draw：只有 pen style 的对应位为已知枚举时才输出属性。
+    // 只有 pen style 的对应位为已知枚举时才输出属性。
     _strokeCaps() {
         const a = [];
         if (this.lineCap) a.push('stroke-linecap="' + this.lineCap + '"');
@@ -335,7 +334,7 @@ class SvgContext {
         let family = m ? m[2].trim() : 'sans-serif';
         // 去掉包裹引号：font-family 属性值不能再带字面引号——带引号的
         // '"WingDings"' 会被当作字名为引号字符本身而匹配失败，走到与
-        // 参考实现不同的回退字体（test-164 的 WingDings 符号字形全部错位）。
+        // 回退到错误字体（test-164 的 WingDings 符号字形全部错位）。
         family = family.replace(/^"([^"]*)"$/, '$1').replace(/^'([^']*)'$/, '$1');
         const style = /italic/.test(this.font) ? 'italic' : 'normal';
         const weight = /bold/.test(this.font) ? 'bold' : 'normal';
@@ -357,28 +356,27 @@ class SvgContext {
         // middle / central 六种写法渲染结果逐像素一致），而 RMSE 对照管线正是用 rsvg
         // 光栅化；浏览器虽支持该属性，但两者必须一致才可复现。故这里把 GDI 的垂直对齐
         // 直接折算成 alphabetic 基线：TA_TOP 时基线 = y + 0.9×字号。
-        // 该 0.9 与参考实现 libemf2svg 一致：test-001 实测 22 条 TA_TOP 文本
-        // (refY - ourY)/fontSize = 0.8996~0.9003（10px 与 12px 两档字号），alphabetic
+        // 该 0.9 为实测值：test-001 的 22 条 TA_TOP 文本
+        // (基准Y - 本实现Y)/fontSize = 0.8996~0.9003（10px 与 12px 两档字号），alphabetic
         // 文本 dy≈0。TA_BOTTOM 对称取 −0.1×字号（字符格 = 0.9 上伸 + 0.1 下伸）。
         const fs = f.sizeNum || 0;
         const dyBase = this.textBaseline === 'top' ? 0.9 * fs
             : this.textBaseline === 'bottom' ? -0.1 * fs : 0;
-        // 旋转文本：完全按参考实现的结构输出——
-        //   libemf2svg text_style_draw：
-        //     <text x=<point_cal(Org)> y=<point_cal(Org)>            ← y 属性**不加**偏移
+        // 旋转文本：按如下结构输出——
+        //     <text x=<映射后的原点X> y=<映射后的原点Y>            ← y 属性**不加**偏移
         //       transform="rotate(θ, X, Y + fs*0.9) translate(0, fs*0.9)">   ← 偏移只在变换里
         //   且该分支**只**由 `font_escapement != 0` 触发，与 SETTEXTALIGN 无关。
         // 变换列表从右向左作用：先 translate 再绕 (X, Y+0.9fs) 旋转，两者恰好抵消，
         // 净效果 = 锚点落在 (X, Y+0.9fs) 且字形绕该点旋转（GDI 语义：参考点相对
         // 字形的方位不随 escapement 改变）。**不能**把 0.9fs 同时写进 y 属性，
         // 否则 translate 会再叠加一次（test-016 的 y 轴标签横向偏 14.4px）。
-        // 旋转分支的触发与参考实现一致：`font_escapement != 0`（只要字体带 escapement，
-        // 即使截断后角度为 0°，ref 仍输出 rotate(0, …) translate(0, 0.9fs) 形态，
+        // 旋转分支的触发条件：`font_escapement != 0`（只要字体带 escapement，
+        // 即使截断后角度为 0°，仍输出 rotate(0, …) translate(0, 0.9fs) 形态，
         // 锚点因此带 0.9 字号偏移）。transformMatrix.escapement 由绘制层透传，
-        // 且绘制层已按参考实现归一化 `lfEscapement % 3600`——3600(=360°) 与 0 等价，
-        // ref 对这种字体**完全**不输出 rotate（test-080 的 30 个字体里 29 个 esc=3600
+        // 且绘制层已归一化 `lfEscapement % 3600`——3600(=360°) 与 0 等价，
+        // 这类字体**完全**不输出 rotate（test-080 的 30 个字体里 29 个 esc=3600
         // 全部无 rotate，只有 esc=900 的 y 轴标签输出 rotate(-90)）。
-        // escapement == 0（旋转只因坐标映射产生）时不走该分支：ref 此时根本不输出
+        // escapement == 0（旋转只因坐标映射产生）时不走该分支：此时根本不输出
         // rotate 属性（文字靠外层 world 组旋转），形态与带 escapement 的文字不同。
         const isRotated = !!(transformMatrix && transformMatrix.escapement);
         const dy = isRotated ? 0.9 * fs : dyBase;
@@ -436,8 +434,8 @@ class SvgContext {
             dh: dh || imageData.height,
             // ⚠️ 裁剪必须在**此处**快照：getSvg() 是延迟执行的（putImageData 只占位），
             // 若那时再读 this._state.clip，取到的是**最后一条记录**的裁剪状态，于是
-            // 所有位图要么共用同一个 clip、要么完全没有 clip。参考实现是把记录当时的
-            // clip-path 直接写在 <image> 上（ref: clip-path="url(#clip-N)"）。
+            // 所有位图要么共用同一个 clip、要么完全没有 clip。正确做法是把记录当时的
+            // clip-path 直接写在 <image> 上（clip-path="url(#clip-N)"）。
             // test-142：138 条 STRETCHBLT 的位图 2x425 高，被裁剪区截到 72px；
             // 用错 clip（或无 clip）会让黑条整根画出来，RMSE 0.076→0.263。
             clip: this._state.clip || null,
@@ -640,14 +638,14 @@ class SvgContext {
                     ' width="' + this._fmt(img.dw) + '" height="' + this._fmt(img.dh) + '"' +
                     (img.clip ? ' clip-path="' + img.clip + '"' : '') +
                     // ⚠️ 默认**不写** preserveAspectRatio：SVG 默认值是 xMidYMid meet
-                    // （等比缩放并居中，即 letterbox 到目标框内），而参考实现的
-                    // <image> 没有该属性，故必须保持默认。写成 "none"（强行拉伸）
+                    // （等比缩放并居中，即 letterbox 到目标框内），标准 <image> 也
+                    // 没有该属性，故必须保持默认。写成 "none"（强行拉伸）
                     // 会在源图宽高比与目标框差很大时严重失真：test-142 的 STRETCHBLT
-                    // 源图 4x2 被 point_cal 映射成 1.99x425 的畸形框，"none" 会画出整根
-                    // 425px 黑白柱，而 ref 的 meet 只占 ~1px 高（0.0755 vs 0.263）。
+                    // 源图 4x2 被映射成 1.99x425 的畸形框，"none" 会画出整根
+                    // 425px 黑白柱，而 meet 只占 ~1px 高（0.0755 vs 0.263）。
                     // 例外：目标框的**各向异性来自 world 变换**时必须用 "none"——
-                    // 参考实现把 world 放在外层 <g matrix>，point_cal(cDest) 得到的框
-                    // 不含各向异性，各向异性由组施加；我们是烘焙式实现，若用默认 meet
+                    // world 放在外层 <g matrix> 时，点映射(cDest) 得到的框
+                    // 不含各向异性，各向异性由组施加；本实现是烘焙式，若用默认 meet
                     // 会被 letterbox 掉。test-155 的 world=[0.5877,0,0,0.5841] 即属此类
                     // （RMSE 0.0489 vs 0.0303）。该标记由绘制层 isWorldAnisotropic() 判定。
                     (img.stretch ? ' preserveAspectRatio="none"' : '') +

@@ -1,11 +1,11 @@
 // EMF 差异对照工具（differential testing）
 //
-// 用项目自身的渲染器把 EMF 渲染成 SVG，再用外部参考实现渲染同一文件，
+// 用项目自身的渲染器把 EMF 渲染成 SVG，再用外部转换器渲染同一文件，
 // 两者都光栅化成 PNG 后计算 RMSE 差异，从而定位渲染不一致的文件。
 //
 // 前置条件：
 //   npm run build:bundle
-//   参考实现转换器：通过环境变量 EMF2SVG 指定可执行文件路径
+//   外部转换器：通过环境变量 EMF2SVG 指定可执行文件路径
 //   光栅化：rsvg-convert、magick（ImageMagick）
 //
 // 用法：node scripts/diff-emf.js <emf文件或目录> [输出目录]
@@ -21,7 +21,11 @@ const EmfPlusDrawer = window.EmfPlusDrawer;
 const WmfDrawer = window.WmfDrawer;
 const SvgContext = require('../src/modules/svgContext.js');
 
-const EMF2SVG = process.env.EMF2SVG || '/tmp/metafile_corpus/libemf2svg-master/build/emf2svg-conv'; // 外部参考实现转换器
+const EMF2SVG = process.env.EMF2SVG || ''; // 外部转换器路径（须由环境变量指定）
+if (!EMF2SVG) {
+  console.error('请通过环境变量 EMF2SVG 指定外部转换器路径');
+  process.exit(1);
+}
 const W = 800, H = 600;
 
 // 关掉 drawers 的逐条日志
@@ -77,12 +81,12 @@ const input = process.argv[2];
 const outDir = process.argv[3] || path.join(__dirname, '..', 'out', 'emf-diff');
 fs.mkdirSync(outDir, { recursive: true });
 
-// 参考实现（libemf2svg）已知缺陷样本：其 ref 渲染本身错误（如整幅全黑/全白），
+// 外部转换器已知缺陷样本：其输出本身错误（如整幅全黑/全白），
 // 用它做基准会得出负面的假 RMSE。这些样本仍渲染/对比（便于人工复核），
-// 但在汇总统计中排除，不拉低平均分。新增项须经人工目检确认 ref 确为缺陷。
+// 但在汇总统计中排除，不拉低平均分。新增项须经人工目检确认为转换器缺陷。
 const REF_DEFECTS = new Set([
-  'test-065', // ref 输出整幅纯黑（矩形填充溢出），ours 的"方框+对角线"才是正确的
-  'test-038', // ref 输出整幅空白（libUEMF 测试文件，ref 未渲染任何内容）；ours 能画出完整图形
+  'test-065', // 外部输出整幅纯黑（矩形填充溢出），ours 的"方框+对角线"才是正确的
+  'test-038', // 外部输出整幅空白（未渲染任何内容）；ours 能画出完整图形
 ]);
 
 let files = fs.statSync(input).isDirectory()

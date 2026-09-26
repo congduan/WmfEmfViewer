@@ -30,8 +30,6 @@ src/metafileParser.browser.js
 website/metafileParser.browser.js
 packages/wmf-emf-renderer/index.js
 
-.reference/
-
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -65,6 +63,6 @@ Desktop.ini
 test-107.emf/
 output/
 .workbuddy/
-test_files/ref-emf-corpus/
-test_files/lo-wmf-corpus/
+test_files/emf-corpus/
+test_files/wmf-corpus/
 test_files/sample-wmf/

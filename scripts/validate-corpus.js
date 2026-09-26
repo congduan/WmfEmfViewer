@@ -11,10 +11,10 @@ require('../out/metafileParser.browser.js');
 const MetafileParser = window.MetafileParser;
 
 const CORPUS_DIRS = [
-  'lo-wmf-corpus',
-  'ref-emf-corpus/emf-valid',
-  'ref-emf-corpus/emf-ea',
-  'ref-emf-corpus/emf-corrupted',
+  'wmf-corpus',
+  'emf-corpus/emf-valid',
+  'emf-corpus/emf-ea',
+  'emf-corpus/emf-corrupted',
   'sample-wmf',
 ];
 

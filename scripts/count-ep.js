@@ -8,7 +8,7 @@ const EP = window.EmfPlusParser;
 const SvgContext = require('../src/modules/svgContext.js');
 const w = s => process.stdout.write(s + '\n');
 console.log = () => {}; console.warn = () => {}; console.error = () => {};
-const buf = fs.readFileSync('test_files/ref-emf-corpus/emf-valid/test-000.emf');
+const buf = fs.readFileSync('test_files/emf-corpus/emf-valid/test-000.emf');
 const p = new P(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
 const r = p.parse();
 const all = [];

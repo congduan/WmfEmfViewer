@@ -146,7 +146,7 @@ WmfEmfViewer/
 │
 ├── docs/                     # Documentation and specifications
 │   ├── PROJECT_STRUCTURE.md  # Detailed structure documentation
-│   ├── POI-COMPARE-CHECKLIST.md
+│   ├── RENDER-COMPARE-CHECKLIST.md
 │   ├── [MS-WMF].pdf          # WMF format specification
 │   ├── [MS-EMF].pdf          # EMF format specification
 │   └── [MS-EMFPLUS].pdf      # EMF+ format specification
@@ -275,7 +275,7 @@ npm run test:lib              # npm package artifact smoke test
 When you intentionally change rendering output, run `npm run test:snapshot:update` and commit the updated `snapshots.json`.
 
 ### Sample Files
-`test_files/` holds the regression corpus (403 `.wmf` + 229 `.emf` on a dev machine with the full corpora present; 222 files are committed). The large corpora (`ref-emf-corpus/`, `lo-wmf-corpus/`, `sample-wmf/`) are **gitignored** and generated/downloaded locally.
+`test_files/` holds the regression corpus (403 `.wmf` + 229 `.emf` on a dev machine with the full corpora present; 222 files are committed). The large corpora (`emf-corpus/`, `wmf-corpus/`, `sample-wmf/`) are **gitignored** and generated/downloaded locally.
 
 ### Manual Testing
 ```bash

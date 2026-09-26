@@ -14,7 +14,6 @@ screenshots/
 .github/
 .vscode/
 .vscode-test/
-.reference/
 coverage/
 node_modules/
 .workbuddy/

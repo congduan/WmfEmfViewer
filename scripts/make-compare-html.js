@@ -8,10 +8,10 @@
 //   node scripts/make-compare-html.js <diffDir> [--out <htmlPath>] [--title <t>] [--src <源文件相对路径>]
 // 示例：
 //   node scripts/make-compare-html.js out/emf-diff-valid \
-//     --title "EMF 渲染对比(186) 本项目 vs LibreOffice" \
-//     --src ../../test_files/ref-emf-corpus/emf-valid
+//     --title "EMF 渲染对比(186) 本项目 vs 外部实现" \
+//     --src ../../test_files/emf-corpus/emf-valid
 //
-// 约定（与 scripts/diff-emf.js 一致）：ours=本项目渲染，ref=参考实现渲染；
+// 约定（与 scripts/diff-emf.js 一致）：ours=本项目渲染，ref=外部实现渲染；
 // 参考光栅化均为同尺寸(800x600)白底 PNG，几何可对齐 → 页面提供 并排/滑块/叠差 三种视图。
 const fs = require('fs');
 const path = require('path');
@@ -103,7 +103,7 @@ const stat = {
   generatedAt: reportMtime ? reportMtime.toISOString() : new Date().toISOString(),
 };
 
-const title = args.title || `渲染对比 ${stat.total} 样本 — 本项目 vs 参考实现`;
+const title = args.title || `渲染对比 ${stat.total} 样本 — 本项目 vs 外部实现`;
 
 // ---- 组装页面 ----
 const html = `<!DOCTYPE html>
@@ -239,7 +239,7 @@ const html = `<!DOCTYPE html>
   </div>
 </header>
 <main id="list"></main>
-<footer>ours = 本项目渲染（白色光栅图） · ref = 参考实现 · RMSE 为 800×600 白色底光栅化后的归一化差异；滑块 / 叠差模式要求双图同尺寸几何对齐（本项目输出满足）。</footer>
+<footer>ours = 本项目渲染（白色光栅图） · ref = 外部实现 · RMSE 为 800×600 白色底光栅化后的归一化差异；滑块 / 叠差模式要求双图同尺寸几何对齐（本项目输出满足）。</footer>
 
 <div id="lb"><div class="lb-stage"></div><div class="lb-bar">
   <button id="lb-prev">← 上一</button>
@@ -295,14 +295,14 @@ function renderCards(){
       '<div class="cmp' + (exact ? '' : ' noexact') + '">' +
         '<div class="side">' +
           '<div class="half"><img loading="lazy" src="' + esc(e.ours) + '" data-k="' + idx[k] + '" alt="ours"><span class="tag ours">本项目</span></div>' +
-          '<div class="half"><img loading="lazy" src="' + esc(e.ref) + '" data-k="' + idx[k] + '" alt="ref"><span class="tag ref">参考实现</span></div>' +
+          '<div class="half"><img loading="lazy" src="' + esc(e.ref) + '" data-k="' + idx[k] + '" alt="ref"><span class="tag ref">外部实现</span></div>' +
         '</div>' +
         '<div class="slide" data-base="' + esc(e.base) + '">' +
           '<div class="lay"><img loading="lazy" src="' + esc(e.ref) + '" alt="ref"></div>' +
           '<div class="lay top"><img loading="lazy" src="' + esc(e.ours) + '" alt="ours"></div>' +
           '<input type="range" min="0" max="1000" value="500">' +
           '<div class="divider"></div>' +
-          '<span class="lbl" style="left:8px">← 本项目</span><span class="lbl" style="right:8px">参考实现 →</span>' +
+          '<span class="lbl" style="left:8px">← 本项目</span><span class="lbl" style="right:8px">外部实现 →</span>' +
         '</div>' +
         '<div class="blend">' +
           '<div class="lay"><img loading="lazy" src="' + esc(e.ours) + '" alt="ours"></div>' +
@@ -343,7 +343,7 @@ function openLb(k){
   const e = DATA.entries[order[k]];
   stage.innerHTML =
     '<figure><img src="' + esc(e.ours) + '"><figcaption>本项目 — ' + esc(e.base) + '</figcaption></figure>' +
-    '<figure><img src="' + esc(e.ref) + '"><figcaption>参考实现 — ' + esc(e.base) + '</figcaption></figure>';
+    '<figure><img src="' + esc(e.ref) + '"><figcaption>外部实现 — ' + esc(e.base) + '</figcaption></figure>';
   $('#lb-name').innerHTML = (order.length - k) + ' / ' + order.length +
     ' <b>' + esc(e.base) + '</b> ' + rmseBadge(e);
   lb.classList.add('on');

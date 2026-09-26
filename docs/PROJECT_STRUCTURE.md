@@ -49,7 +49,7 @@ Official Microsoft format specifications and project documentation:
 - **[MS-EMF].pdf**: Enhanced Metafile Format specification
 - **[MS-EMFPLUS].pdf**: Enhanced Metafile Plus Format specification
 - **PROJECT_STRUCTURE.md**: This file
-- **POI-COMPARE-CHECKLIST.md**: Rendering comparison checklist
+- **RENDER-COMPARE-CHECKLIST.md**: Rendering comparison checklist
 
 ### `/packages/wmf-emf-renderer` - npm Library
 Published as `wmf-emf-renderer`:
@@ -72,7 +72,7 @@ Main source code directory. See detailed structure below.
 - **snapshots/snapshots.json**: SVG hash baselines for the snapshot test
 
 ### `/test_files` - Test Assets
-Sample WMF and EMF files used by both test entry points. On a developer machine with the full corpora present this is 403 `.wmf` + 229 `.emf`; the committed subset is 222 files. The large corpora (`ref-emf-corpus/`, `lo-wmf-corpus/`, `sample-wmf/`) are gitignored and downloaded/generated locally.
+Sample WMF and EMF files used by both test entry points. On a developer machine with the full corpora present this is 403 `.wmf` + 229 `.emf`; the committed subset is 222 files. The large corpora (`emf-corpus/`, `wmf-corpus/`, `sample-wmf/`) are gitignored and downloaded/generated locally.
 
 ### `/website` - Static Site
 Static deployment of the same rendering engine. `website/metafileParser.browser.js` is copied here by the build script and is gitignored; `website/pdfContext.js` and `website/index.html` are hand-written.
