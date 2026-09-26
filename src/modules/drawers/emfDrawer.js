@@ -126,11 +126,11 @@ const EMF_RECORD_HANDLERS = {
   0x00000047: 'processEmfFillRgn',          // EMR_FILLRGN
   0x00000048: 'processEmfFrameRgn',         // EMR_FRAMERGN
   0x0000004A: 'processEmfPaintRgn',         // EMR_PAINTRGN
-  // 0x49 EMR_INVERTRGN：像素取反需要读取背景，Canvas/SVG 无光栅反演，POI 亦未实现（暂跳过）
+  // 0x49 EMR_INVERTRGN：像素取反需要读取背景，Canvas/SVG 无光栅反演（暂跳过）
 
   // ========== 已识别但无需处理 ==========
   0x00000046: 'processEmfGdiComment', // EMR_GDICOMMENT（含 EMF+ 内嵌数据时派发）
-  0x00000049: null, // EMR_INVERTRGN（POI 亦未实现）
+  0x00000049: null, // EMR_INVERTRGN（无光栅反演，未实现）
   0x0000004E: null, // EMR_MASKBLT
   0x0000004F: null, // EMR_PLGBLT
   0x00000050: null, // EMR_SETDIBITSTODEVICE
@@ -146,9 +146,9 @@ class EmfDrawer {
   constructor(ctx) {
     this.ctx = ctx;
     this.coordinateTransformer = new CoordinateTransformer();
-    // EMF 以 libemf2svg 为 RMSE 对照基准：它的 point_cal() 在 MM_TEXT/公制模式下
-    // 把 windowOrg/viewportOrg 硬编码为 0（只有 ISO/ANISO 才读 DC 状态），
-    // 故对 EMF 启用「忽略 orgs」语义（WMF 保持 GDI 语义，见 coordinateTransformer）。
+    // EMF 采用简化 orgs 语义：MM_TEXT/公制模式下把 windowOrg/viewportOrg 视为 0
+    // （只有 ISO/ANISO 才读 DC 状态），故对 EMF 启用「忽略 orgs」
+    // （WMF 保持 GDI 语义，见 coordinateTransformer）。
     this.coordinateTransformer.setIgnoreWindowOrgs(true);
     this.gdiObjectManager = new GdiObjectManager();
     // 注：EMF 对象统一存 gdiObjectManager（按文件句柄 createObjectAt），不再另设对象表
@@ -166,7 +166,7 @@ class EmfDrawer {
     this.currentPos = { x: 0, y: 0 }; // 当前位置（逻辑/窗口坐标），MoveToEx/LineTo/Poly*To 使用
     this._emfPlusDrawer = null; // 惰性创建的内嵌 EMF+ 播放器（与标准 EMF 记录共享 ctx）
     // 描边线宽缩放：GDI 笔宽（逻辑单位）随当前变换换算为设备单位
-    //（对齐 libemf2svg：ref 将坐标与笔宽经同一 matrix 缩放）
+    //（坐标与笔宽经同一 matrix 缩放）
     if (this.ctx && typeof this.ctx === 'object') {
       this.ctx.strokeScaleProvider = () => this.coordinateTransformer.getStrokeScale();
     }
@@ -192,7 +192,7 @@ class EmfDrawer {
       canvasWidth = Math.max(1, Math.round(bW));
       canvasHeight = Math.max(1, Math.round(bH));
       // device→canvas：header rclBounds 原点平移到画布 (0,0)，使内容铺满 canvas
-      //（各参考实现均在根层 translate(-bounds.left, -bounds.top)）
+      //（根层 translate(-bounds.left, -bounds.top) 即可）
       this.coordinateTransformer.setDeviceOrg(bounds.left, bounds.top);
       // 初始 window/viewport 均视为 identity（1:1 设备），随后若文件有
       // SETWINDOWEXTEX / SETVIEWPORTEXTEX 记录会覆盖为文件的 window/viewport 映射。
@@ -273,7 +273,7 @@ class EmfDrawer {
     this.currentPalette = null;
 
     // 双模式判定：文件含 EMF+ 注释块且含独立的 GDI 绘图记录时，只回放 GDI 记录。
-    // 依据：(1) libemf2svg 等参考实现不解析 EMF+，双模式文件仅渲染 GDI 拷贝；
+    // 依据：(1) 双模式文件以 GDI 拷贝为准；
     // (2) Windows 单拷贝语义，双份回放会产生重影（如 EMF+ 孪生描边宽度不匹配）。
     // 纯 EMF+ 文件（无 GDI 绘图记录，GDI 回放为空）仍需回放 EMF+。
     this._skipEmfPlusPlayback = this._detectDualMode(metafileData.records);
@@ -283,7 +283,7 @@ class EmfDrawer {
     for (let i = 0; i < metafileData.records.length; i++) {
       const record = metafileData.records[i];
       // 距上次 GDI+ GDICOMMENT 距离计数：用于判定紧跟 GDI+ 块的"绘图区背景"
-      // 类 STROKEFILL（见 test-000 实证：LO 与 ref 都不画这种 fill，仅描边）。
+      // 类 STROKEFILL（见 test-000 实证：这类 fill 不绘制，仅描边）。
       this._recSinceGdiC = (this._recSinceGdiC == null ? 999 : this._recSinceGdiC) + 1;
       if (record.type === 0x46) this._recSinceGdiC = 0;
       if (debugLogs) {
@@ -344,20 +344,17 @@ class EmfDrawer {
       if (!obj._isStockPen) this._penStockBlack = false;
       this.ctx.strokeStyle = isNullPen ? 'transparent' : obj.color;
       // PS_ENDCAP_* (0x00000F00) / PS_JOIN_* (0x0000F000) → SVG stroke-linecap/linejoin。
-      // 逐字对照 libemf2svg stroke_draw()：
       //   PS_ENDCAP_ROUND(0x000) → "round"；SQUARE(0x100) → "square"；FLAT(0x200) → "butt"
       //   PS_JOIN_ROUND(0x0000)  → "round"；BEVEL(0x1000)  → "bevel"；MITER(0x2000) → "miter"
       //   （其余值不输出属性，保持 SVG 默认）
-      // ⚠️ 两个枚举的 0 值都是 "ROUND"，因此 style=0 的普通笔 ref 也会输出
-      //    stroke-linecap="round" stroke-linejoin="round"；我们此前完全不输出，
-      //    于是每条折线的端头比 ref 少半个笔帽的墨量。test-032 有 4123 条短折线，
-      //    该差异足以让「线宽越粗越接近 ref」的假象出现（扫描 1.00→1.10 单调改善），
+      // ⚠️ 两个枚举的 0 值都是 "ROUND"，因此 style=0 的普通笔也会输出
+      //    stroke-linecap="round" stroke-linejoin="round"；此前完全不输出，
+      //    于是每条折线的端头少半个笔帽的墨量。test-032 有 4123 条短折线，
+      //    该差异足以让「线宽越粗越接近基线」的假象出现（扫描 1.00→1.10 单调改善），
       //    补上 cap/join 后线宽 1 才是真正的极小点。
-      // ⚠️ 但 **PS_NULL 笔不输出 caps**：ref 的 stroke_draw 首行即为
-      //     if ((stroke_mode & 0xFF) == U_PS_NULL) { no_stroke(); return; }
-      //   而 no_stroke() 只写 stroke-width + stroke(=填充色)，随后 fill_draw 写
-      //   fill，整条路径**没有** linecap/linejoin。我们若给空笔也输出 round，
-      //   会让「填充形状的 1px 同色伪描边」比 ref 多出圆角墨量：
+      // ⚠️ 但 **PS_NULL 笔不输出 caps**：空笔只写 stroke-width + stroke(=填充色)，
+      //   随后 fill 写填充，整条路径**没有** linecap/linejoin。若给空笔也输出 round，
+      //   会让「填充形状的 1px 同色伪描边」多出圆角墨量：
       //   test-008（22 条路径里 21 条空笔）0.0028 → 0.0312，test-007/132/133/134 同理。
       this.ctx.lineCap = null;
       this.ctx.lineJoin = null;
@@ -376,22 +373,20 @@ class EmfDrawer {
         }
       }
       if (!isNullPen) {
-        // 线宽按当前 window→viewport 比例换算；对照参考实现 width_stroke()：
+        // 线宽按当前 window→viewport 比例换算：
         //   tmp_w = scaleX(stroke_width) = stroke_width × mapMode缩放 × scaling；
         //   若 tmp_w/scaling < 1 输出 "1px"，否则输出 %.4f（**不取整**）。
         // 旧实现用 Math.max(1, Math.round(w*scale)) 取整，笔宽 2.4→2、1.6→2，
-        // 细线图元的线宽系统性偏离 ref（test-153 的 2.6667 被取整成 3 → 该样本
+        // 细线图元的线宽系统性偏离基准（test-153 的 2.6667 被取整成 3 → 该样本
         // RMSE 0.0234；test-154 同理 0.0301）。world 缩放不在此处（由 SvgContext 的
-        // strokeScaleProvider 按 √|det(world)| 统一施加，与 ref 的 world 组同构）。
+        // strokeScaleProvider 按 √|det(world)| 统一施加）。
         //
-        // ⚠️ PS_COSMETIC / PS_GEOMETRIC 分叉（ref stroke_draw）：
-        //   switch (stroke_mode & 0x000F0000) {
-        //     case U_PS_COSMETIC:  width_stroke(states, out, 1);        ← 宽度恒为 1
-        //     case U_PS_GEOMETRIC: width_stroke(states, out, stroke_width);
-        //   }
+        // ⚠️ PS_COSMETIC / PS_GEOMETRIC 分叉：
+        //     PS_COSMETIC：      宽度恒为 1
+        //     PS_GEOMETRIC：     使用声明的 stroke_width
         // 即**只有** PS_GEOMETRIC(0x00010000) 的笔才使用声明的宽度，其余一律 1。
-        // test-171 的笔全是 style=0（COSMETIC）却声明了 4~20 的宽度，我们照读数
-        // 描边宽度放大到 1.16~5.84px，而 ref 输出 1.0000 → 那批折线成为该样本
+        // test-171 的笔全是 style=0（COSMETIC）却声明了 4~20 的宽度，若照读数
+        // 描边宽度放大到 1.16~5.84px，而基准输出 1.0000 → 那批折线成为该样本
         // 最大残差来源。
         const PS_GEOMETRIC = 0x00010000;
         const w = (obj.style & 0x000F0000) === PS_GEOMETRIC ? (obj.width || 1) : 1;
@@ -400,13 +395,12 @@ class EmfDrawer {
         this.ctx.lineWidth = wMap < 1 ? 1 : wMap;
         // Pen Style → SVG stroke-dasharray
         // PS_SOLID=0 / PS_DASH=1 / PS_DOT=2 / PS_DASHDOT=3 / PS_DASHDOTDOT=4
-        // 逐字对照参考实现 stroke_draw()（libemf2svg src/lib/emf2svg_utils.c）：
         //   unit_stroke = stroke_width × scaling;  dash_len = 5×u;  dot_len = 1×u;
         //   PS_DASH       → dash,dash
         //   PS_DOT        → dot,dot
         //   PS_DASHDOT    → dash,dash,dot,dash      ← 末位是 dash（不是 dot）
         //   PS_DASHDOTDOT → dash,dash,dot,dot,dot,dash
-        // 旧公式（[3w,1w] / [3w,1w,1w,1w] / …）长度只有 ref 的 0.6 倍。
+        // 旧公式（[3w,1w] / [3w,1w,1w,1w] / …）长度只有正确值的 0.6 倍。
         // u 取**原始声明笔宽**而非 wMap，也**不**做 COSMETIC 替换：ref 的
         // unit_stroke = currentDeviceContext.stroke_width × scaling，用的是 DC 里
         // 记录的声明宽度（width_stroke(states,out,1) 只覆盖 stroke-width，不影响 dash）。
@@ -442,7 +436,7 @@ class EmfDrawer {
   }
 
   // 填充形状收尾：fill 后描边。默认黑色 1px pen 或 NULL_PEN 时改为「按填充色 1px 描边」
-  // （对齐参考实现 libemf2svg：它把每个填充形状输出为 fill+stroke 同色 1px 的 path，
+  // （每个填充形状输出为 fill+stroke 同色 1px 的 path，
   //  即使当前 pen 是 PS_NULL；彩色 fill 边缘因此无黑框）；
   // 显式彩色/宽笔保持原样描边。
   _afterFillShape() {
@@ -975,6 +969,8 @@ class EmfDrawer {
     const ETO_SMALL_CHARS = 0x0200;
     const charWidth = (options & ETO_SMALL_CHARS) ? 2 : 1;
     let stringOffset = (options & ETO_NO_RECT) ? 28 : 44;
+    // ETO_OPAQUE 的矩形填充在文本为空时同样生效（见 _fillOpaqueTextRect 注释）
+    if (!(options & ETO_NO_RECT)) this._fillOpaqueTextRect(options, data, 28);
     if (cChars === 0 || stringOffset + cChars * charWidth > data.length) return;
 
     let text = '';
@@ -987,19 +983,6 @@ class EmfDrawer {
     }
 
     // ETO_OPAQUE：先用背景色填充矩形
-    if (options & 0x0002 && !(options & ETO_NO_RECT) && data.length >= 44) {
-      const bg1 = this.coordinateTransformer.transform(this.readLongFromData(data, 28), this.readLongFromData(data, 32), this.ctx.canvas.width, this.ctx.canvas.height);
-      const bg2 = this.coordinateTransformer.transform(this.readLongFromData(data, 36), this.readLongFromData(data, 40), this.ctx.canvas.width, this.ctx.canvas.height);
-      const bgW = Math.abs(bg2.x - bg1.x);
-      const bgH = Math.abs(bg2.y - bg1.y);
-      if (bgW > 0 && bgH > 0) {
-        const savedFillStyle = this.ctx.fillStyle;
-        this.ctx.fillStyle = this.fillColor;
-        this.ctx.fillRect(Math.min(bg1.x, bg2.x), Math.min(bg1.y, bg2.y), bgW, bgH);
-        this.ctx.fillStyle = savedFillStyle;
-      }
-    }
-
     const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
     const savedFillStyle = this.ctx.fillStyle;
     this.ctx.fillStyle = this.textColor;
@@ -1045,14 +1028,14 @@ class EmfDrawer {
         //（window/viewport/世界变换等由外层 EMF 记录维护，内嵌 EMF+ 沿用）
         this._emfPlusDrawer.coordinateTransformer = this.coordinateTransformer;
       }
-      // 双模式文件（EMF+ 与 EMF 记录混排）：参考实现对 EMF+ 描边同样乘全局
+      // 双模式文件（EMF+ 与 EMF 记录混排）：EMF+ 描边同样乘全局
       // world 缩放（test-182：EMF+ 孪生形状描边不缩放会留 25px 灰色涂抹），
       // 故不旁路 strokeScaleProvider；EMF+-only 文件无 provider、不受影响。
       for (const rec of emfPlusRecords) {
         this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
       }
     } catch (e) {
-      console.log('EMF+ GDIComment playback failed:', /** @type {Error} */ (e).message);
+      console.log('EMF+ GDIComment playback failed:', /** @type {Error} */(e).message);
     }
   }
 
@@ -1150,7 +1133,7 @@ class EmfDrawer {
     if (data.length < 4) return;
     const savedDC = this.readDwordFromData(data, 0) | 0;
     // MS-EMF 2.3.4.5：nSavedDC>0 恢复到倒数第 n 个保存状态（丢弃其后的，等效弹 n 层）；
-    // nSavedDC<0 恢复向前 |n| 层；0 表示最近一次（弹 1 层）。参考 POI HemfMisc.EmfRestoreDc。
+    // nSavedDC<0 恢复向前 |n| 层；0 表示最近一次（弹 1 层）。
     const count = Math.min(savedDC === 0 ? 1 : Math.abs(savedDC), this.dcStateStack.length);
     let restored = null;
     for (let i = 0; i < count; i++) {
@@ -1309,8 +1292,8 @@ class EmfDrawer {
   processEmfStrokeAndFillPath(data) {
     console.log('EMF StrokeAndFillPath');
     // Excel 图表常见模式：GDICOMMENT 块之后紧随的 STROKEFILL 用灰色刷铺满整个绘图区
-    // 作为图表背景（test-000 等），LO 与 libemf2svg 都不画此 fill（实测：LO 输出无灰、
-    // ref 输出仅露 4.1K 灰像素），仅描边才符合 Excel 实际显示。此处按此行为跳过 fill。
+    // 作为图表背景（test-000 等），此类 fill 不绘制（实测仅描边才符合 Excel
+    // 实际显示）。此处按此行为跳过 fill。
     const skipFill = (this._recSinceGdiC || 999) < 30 && this._isGrayFillStyle();
     if (skipFill) {
       console.log('  skip fill (GDI+ 后绘图区背景)');
@@ -1441,8 +1424,33 @@ class EmfDrawer {
     this.processEmfTextOut(data, true);
   }
 
+  // ETO_OPAQUE (0x0002)：以当前背景色（SETBKCOLOR → this.fillColor）填充 EmrText.rcl。
+  // 该动作**与文本内容无关**，nChars=0 时同样是合法且常用的「填充矩形」调用。
+  // data 布局见 processEmfTextOut；SMALLTEXTOUT 的 rcl 从 28 起（此处由调用方剔除该分支）。
+  _fillOpaqueTextRect(options, data, rclOff = 48) {
+    if ((options & 0x0002) === 0) return;
+    if (rclOff + 16 > data.length) return;
+    const bg1 = this.coordinateTransformer.transform(
+      this.readLongFromData(data, rclOff), this.readLongFromData(data, rclOff + 4),
+      this.ctx.canvas.width, this.ctx.canvas.height);
+    const bg2 = this.coordinateTransformer.transform(
+      this.readLongFromData(data, rclOff + 8), this.readLongFromData(data, rclOff + 12),
+      this.ctx.canvas.width, this.ctx.canvas.height);
+    const bgW = Math.abs(bg2.x - bg1.x);
+    const bgH = Math.abs(bg2.y - bg1.y);
+    if (bgW > 0 && bgH > 0) {
+      const savedFillStyle = this.ctx.fillStyle;
+      this.ctx.fillStyle = this.fillColor;
+      this.ctx.fillRect(Math.min(bg1.x, bg2.x), Math.min(bg1.y, bg2.y), bgW, bgH);
+      this.ctx.fillStyle = savedFillStyle;
+    }
+  }
+
   processEmfTextOut(data, isUnicode) {
-    if (data.length < 76) return;
+    // EmrText 固定部分到 offDx(64) 为止；nChars=0 且仅 ETO_OPAQUE 的记录
+    // 总长只有 64+8=72 字节（test-178 全部 21230 条皆如此），不能按 76 过滤，
+    // 否则「填充矩形」这一合法用法整体丢失。
+    if (data.length < 64) return;
 
     // EMR_EXTTEXTOUTW/A 结构（record.data 已剥离 8 字节 EMR 头）
     // rclBounds (16), iGraphicsMode (4), exScale (4), eyScale (4)
@@ -1460,6 +1468,14 @@ class EmfDrawer {
 
     console.log(`EMF ExtTextOut${isUnicode ? 'W' : 'A'}:`, x, y, 'length:', stringLength, 'offString:', offString, 'options:', options);
 
+    // ETO_OPAQUE (0x0002)：用背景色（SetBkColor）填充 EmrText.rcl 矩形。
+    // ⚠️ 必须在**文本为空（nChars=0）时也执行**：`ExtTextOut(hdc, 0, 0, ETO_OPAQUE,
+    // &rect, NULL, 0, NULL)` 是 GDI 用当前背景色填充矩形的标准写法（旧实现把它放在
+    // `text.length > 0` 分支内，于是整幅图丢失）。test-178 全图 21230 条
+    // nChars=0 + ETO_OPAQUE 的 8×8 单元格（配 SETBKCOLOR 逐格变色）构成一幅
+    // 彩色渐变底图，旧实现只剩 1 个椭圆；test-176 同理。
+    this._fillOpaqueTextRect(options, data);
+
     if (stringLength > 0 && stringOffset >= 0 && stringOffset < data.length) {
       let text = '';
       try {
@@ -1473,8 +1489,8 @@ class EmfDrawer {
           }
         } else if (!isUnicode && stringOffset + stringLength <= data.length) {
           // ANSI text。≥0x80 的字节依赖字体字符集（CP1252/Symbol/…）解释，无法
-          // 从元文件可靠还原；参考实现（libemf2svg）将其统一替换为空格
-          // （test-174：Wingdings 2 符号字体的高位字节，ref 输出 ' '）。
+          // 从元文件可靠还原；统一替换为空格
+          // （test-174：Wingdings 2 符号字体的高位字节输出 ' '）。
           for (let i = 0; i < stringLength; i++) {
             const b = data[stringOffset + i];
             text += b >= 0x80 ? ' ' : String.fromCharCode(b);
@@ -1485,36 +1501,18 @@ class EmfDrawer {
         if (text.length > 0) {
           const savedFillStyle = this.ctx.fillStyle;
 
-          // ETO_OPAQUE (0x0002)：用背景色（SetBkColor 设置的 fillColor）填充 rcl 矩形
-          if ((options & 0x0002) !== 0 && data.length >= 64) {
-            const rclLeft = this.readLongFromData(data, 48);
-            const rclTop = this.readLongFromData(data, 52);
-            const rclRight = this.readLongFromData(data, 56);
-            const rclBottom = this.readLongFromData(data, 60);
-            const bg1 = this.coordinateTransformer.transform(rclLeft, rclTop, this.ctx.canvas.width, this.ctx.canvas.height);
-            const bg2 = this.coordinateTransformer.transform(rclRight, rclBottom, this.ctx.canvas.width, this.ctx.canvas.height);
-            const bgX = Math.min(bg1.x, bg2.x);
-            const bgY = Math.min(bg1.y, bg2.y);
-            const bgW = Math.abs(bg2.x - bg1.x);
-            const bgH = Math.abs(bg2.y - bg1.y);
-            if (bgW > 0 && bgH > 0) {
-              this.ctx.fillStyle = this.fillColor;
-              this.ctx.fillRect(bgX, bgY, bgW, bgH);
-            }
-          }
-
           // 文本使用 SetTextColor 设置的颜色
           this.ctx.fillStyle = this.textColor;
-          // 文字渲染对齐参考实现（libemf2svg）：<text x=设备X y=设备Y font-size=lfHeight*sx>，
+          // 文字渲染采用「设备坐标 + 等比例字号」：<text x=设备X y=设备Y font-size=lfHeight*sx>，
           // 且**不带** transform。两条硬约束（旧实现违反后文字整体消失）：
           //  1) 裁剪带（SETCLIPRGN / SELECTCLIPPATH）是以设备坐标写进 SVG 的，而 clip-path 在
           //     带 transform 的元素上按「该元素自身新建立的用户坐标系」解析——一旦文字挂上
           //     非恒等 matrix，设备坐标的裁剪带会被当成局部（逻辑）坐标，文字被整条切掉。
           //     旧实现（原始逻辑坐标 + matrix）下，103 个 y 轴翻转的样本文字全部不可见。
-          //  2) GDI 文字字形不会被坐标映射镜像，且字形尺度取**水平**比例：LibreOffice
-          //     mtftools.cxx DrawText 注释「In GM_COMPATIBLE, text glyphs are NOT physically
-          //     mirrored」。实测 132/141 个含文本样本满足 refFontSize == lfHeight * sx；
-          //     唯一 |sy|>|sx| 的样本 test-109 亦印证取 sx（refS/sx=0.9998 vs refS/sy=0.8346）。
+          //  2) GDI 文字字形不会被坐标映射镜像，且字形尺度取**水平**比例
+          //     （GM_COMPATIBLE 下 text glyphs are NOT physically mirrored）。
+          //     实测 132/141 个含文本样本满足 基准字号 == lfHeight * sx；
+          //     唯一 |sy|>|sx| 的样本 test-109 亦印证取 sx（0.9998 vs 0.8346）。
           //     旧实现把非等比 matrix 直接套到字形上 → 纵向被 |sy| 压扁，且 y 轴翻转时上下倒置。
           // 有旋转（world 含旋转/切变，或 lfEscapement≠0）时退回 matrix 路径，保持既有行为。
           const curFont = this.gdiObjectManager && this.gdiObjectManager.currentFont;
@@ -1527,9 +1525,8 @@ class EmfDrawer {
           // 完整变换矩阵（world × viewport × device），叠加 lfEscapement 旋转（绕逻辑参考点）。
           let matrix = this.coordinateTransformer.getSvgMatrix();
           if (escapement !== 0) {
-            // GDI lfEscapement：单位 0.1°，正值对应 SVG 顺时针（ref 输出 rotate(-escapement/10)）。
-            // ⚠️ 参考实现按**整数度**旋转：libemf2svg emf2svg_utils.c text_style_draw 的
-            //    `orientation * (int)escapement / 10` 是 C 整数除法（向零截断），
+            // GDI lfEscapement：单位 0.1°，正值对应 SVG 顺时针（rotate(-escapement/10)）。
+            // ⚠️ 按**整数度**旋转：`orientation * (int)escapement / 10` 为整数除法（向零截断），
             //    于是 escapement=695（69.5°）输出 rotate(69)、2028（202.8°）输出 202。
             //    test-164 有 75 个非整度字体（0.4°/69.5°/202.8°/291.1°…），
             //    不截断会让每条旋转文字都偏 0.1~0.9°，是该样本的主要残差来源。
@@ -1551,36 +1548,36 @@ class EmfDrawer {
               f: matrix.b * r.e + matrix.d * r.f + matrix.f,
             };
           }
-          // 统一走「设备坐标 + 等比例字号」，旋转用 SVG rotate() 表达（与参考实现同构：
-          // ref 对旋转文本输出 rotate(θ, x, y+dy) translate(0, dy)，枢轴同样落在基线上）。
+          // 统一走「设备坐标 + 等比例字号」，旋转用 SVG rotate() 表达：
+          // 对旋转文本输出 rotate(θ, x, y+dy) translate(0, dy)，枢轴同样落在基线上。
           // 等比例尺度取变换线性部分的 x 轴长度（world 为等比缩放时即为它）。
           const gscale = Math.hypot(matrix.a, matrix.b) || 1;
           const dev = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
           // 设备空间下文本 x 轴的方向角（SVG 顺时针为正）。
           // 直接取变换线性部分 x 轴的方向角即可，**不要**按行列式符号取反：
-          // 该角度天然等于参考实现的 rotate() 值（det>0 时 = −escapement/10，
+          // 该角度即为期望的 rotate() 值（det>0 时 = −escapement/10，
           // det<0 时 = +escapement/10，即 y 轴翻转会把旋转方向一并翻转）。
-          // 实证：test-013（det>0，esc=900）→ ref rotate(-90)；test-001（det<0，esc=2700）
-          // → ref rotate(270) ≡ −90；test-040（det>0，esc=300…3300）→ ref rotate(-30…-330)。
+          // 实证：test-013（det>0，esc=900）→ rotate(-90)；test-001（det<0，esc=2700）
+          // → rotate(270) ≡ −90；test-040（det>0，esc=300…3300）→ rotate(-30…-330)。
           let rotDeg = 0;
           if (Math.abs(matrix.b) > 1e-9 || Math.abs(matrix.c) > 1e-9) {
             rotDeg = Math.atan2(matrix.b, matrix.a) * 180 / Math.PI;
           }
           this.ctx.font = `${italic}${weight}${rawHeight * gscale}px "${face}"`;
-          // 旋转分支的触发条件与参考实现一致：`font_escapement != 0`（而非角度非零）。
-          // ref 的 text_style_draw 只看 escapement，故 esc=4（0.4°）截断成 0° 时它仍
+          // 旋转分支的触发条件：`font_escapement != 0`（而非角度非零）。
+          // 只按 escapement 判定，故 esc=4（0.4°）截断成 0° 时仍
           // 输出 rotate(0, x, y+0.9fs) translate(0, 0.9fs)——锚点带 0.9fs 偏移；
-          // 若我们按「角度为 0」走非旋转路径，会用 SETTEXTALIGN 的折算值（可能为 0），
+          // 若按「角度为 0」走非旋转路径，会用 SETTEXTALIGN 的折算值（可能为 0），
           // 与该文本差 0.9 字号（test-164 的 0.4° 字体即属此类）。
-          // lfEscapement 单位为 0.1°：3600(=360°) 与 0 等价（整圈）。参考实现把整圈
-          // 旋转归一化掉——esc=3600 的字体 ref 完全不输出 rotate，esc=900 才输出
+          // lfEscapement 单位为 0.1°：3600(=360°) 与 0 等价（整圈）。整圈
+          // 旋转会被归一化掉——esc=3600 的字体完全不输出 rotate，esc=900 才输出
           // rotate(-90)。只判非零会把 360° 当旋转，多带一次 translate(0, 0.9fs)
           // 偏移（test-080/056/060/069/082/105/108 文字整体下移 0.9 字号）。
-          const escNorm = escapement % 3600; // 与 ref 逐字一致：lfEscapement % 3600
+          const escNorm = escapement % 3600; // lfEscapement % 3600
           const rotated = escNorm !== 0 || rotDeg !== 0;
           this.ctx.fillText(text, dev.x, dev.y, rotated ? { rotate: rotDeg, escapement: escNorm } : undefined);
-          // offDx 字符间距数组（MS-EMF 2.2.45）存在但有意不使用：参考实现
-          // （libemf2svg/浏览器自然字距）忽略 Dx，整串一次性输出。实测逐字 Dx
+          // offDx 字符间距数组（MS-EMF 2.2.45）存在但有意不使用：按浏览器自然字距
+          // 忽略 Dx，整串一次性输出。实测逐字 Dx
           // 排布为负收益（test-131 0.102→0.006、test-184/120/080/075/000 等全面
           // 改善，无退化样本），故整体 fillText。
           this.ctx.font = savedFont;
@@ -1588,7 +1585,7 @@ class EmfDrawer {
           console.log('  Rendered text:', text.substring(0, 50));
         }
       } catch (error) {
-        console.log('  Error reading text:', /** @type {Error} */ (error).message);
+        console.log('  Error reading text:', /** @type {Error} */(error).message);
       }
     }
   }
@@ -1624,9 +1621,9 @@ class EmfDrawer {
 
       const palCount = biBitCount <= 8 ? (biClrUsed || (1 << biBitCount)) : 0;
       const palette = [];
-      let anyPaletteAlpha = false; // 颜色表 reserved 字节是否存在非 0（参考实现 alpha 规则）
+      let anyPaletteAlpha = false; // 颜色表 reserved 字节是否存在非 0（alpha 规则）
       if (opts.iUsage === 1 && this.currentPalette && this.currentPalette.entries && this.currentPalette.entries.length) {
-        // DIB_PAL_COLORS：颜色表每项为 2 字节逻辑调色板索引（对齐 POI HemfFill 对 iUsageSrc 的处理）
+        // DIB_PAL_COLORS：颜色表每项为 2 字节逻辑调色板索引
         for (let i = 0; i < palCount; i++) {
           const o = bmi + biSize + i * 2;
           if (o + 2 > data.length) break;
@@ -1638,7 +1635,7 @@ class EmfDrawer {
         for (let i = 0; i < palCount; i++) {
           const o = bmi + biSize + i * 4;
           if (o + 4 > data.length) break;
-          // reserved 字节作为 alpha 记录（参考实现 DIB_to_RGBA：a = U_BGRAGetA(color)）
+          // reserved 字节作为 alpha 记录
           const a = data[o + 3];
           if (a !== 0) anyPaletteAlpha = true;
           palette.push([data[o + 2], data[o + 1], data[o], a]); // BGR -> RGB
@@ -1662,7 +1659,7 @@ class EmfDrawer {
         out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = a;
       };
 
-      // 32bpp：记录原始 alpha 字节（参考实现 rgb2png 的 alpha 通道判定规则）
+      // 32bpp：记录原始 alpha 字节（alpha 通道判定规则）
       const rawAlpha = biBitCount === 32 ? new Uint8Array(width * height) : null;
       let anyAlpha32 = false;
 
@@ -1705,7 +1702,7 @@ class EmfDrawer {
               const o = rowOff + x * 4;
               if (o + 4 > end) continue;
               b = data[o]; g = data[o + 1]; r = data[o + 2];
-              // 记录原始 alpha 字节（参考实现 rgb2png：全 0 → 强制不透明；任一非 0 → 逐像素 alpha）
+              // 记录原始 alpha 字节（全 0 → 强制不透明；任一非 0 → 逐像素 alpha）
               if (rawAlpha) rawAlpha[y * width + x] = data[o + 3];
               if (data[o + 3] !== 0) anyAlpha32 = true;
               a = useAlpha ? data[o + 3] : 255;
@@ -1761,16 +1758,15 @@ class EmfDrawer {
       }
 
       // 32bpp alpha 回填：非 useAlpha 路径在循环内按不透明写入，这里若存在
-      // 非 0 的原始 alpha 字节则按参考实现回填逐像素 alpha。
+      // 非 0 的原始 alpha 字节则回填逐像素 alpha。
       if (rawAlpha && anyAlpha32 && !useAlpha && constantAlpha >= 255 && transparent === undefined) {
         for (let i = 0; i < rawAlpha.length; i++) {
           out[i * 4 + 3] = rawAlpha[i];
         }
       }
 
-      // 调色板类（1/4/8bpp）alpha 来自颜色表 reserved 字节（参考实现
-      // DIB_to_RGBA：a = U_BGRAGetA(ct[index])）。全 0 → alpha 通道视为空，
-      // 强制整体不透明（rgb2png alpha_channel_empty 规则）；有非 0 则保留逐像素值。
+      // 调色板类（1/4/8bpp）alpha 来自颜色表 reserved 字节。全 0 → alpha 通道视为空，
+      // 强制整体不透明（alpha_channel_empty 规则）；有非 0 则保留逐像素值。
       if (!useAlpha && constantAlpha >= 255 && transparent === undefined && biBitCount <= 8 && biCompression !== 1 && biCompression !== 2) {
         let allZero = true;
         for (let i = 0; i < out.length; i += 4) {
@@ -1783,13 +1779,13 @@ class EmfDrawer {
 
       return { width, height, data: out };
     } catch (e) {
-      console.log('DIB decode failed:', /** @type {Error} */ (e).message);
+      console.log('DIB decode failed:', /** @type {Error} */(e).message);
       return null;
     }
   }
 
   // 将解码后的 DIB 绘制到目标矩形（支持缩放）
-  // 参考实现（libemf2svg U_EMRSTRETCHDIBITS_draw）语义：
+  // 语义：
   //   position = map(Dest)，size = 映射的线性缩放作用于**带符号** (cxDest, cyDest)。
   // 不做「min/max 归一化矩形」：负 cyDest 经 y 翻转映射（sy<0，如 winExt.y<0）自然
   // 转为正高度、矩形从 map(yDest) 向下延伸；旧实现在此会少画恰好一个图高
@@ -1797,8 +1793,8 @@ class EmfDrawer {
   _drawDecodedDib(dib, destX, destY, destW, destH) {
     if (!dib || destW === 0 || destH === 0) return;
     const t1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-    // 尺寸向量：映射线性部分。mapSizeAsPoint（复刻 ref point_cal(cDest) 缺陷，
-    // 含 viewportOrg 放大）仅对带 __pointCalSize 标记的记录启用
+    // 尺寸向量：映射线性部分。mapSizeAsPoint（含 viewportOrg 放大的点映射行为）
+    // 仅对带 __pointCalSize 标记的记录启用
     // （有源 DIB 的 STRETCHDIBITS，见 processEmfStretchDibBits）。
     const size = dib.__pointCalSize
       ? this.coordinateTransformer.mapSizeAsPoint(destW, destH)
@@ -1809,7 +1805,7 @@ class EmfDrawer {
     let h = size.y;
     if (w <= 0 || h <= 0) {
       // SVG 负宽/高无效：镜像内容并取绝对值（GDI 负目标尺寸 = 镜像语义）。
-      // 参考实现直接把负值写进 SVG 导致 rsvg 不渲染，此处取近似（镜像）。
+      // 负值直接写进 SVG 会导致 rsvg 不渲染，此处取近似（镜像）。
       if (w < 0 || h < 0) {
         const flipped = this.ctx.createImageData(dib.width, dib.height);
         for (let sy = 0; sy < dib.height; sy++) {
@@ -1845,7 +1841,7 @@ class EmfDrawer {
       this.ctx.drawImage(tempCanvas, x, y, w, h);
     } else {
       // stretch：只有当 world 变换非等比例才需要把各向异性施加到 <image> 上
-      // （参考实现用外层 <g matrix> 承载，我们烘焙进框，故需 "none" 阻止 letterbox）。
+      // （外层 <g matrix> 承载各向异性，本实现烘焙进框，故需 "none" 阻止 letterbox）。
       this.ctx.putImageData(this._wrapImageData(dib), x, y, w, h,
         { stretch: this.coordinateTransformer.isWorldAnisotropic() });
     }
@@ -1911,14 +1907,13 @@ class EmfDrawer {
     const dib = (offBmi && cbBmi) ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
     if (dib) {
       // 源矩形裁剪：按 cxSrc/cySrc 与源偏移取子图（简化：整图贴到目标大小）。
-      // 尺寸用 point_cal(cDest)：参考实现 U_EMRSTRETCHBLT_draw 与
-      // U_EMRSTRETCHDIBITS_draw 的写法**完全一致**——
-      //   size     = point_cal(states, cDest.x, cDest.y)
-      //   position = point_cal(states, Dest.x,  Dest.y)
+      // 尺寸用点映射(cDest)：STRETCHBLT 与 STRETCHDIBITS 的写法**完全一致**——
+      //   size     = point(cDest.x, cDest.y)
+      //   position = point(Dest.x,  Dest.y)
       // 即把尺寸向量当**点**做完整仿射映射（含 viewportOrg / scaling），而不是
       // 只乘线性部分。副作用是尺寸会被「放大」：test-142 的 cDest=(33,-33)
-      // 经 point_cal 得到 1.9885 × 424.9885 的畸形高框——这是 ref 的真实行为，
-      // 必须复刻（配合 <image> 不带 preserveAspectRatio 的 letterbox 默认值，
+      // 经点映射得到 1.9885 × 424.9885 的畸形高框——这是需要复刻的行为
+      // （配合 <image> 不带 preserveAspectRatio 的 letterbox 默认值，
       // 4x2 源图在 425 高的框里只占 ~1px，最终仍与 ref 逐像素吻合）。
       // 早期不启用是因为当时 <image> 带 preserveAspectRatio="none"，会把畸形框
       // 拉成整根黑柱（test-142 RMSE 0.076→0.263）；去掉该属性后即为净收益。
@@ -1972,7 +1967,7 @@ class EmfDrawer {
         }
         use = { width: sw, height: sh, data: sub.data };
       }
-      // 参考实现对 STRETCHDIBITS 的尺寸用 point_cal(cDest)（含 viewportOrg 放大缺陷）
+      // STRETCHDIBITS 的尺寸用点映射(cDest)（含 viewportOrg 放大行为）
       use.__pointCalSize = true;
       this._drawDecodedDib(use, xDest, yDest, cxDest, cyDest);
     }
@@ -2162,7 +2157,7 @@ class EmfDrawer {
     console.log('EMF IntersectClipRect:', left, top, right, bottom);
   }
 
-  // ===== Region 支持（对齐 POI HemfFill.readRgnData / getRgnShape） =====
+  // ===== Region 支持 =====
   // 解析 RegionData（MS-EMF 2.2.44）：iType(4)+nRgnSize(4)+nCount(4)+nRgnBytes(4)
   // +rclBounds(16)+aRects[nCount](16 字节 RectL/个)。返回逻辑坐标矩形数组。
   _readRgnData(data, off) {
@@ -2287,7 +2282,7 @@ class EmfDrawer {
     const xDenom = this.readLongFromData(data, 4);
     const yNum = this.readLongFromData(data, 8);
     const yDenom = this.readLongFromData(data, 12);
-    // MS-EMF 2.3.4.7：viewport 范围按 num/denom 比例缩放（累乘语义，对齐 POI HemfWindowing.EmfScaleViewportExtEx）
+    // MS-EMF 2.3.4.7：viewport 范围按 num/denom 比例缩放（累乘语义）
     if (xDenom !== 0) this.coordinateTransformer.viewportExtX *= xNum / xDenom;
     if (yDenom !== 0) this.coordinateTransformer.viewportExtY *= yNum / yDenom;
     console.log('EMF ScaleViewportExtEx:', xNum, xDenom, yNum, yDenom);
@@ -2299,7 +2294,7 @@ class EmfDrawer {
     const xDenom = this.readLongFromData(data, 4);
     const yNum = this.readLongFromData(data, 8);
     const yDenom = this.readLongFromData(data, 12);
-    // MS-EMF 2.3.4.8：window 范围按 num/denom 比例缩放（累乘语义，对齐 POI HemfWindowing.EmfScaleWindowExtEx）
+    // MS-EMF 2.3.4.8：window 范围按 num/denom 比例缩放（累乘语义）
     if (xDenom !== 0) this.coordinateTransformer.windowExtX *= xNum / xDenom;
     if (yDenom !== 0) this.coordinateTransformer.windowExtY *= yNum / yDenom;
     console.log('EMF ScaleWindowExtEx:', xNum, xDenom, yNum, yDenom);
@@ -2333,16 +2328,20 @@ class EmfDrawer {
       // 在 RestoreDC 后丢掉了刚创建的画笔，随后的 SELECTOBJECT 1 找不到对象而
       // 沿用上一次样式（画笔颜色丢失 → 黑色轮廓被画成白色）。
       //
-      // ⚠️ 快照范围必须与参考实现逐字段对齐：libemf2svg 的 SAVEDC/RESTOREDC 只
-      // 复制 `EMF_DEVICE_CONTEXT`（inc/emf2svg_private.h），其中**不含**
-      //   MapMode / windowOrg(X,Y) / windowEx(X,Y) / viewPortOrg(X,Y) /
-      //   viewPortEx(X,Y) / pxPerMm / cur_x / cur_y
-      // —— 这些是 `drawingStates` 的顶层字段，SETMAPMODE / SETWINDOWORGEX /
-      // SETVIEWPORTEXTEX 直接写顶层，RestoreDC 不恢复。旧实现把它们一并快照/恢复，
-      // 导致「SAVEDC 时是 ISO、块内改成 TEXT、RESTOREDC 后又弹回 ISO」这类
-      // 状态倒回：test-171 的 49 条 LINETO 因此按 ISO 的 0.29179 缩放绘制
-      // （ref 保持 TEXT 的 1:1），整批折线位置与线宽全错，RMSE 0.2059。
-      // 仍然保留：worldTransform（在 DC 结构内，ref 会恢复）、裁剪区、配色/线型。
+      // ⚠️ 映射模式 / window 范围 / window 原点属于 DC 状态，SaveDC 必须快照、
+      // RestoreDC 必须恢复（Win32 SaveDC 文档：DC 状态含 mapping mode、window 与
+      // viewport 的 org/ext、world transform、clip region…）。若把这些放在顶层
+      // 状态里、不随 RestoreDC 回滚，则会出现缺陷：
+      // test-171 的 40 个 SAVEDC 块各自 SETMAPMODE(MM_TEXT)+SETWORLDTRANSFORM 后
+      // 画椭圆，RESTOREDC 出来再 LINETO——此时映射模式应回到块外的
+      // MM_ANISOTROPIC（winExt=2231x-2255）。不恢复的话 LINETO 按 MM_TEXT 的 1:1
+      // 画到 (928,1802)，整批折线全部落在画布外（RMSE 0.951，全语料最差）；
+      // 恢复后残差降到 0.29 量级（余量仅来自线宽策略）。
+      mapMode: ct.mapMode,
+      windowExtX: ct.windowExtX, windowExtY: ct.windowExtY,
+      windowOrgX: ct.windowOrgX, windowOrgY: ct.windowOrgY,
+      viewportExtX: ct.viewportExtX, viewportExtY: ct.viewportExtY,
+      viewportOrgX: ct.viewportOrgX, viewportOrgY: ct.viewportOrgY,
       worldM11: ct.worldM11, worldM12: ct.worldM12,
       worldM21: ct.worldM21, worldM22: ct.worldM22,
       worldDx: ct.worldDx, worldDy: ct.worldDy,
@@ -2360,9 +2359,15 @@ class EmfDrawer {
     if (state.currentPalette !== undefined) this.currentPalette = state.currentPalette;
     // 恢复裁剪区（GDI：clip 属于 DC 状态，见 _captureDcState 注释）
     if (this.ctx._state) this.ctx._state.clip = state.clip || null;
-    // 只恢复 worldTransform（ref 的 EMF_DEVICE_CONTEXT 内含它）。
-    // MapMode / window-viewport orgs+exts / cur_x,cur_y **不恢复**（ref 不恢复）。
+    // 恢复映射状态（MapMode / window·viewport 的 org+ext）与 worldTransform。
     const ct = this.coordinateTransformer;
+    if (state.mapMode !== undefined) ct.mapMode = state.mapMode;
+    if (state.windowExtX !== undefined) {
+      ct.windowExtX = state.windowExtX; ct.windowExtY = state.windowExtY;
+      ct.windowOrgX = state.windowOrgX; ct.windowOrgY = state.windowOrgY;
+      ct.viewportExtX = state.viewportExtX; ct.viewportExtY = state.viewportExtY;
+      ct.viewportOrgX = state.viewportOrgX; ct.viewportOrgY = state.viewportOrgY;
+    }
     ct.worldM11 = state.worldM11; ct.worldM12 = state.worldM12;
     ct.worldM21 = state.worldM21; ct.worldM22 = state.worldM22;
     ct.worldDx = state.worldDx; ct.worldDy = state.worldDy;
@@ -2503,7 +2508,7 @@ class EmfDrawer {
     this._drawArcLikeRecord(data, 'Pie');
   }
 
-  // ===== 调色板链路（对齐 POI HemfPalette / HwmfPalette） =====
+  // ===== 调色板链路 =====
   // PaletteEntry 4 字节：flags(1)+blue(1)+green(1)+red(1)
 
   processEmfSelectPalette(data) {
@@ -2556,7 +2561,7 @@ class EmfDrawer {
   }
 
   processEmfRealizePalette(data) {
-    // 设备相关映射，SVG 输出无需实现（POI 亦 Unimplemented）
+    // 设备相关映射，SVG 输出无需实现
   }
 
   processEmfExtFloodFill(data) {
@@ -2571,8 +2576,8 @@ class EmfDrawer {
 
   processEmfArcTo(data) {
     // EMR_ARCTO (0x25+12, MS-EMF 2.3.2.2)：布局与 EMR_ARC 相同（bounds+start+end），
-    // 但从当前位置连线到弧起点画弧，并把当前位置重置为弧终点（对齐 POI HemfDraw.EmfArcTo 的
-    // path.append(arc, connect=true) 语义）。
+    // 但从当前位置连线到弧起点画弧，并把当前位置重置为弧终点
+    // （path.append(arc, connect=true) 语义）。
     if (data.length < 32) return;
     const left = this.readLongFromData(data, 0);
     const top = this.readLongFromData(data, 4);
@@ -2624,7 +2629,7 @@ class EmfDrawer {
   processEmfPolyDraw(data) {
     // EMR_POLYDRAW: Bounds(16) + Count(4) + Points[](8字节/点) + Types[](1字节/点)
     // 点类型（MS-EMF 2.2.2.21）：PT_CLOSEFIGURE=1、PT_LINETO=2、PT_BEZIERTO=4（3 个一组）、PT_MOVETO=6；
-    // 低 2 位按 &0x06 区分（对齐 POI HemfDraw.EmfPolyDraw）。
+    // 低 2 位按 &0x06 区分。
     if (data.length < 20) return;
     const count = this.readDwordFromData(data, 16);
     if (data.length < 20 + count * 8 + count) return;

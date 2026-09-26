@@ -199,7 +199,7 @@ var require_coordinateTransformer = __commonJS({
       }
       /**
        * 设置「MM_TEXT/公制模式下忽略 windowOrg/viewportOrg」。
-       * 仅供 EMF 绘制路径启用（对齐 libemf2svg point_cal），见 ignoreWindowOrgs 说明。
+       * 仅供 EMF 绘制路径启用，见 ignoreWindowOrgs 说明。
        * @param {boolean} on
        */
       setIgnoreWindowOrgs(on) {
@@ -211,17 +211,17 @@ var require_coordinateTransformer = __commonJS({
         this.deviceOrgY = y || 0;
       }
       /**
-       * 世界矩阵分量量化到 4 位小数——复刻参考实现 libemf2svg 的输出精度缺陷。
+       * 世界矩阵分量量化到 4 位小数——复刻「4 位小数输出世界矩阵」的精度行为。
        *
-       * 参考实现把世界矩阵直接写进 SVG：`matrix(%.4f %.4f %.4f %.4f %.4f %.4f)`。
+       * 该行为把世界矩阵直接写进 SVG：`matrix(%.4f %.4f %.4f %.4f %.4f %.4f)`。
        * 四位小数对 ~1 量级的值无损，但对「极小比例」的 world 变换是灾难性的：
        * test-179 的 SETWORLDTRANSFORM 比例是 0.004962134641，%.4f 写成 **0.0050**，
-       * 于是 ref 的全图被放大 0.763%（x）/ 0.973%（y）——实测按该比例重采样后
+       * 于是全图被放大 0.763%（x）/ 0.973%（y）——实测按该比例重采样后
        * RMSE 0.2507→0.0243，即差异几乎全部来自这一处四舍五入。
-       * 既然对照基准是 ref 的渲染结果，就必须用 ref 实际使用的（已四舍五入的）矩阵。
+       * 为与 4 位小数输出保持一致，这里同样使用已四舍五入的矩阵。
        *
        * 唯一偏离：非 0 值若被舍入成 0（world 比例 < 5e-5 的极端文件）会保留原值，
-       * 否则该轴内容整体塌缩，ref 亦输出空白，保留原值不影响对齐且更稳健。
+       * 否则该轴内容整体塌缩，输出亦为空白，保留原值更稳健。
        * @param {number} v
        * @returns {number}
        */
@@ -230,7 +230,7 @@ var require_coordinateTransformer = __commonJS({
         if (q === 0 && v !== 0) return v;
         return q;
       }
-      /** 把当前世界矩阵的 6 个分量按参考实现的 %.4f 输出精度量化 */
+      /** 把当前世界矩阵的 6 个分量按 %.4f 输出精度量化 */
       _quantizeWorld() {
         this.worldM11 = this._q4(this.worldM11);
         this.worldM12 = this._q4(this.worldM12);
@@ -334,7 +334,7 @@ var require_coordinateTransformer = __commonJS({
        * 与 transform() 的线性部分完全一致：先 world 变换线性部分（行向量约定），
        * 再 window/viewport 缩放（apply=false 时跳过，同 transform 原语义）。
        * 供位图 BLT 类记录把带符号的 (cxDest, cyDest) 映射为目标宽高使用
-       * （对齐 libemf2svg 对 size 做 point_cal 的行为）。
+       * （尺寸向量与点走同一套线性映射）。
        * @param {number} dx
        * @param {number} dy
        * @returns {Point}
@@ -352,15 +352,15 @@ var require_coordinateTransformer = __commonJS({
       }
       /**
        * 把尺寸向量按「点」映射
-       * U_EMRSTRETCHDIBITS_draw 用 point_cal(cDest) 计算 <image> 的 width/height，
+       * 位图记录用点映射(cDest)计算 <image> 的 width/height，
        * 而 world 变换经外层 SVG 矩阵组后置作用。因此：
-       *   size = world线性( point_cal_无world(cDest) )
-       * point_cal 的 mapMode 分支差异（libemf2svg emf2svg_utils.c）：
+       *   size = world线性( 点映射_无world(cDest) )
+       * 点映射的 mapMode 分支差异：
        *   - MM_TEXT / default：恒等（orgs 硬编码 0，不参与）；
        *   - 固定比例模式（LOMETRIC~TWIPS）：仅 pxPerMm 缩放，sy 取负，orgs 不参与；
        *   - MM_ISOTROPIC / MM_ANISOTROPIC：减 windowOrg、加 viewportOrg。
-       * viewportOrg ≠ 0 时该缺陷会放大目标矩形（test-118 表格右移一列即此因），
-       * 参考实现为 RMSE 对照的权威，故照抄。
+       * viewportOrg ≠ 0 时该行为会放大目标矩形（test-118 表格右移一列即此因），
+       * 为保证与既有渲染基线对齐，此处照此实现。
        * @param {number} dx
        * @param {number} dy
        * @returns {Point}
@@ -399,8 +399,8 @@ var require_coordinateTransformer = __commonJS({
       }
       /**
        * 当前 world 变换的线性缩放系数（用于笔宽换算）。
-       * 仅 world 变换参与：参考实现（libemf2svg）把 world 变换作为 SVG matrix
-       * 输出，笔宽在 matrix 内因此被等比缩放；而 window/viewport 比例由参考实现
+       * 仅 world 变换参与：world 变换作为 SVG matrix 输出时，
+       * 笔宽在 matrix 内被等比缩放；而 window/viewport 比例
        * 预变换到坐标里、不作用于笔宽（test-182 需 ×0.0625，test-027 需 ×1）。
        * 非等比时取行列式的几何平均。
        * @returns {number}
@@ -412,15 +412,15 @@ var require_coordinateTransformer = __commonJS({
       /**
        * world 变换是否「非等比」（两轴缩放不同）。
        *
-       * 参考实现把 world 矩阵放在外层 `<g transform="matrix(...)">` 里，而
-       * `point_cal(cDest)` 只含统一的 `states->scaling`——因此 ref 的 `<image>`
-       * 框**不含** world 的各向异性，各向异性由外层组施加。我们是烘焙式实现，
+       * 当 world 矩阵放在外层 `<g transform="matrix(...)">` 里时，
+       * 点映射只含统一的 `scaling` 因子——因此 `<image>`
+       * 框**不含** world 的各向异性，各向异性由外层组施加。本实现是烘焙式，
        * world 的各向异性会进到框里；此时必须用 `preserveAspectRatio="none"` 把
        * 它施加回去，否则 SVG 默认的 `xMidYMid meet` 会把各向异性 letterbox 掉。
        *
-       * test-155：world = [0.587692,0,0,0.584140,307,118]（= ref 的组矩阵），
-       * 各向异性 0.6%，butter 后 RMSE 0.0303→0.0489。
-       * test-142：无 world（恒等组）→ 默认 meet 与 ref 一致（0.0755→0.0206）。
+       * test-155：world = [0.587692,0,0,0.584140,307,118]，
+       * 各向异性 0.6%，烘焙后 RMSE 0.0303→0.0489。
+       * test-142：无 world（恒等组）→ 默认 meet 与基准一致（0.0755→0.0206）。
        *
        * @returns {boolean}
        */
@@ -432,12 +432,12 @@ var require_coordinateTransformer = __commonJS({
       }
       /**
        * 逻辑坐标 -> 设备坐标。
-       * 参考实现（libemf2svg）的复合顺序：SVG 根 translate(-deviceOrg) 包裹
-       * world 矩阵组，组内坐标为 point_cal 结果。即：
+       * 复合顺序：SVG 根 translate(-deviceOrg) 包裹
+       * world 矩阵组，组内坐标为点映射结果。即：
        *   device = world_M( (p - windowOrg) * s + viewportOrg ) - deviceOrg
        * world 变换**后置**作用于映射结果（而非 GDI 语义的先 world 后映射）。
        * 当 world 含缩放且 viewportOrg ≠ 0 时两种顺序结果不同（test-118 圈注
-       * 椭圆偏移一列、test-171/125 残差的根因），以参考实现为准。
+       * 椭圆偏移一列、test-171/125 残差的根因），此处采用后置顺序。
        * apply=false（windowExt 退化）时跳过缩放与 viewportOrg，仅减 windowOrg。
        * @param {number} x
        * @param {number} y
@@ -472,9 +472,8 @@ var require_coordinateTransformer = __commonJS({
        * 原语义为“完全不应用缩放，也不加 viewportOrg”，故 apply=false。
        * MM_TEXT 的语义按渲染目标分流（ignoreWindowOrgs 正是 EMF 路径的开关）：
        *   - EMF（ignoreWindowOrgs=true）：恒 1:1，window/viewport 范围不参与映射。
-       *     MS-EMF/GDI 如此；LibreOffice mtftools.cxx ImplMap() 也是
-       *     `if (meMapMode != MappingMode::MM_TEXT)` 才做
-       *     `fX2 /= mnWinExtX; fX2 *= mnDevWidth;`；libemf2svg 同样不使用这两个范围。
+       *     即只有 `mapMode != MM_TEXT` 时才做
+       *     `fX2 /= mnWinExtX; fX2 *= mnDevWidth;`，MM_TEXT 下不使用这两个范围。
        *     旧实现（对 EMF 也按比值缩放）会让「只设 SETWINDOWEXTEX、不设
        *     SETVIEWPORTEXTEX」的样本（test-068，winExt=4859x3456 vs 画布 4765x3434）
        *     内容被整体缩到 98%，越靠右偏移越大。
@@ -552,7 +551,7 @@ var require_coordinateTransformer = __commonJS({
        * 列向量约定输出（x' = a*x + c*y + e, y' = b*x + d*y + f）。
        * 合成顺序：先世界变换（world，行向量 [x y 1]·M），再 window→viewport 缩放/平移，
        * 最后减 deviceOrg（把 header rclBounds 原点平移到画布原点）。
-       * 供文字渲染等需要“原始逻辑坐标 + 原始字号 + transform 矩阵”对齐参考实现的场景使用。
+       * 供文字渲染等需要“原始逻辑坐标 + 原始字号 + transform 矩阵”的场景使用。
        * @returns {{a:number,b:number,c:number,d:number,e:number,f:number}}
        */
       getSvgMatrix() {
@@ -2298,12 +2297,12 @@ var require_emfDrawer = __commonJS({
       // EMR_FRAMERGN
       74: "processEmfPaintRgn",
       // EMR_PAINTRGN
-      // 0x49 EMR_INVERTRGN：像素取反需要读取背景，Canvas/SVG 无光栅反演，POI 亦未实现（暂跳过）
+      // 0x49 EMR_INVERTRGN：像素取反需要读取背景，Canvas/SVG 无光栅反演（暂跳过）
       // ========== 已识别但无需处理 ==========
       70: "processEmfGdiComment",
       // EMR_GDICOMMENT（含 EMF+ 内嵌数据时派发）
       73: null,
-      // EMR_INVERTRGN（POI 亦未实现）
+      // EMR_INVERTRGN（无光栅反演，未实现）
       78: null,
       // EMR_MASKBLT
       79: null,
@@ -2515,7 +2514,7 @@ var require_emfDrawer = __commonJS({
         }
       }
       // 填充形状收尾：fill 后描边。默认黑色 1px pen 或 NULL_PEN 时改为「按填充色 1px 描边」
-      // （对齐参考实现 libemf2svg：它把每个填充形状输出为 fill+stroke 同色 1px 的 path，
+      // （每个填充形状输出为 fill+stroke 同色 1px 的 path，
       //  即使当前 pen 是 PS_NULL；彩色 fill 边缘因此无黑框）；
       // 显式彩色/宽笔保持原样描边。
       _afterFillShape() {
@@ -2968,6 +2967,7 @@ var require_emfDrawer = __commonJS({
         const ETO_SMALL_CHARS = 512;
         const charWidth = options & ETO_SMALL_CHARS ? 2 : 1;
         let stringOffset = options & ETO_NO_RECT ? 28 : 44;
+        if (!(options & ETO_NO_RECT)) this._fillOpaqueTextRect(options, data, 28);
         if (cChars === 0 || stringOffset + cChars * charWidth > data.length) return;
         let text = "";
         for (let i = 0; i < cChars; i++) {
@@ -2975,18 +2975,6 @@ var require_emfDrawer = __commonJS({
             text += String.fromCharCode(data[stringOffset + i * 2] | data[stringOffset + i * 2 + 1] << 8);
           } else {
             text += String.fromCharCode(data[stringOffset + i]);
-          }
-        }
-        if (options & 2 && !(options & ETO_NO_RECT) && data.length >= 44) {
-          const bg1 = this.coordinateTransformer.transform(this.readLongFromData(data, 28), this.readLongFromData(data, 32), this.ctx.canvas.width, this.ctx.canvas.height);
-          const bg2 = this.coordinateTransformer.transform(this.readLongFromData(data, 36), this.readLongFromData(data, 40), this.ctx.canvas.width, this.ctx.canvas.height);
-          const bgW = Math.abs(bg2.x - bg1.x);
-          const bgH = Math.abs(bg2.y - bg1.y);
-          if (bgW > 0 && bgH > 0) {
-            const savedFillStyle2 = this.ctx.fillStyle;
-            this.ctx.fillStyle = this.fillColor;
-            this.ctx.fillRect(Math.min(bg1.x, bg2.x), Math.min(bg1.y, bg2.y), bgW, bgH);
-            this.ctx.fillStyle = savedFillStyle2;
           }
         }
         const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
@@ -3355,8 +3343,35 @@ var require_emfDrawer = __commonJS({
       processEmfExtTextOutW(data) {
         this.processEmfTextOut(data, true);
       }
+      // ETO_OPAQUE (0x0002)：以当前背景色（SETBKCOLOR → this.fillColor）填充 EmrText.rcl。
+      // 该动作**与文本内容无关**，nChars=0 时同样是合法且常用的「填充矩形」调用。
+      // data 布局见 processEmfTextOut；SMALLTEXTOUT 的 rcl 从 28 起（此处由调用方剔除该分支）。
+      _fillOpaqueTextRect(options, data, rclOff = 48) {
+        if ((options & 2) === 0) return;
+        if (rclOff + 16 > data.length) return;
+        const bg1 = this.coordinateTransformer.transform(
+          this.readLongFromData(data, rclOff),
+          this.readLongFromData(data, rclOff + 4),
+          this.ctx.canvas.width,
+          this.ctx.canvas.height
+        );
+        const bg2 = this.coordinateTransformer.transform(
+          this.readLongFromData(data, rclOff + 8),
+          this.readLongFromData(data, rclOff + 12),
+          this.ctx.canvas.width,
+          this.ctx.canvas.height
+        );
+        const bgW = Math.abs(bg2.x - bg1.x);
+        const bgH = Math.abs(bg2.y - bg1.y);
+        if (bgW > 0 && bgH > 0) {
+          const savedFillStyle = this.ctx.fillStyle;
+          this.ctx.fillStyle = this.fillColor;
+          this.ctx.fillRect(Math.min(bg1.x, bg2.x), Math.min(bg1.y, bg2.y), bgW, bgH);
+          this.ctx.fillStyle = savedFillStyle;
+        }
+      }
       processEmfTextOut(data, isUnicode) {
-        if (data.length < 76) return;
+        if (data.length < 64) return;
         const x = this.readLongFromData(data, 28);
         const y = this.readLongFromData(data, 32);
         const stringLength = this.readDwordFromData(data, 36);
@@ -3364,6 +3379,7 @@ var require_emfDrawer = __commonJS({
         const options = this.readDwordFromData(data, 44);
         const stringOffset = offString - 8;
         __wmfEmfRendererLog(`EMF ExtTextOut${isUnicode ? "W" : "A"}:`, x, y, "length:", stringLength, "offString:", offString, "options:", options);
+        this._fillOpaqueTextRect(options, data);
         if (stringLength > 0 && stringOffset >= 0 && stringOffset < data.length) {
           let text = "";
           try {
@@ -3382,22 +3398,6 @@ var require_emfDrawer = __commonJS({
             }
             if (text.length > 0) {
               const savedFillStyle = this.ctx.fillStyle;
-              if ((options & 2) !== 0 && data.length >= 64) {
-                const rclLeft = this.readLongFromData(data, 48);
-                const rclTop = this.readLongFromData(data, 52);
-                const rclRight = this.readLongFromData(data, 56);
-                const rclBottom = this.readLongFromData(data, 60);
-                const bg1 = this.coordinateTransformer.transform(rclLeft, rclTop, this.ctx.canvas.width, this.ctx.canvas.height);
-                const bg2 = this.coordinateTransformer.transform(rclRight, rclBottom, this.ctx.canvas.width, this.ctx.canvas.height);
-                const bgX = Math.min(bg1.x, bg2.x);
-                const bgY = Math.min(bg1.y, bg2.y);
-                const bgW = Math.abs(bg2.x - bg1.x);
-                const bgH = Math.abs(bg2.y - bg1.y);
-                if (bgW > 0 && bgH > 0) {
-                  this.ctx.fillStyle = this.fillColor;
-                  this.ctx.fillRect(bgX, bgY, bgW, bgH);
-                }
-              }
               this.ctx.fillStyle = this.textColor;
               const curFont = this.gdiObjectManager && this.gdiObjectManager.currentFont;
               const rawHeight = curFont && curFont.height ? Math.abs(curFont.height) : 12;
@@ -3647,7 +3647,7 @@ var require_emfDrawer = __commonJS({
         }
       }
       // 将解码后的 DIB 绘制到目标矩形（支持缩放）
-      // 参考实现（libemf2svg U_EMRSTRETCHDIBITS_draw）语义：
+      // 语义：
       //   position = map(Dest)，size = 映射的线性缩放作用于**带符号** (cxDest, cyDest)。
       // 不做「min/max 归一化矩形」：负 cyDest 经 y 翻转映射（sy<0，如 winExt.y<0）自然
       // 转为正高度、矩形从 map(yDest) 向下延伸；旧实现在此会少画恰好一个图高
@@ -3957,7 +3957,7 @@ var require_emfDrawer = __commonJS({
         this.ctx.clip();
         __wmfEmfRendererLog("EMF IntersectClipRect:", left, top, right, bottom);
       }
-      // ===== Region 支持（对齐 POI HemfFill.readRgnData / getRgnShape） =====
+      // ===== Region 支持 =====
       // 解析 RegionData（MS-EMF 2.2.44）：iType(4)+nRgnSize(4)+nCount(4)+nRgnBytes(4)
       // +rclBounds(16)+aRects[nCount](16 字节 RectL/个)。返回逻辑坐标矩形数组。
       _readRgnData(data, off) {
@@ -4109,16 +4109,24 @@ var require_emfDrawer = __commonJS({
           // 在 RestoreDC 后丢掉了刚创建的画笔，随后的 SELECTOBJECT 1 找不到对象而
           // 沿用上一次样式（画笔颜色丢失 → 黑色轮廓被画成白色）。
           //
-          // ⚠️ 快照范围必须与参考实现逐字段对齐：libemf2svg 的 SAVEDC/RESTOREDC 只
-          // 复制 `EMF_DEVICE_CONTEXT`（inc/emf2svg_private.h），其中**不含**
-          //   MapMode / windowOrg(X,Y) / windowEx(X,Y) / viewPortOrg(X,Y) /
-          //   viewPortEx(X,Y) / pxPerMm / cur_x / cur_y
-          // —— 这些是 `drawingStates` 的顶层字段，SETMAPMODE / SETWINDOWORGEX /
-          // SETVIEWPORTEXTEX 直接写顶层，RestoreDC 不恢复。旧实现把它们一并快照/恢复，
-          // 导致「SAVEDC 时是 ISO、块内改成 TEXT、RESTOREDC 后又弹回 ISO」这类
-          // 状态倒回：test-171 的 49 条 LINETO 因此按 ISO 的 0.29179 缩放绘制
-          // （ref 保持 TEXT 的 1:1），整批折线位置与线宽全错，RMSE 0.2059。
-          // 仍然保留：worldTransform（在 DC 结构内，ref 会恢复）、裁剪区、配色/线型。
+          // ⚠️ 映射模式 / window 范围 / window 原点属于 DC 状态，SaveDC 必须快照、
+          // RestoreDC 必须恢复（Win32 SaveDC 文档：DC 状态含 mapping mode、window 与
+          // viewport 的 org/ext、world transform、clip region…）。若把这些放在顶层
+          // 状态里、不随 RestoreDC 回滚，则会出现缺陷：
+          // test-171 的 40 个 SAVEDC 块各自 SETMAPMODE(MM_TEXT)+SETWORLDTRANSFORM 后
+          // 画椭圆，RESTOREDC 出来再 LINETO——此时映射模式应回到块外的
+          // MM_ANISOTROPIC（winExt=2231x-2255）。不恢复的话 LINETO 按 MM_TEXT 的 1:1
+          // 画到 (928,1802)，整批折线全部落在画布外（RMSE 0.951，全语料最差）；
+          // 恢复后残差降到 0.29 量级（余量仅来自线宽策略）。
+          mapMode: ct.mapMode,
+          windowExtX: ct.windowExtX,
+          windowExtY: ct.windowExtY,
+          windowOrgX: ct.windowOrgX,
+          windowOrgY: ct.windowOrgY,
+          viewportExtX: ct.viewportExtX,
+          viewportExtY: ct.viewportExtY,
+          viewportOrgX: ct.viewportOrgX,
+          viewportOrgY: ct.viewportOrgY,
           worldM11: ct.worldM11,
           worldM12: ct.worldM12,
           worldM21: ct.worldM21,
@@ -4138,6 +4146,17 @@ var require_emfDrawer = __commonJS({
         if (state.currentPalette !== void 0) this.currentPalette = state.currentPalette;
         if (this.ctx._state) this.ctx._state.clip = state.clip || null;
         const ct = this.coordinateTransformer;
+        if (state.mapMode !== void 0) ct.mapMode = state.mapMode;
+        if (state.windowExtX !== void 0) {
+          ct.windowExtX = state.windowExtX;
+          ct.windowExtY = state.windowExtY;
+          ct.windowOrgX = state.windowOrgX;
+          ct.windowOrgY = state.windowOrgY;
+          ct.viewportExtX = state.viewportExtX;
+          ct.viewportExtY = state.viewportExtY;
+          ct.viewportOrgX = state.viewportOrgX;
+          ct.viewportOrgY = state.viewportOrgY;
+        }
         ct.worldM11 = state.worldM11;
         ct.worldM12 = state.worldM12;
         ct.worldM21 = state.worldM21;
@@ -4258,7 +4277,7 @@ var require_emfDrawer = __commonJS({
       processEmfPie(data) {
         this._drawArcLikeRecord(data, "Pie");
       }
-      // ===== 调色板链路（对齐 POI HemfPalette / HwmfPalette） =====
+      // ===== 调色板链路 =====
       // PaletteEntry 4 字节：flags(1)+blue(1)+green(1)+red(1)
       processEmfSelectPalette(data) {
         if (data.length < 4) return;
@@ -4547,7 +4566,7 @@ var require_svgContext = __commonJS({
         return (extra || []).concat(a).join(" ");
       }
       // 描边专用的 stroke-linecap / stroke-linejoin（仅描边元素输出，fill-only 元素不带）。
-      // 对齐 libemf2svg stroke_draw：只有 pen style 的对应位为已知枚举时才输出属性。
+      // 只有 pen style 的对应位为已知枚举时才输出属性。
       _strokeCaps() {
         const a = [];
         if (this.lineCap) a.push('stroke-linecap="' + this.lineCap + '"');
@@ -4822,8 +4841,8 @@ var require_svgContext = __commonJS({
           dh: dh || imageData.height,
           // ⚠️ 裁剪必须在**此处**快照：getSvg() 是延迟执行的（putImageData 只占位），
           // 若那时再读 this._state.clip，取到的是**最后一条记录**的裁剪状态，于是
-          // 所有位图要么共用同一个 clip、要么完全没有 clip。参考实现是把记录当时的
-          // clip-path 直接写在 <image> 上（ref: clip-path="url(#clip-N)"）。
+          // 所有位图要么共用同一个 clip、要么完全没有 clip。正确做法是把记录当时的
+          // clip-path 直接写在 <image> 上（clip-path="url(#clip-N)"）。
           // test-142：138 条 STRETCHBLT 的位图 2x425 高，被裁剪区截到 72px；
           // 用错 clip（或无 clip）会让黑条整根画出来，RMSE 0.076→0.263。
           clip: this._state.clip || null,
@@ -5022,14 +5041,14 @@ var require_svgContext = __commonJS({
             imgMarkup.set(
               i,
               '<image x="' + this._fmt(img.dx) + '" y="' + this._fmt(img.dy) + '" width="' + this._fmt(img.dw) + '" height="' + this._fmt(img.dh) + '"' + (img.clip ? ' clip-path="' + img.clip + '"' : "") + // ⚠️ 默认**不写** preserveAspectRatio：SVG 默认值是 xMidYMid meet
-              // （等比缩放并居中，即 letterbox 到目标框内），而参考实现的
-              // <image> 没有该属性，故必须保持默认。写成 "none"（强行拉伸）
+              // （等比缩放并居中，即 letterbox 到目标框内），标准 <image> 也
+              // 没有该属性，故必须保持默认。写成 "none"（强行拉伸）
               // 会在源图宽高比与目标框差很大时严重失真：test-142 的 STRETCHBLT
-              // 源图 4x2 被 point_cal 映射成 1.99x425 的畸形框，"none" 会画出整根
-              // 425px 黑白柱，而 ref 的 meet 只占 ~1px 高（0.0755 vs 0.263）。
+              // 源图 4x2 被映射成 1.99x425 的畸形框，"none" 会画出整根
+              // 425px 黑白柱，而 meet 只占 ~1px 高（0.0755 vs 0.263）。
               // 例外：目标框的**各向异性来自 world 变换**时必须用 "none"——
-              // 参考实现把 world 放在外层 <g matrix>，point_cal(cDest) 得到的框
-              // 不含各向异性，各向异性由组施加；我们是烘焙式实现，若用默认 meet
+              // world 放在外层 <g matrix> 时，点映射(cDest) 得到的框
+              // 不含各向异性，各向异性由组施加；本实现是烘焙式，若用默认 meet
               // 会被 letterbox 掉。test-155 的 world=[0.5877,0,0,0.5841] 即属此类
               // （RMSE 0.0489 vs 0.0303）。该标记由绘制层 isWorldAnisotropic() 判定。
               (img.stretch ? ' preserveAspectRatio="none"' : "") + ' href="' + href + '" />'
@@ -5239,7 +5258,7 @@ var require_emfPlusDrawer = __commonJS({
       }
       // 根据 flags 与 BrushId 解析画刷颜色：
       // flags 的 0x8000 位（U_PPF_B）为 1 时 BrushId 直接是 ARGB 颜色，否则是对象表索引。
-      // 参考实现（libemf2svg U_PMR_FILLRECTS_get）对损坏文件的容错：
+      // 对损坏文件的容错：
       //   非 solid 模式下 BrushId > 63 时按 ARGB 颜色处理（对象表索引只有 0-63）。
       _emfPlusResolveBrush(flags, brushId, data, offset) {
         if (flags & 32768) {
@@ -5269,7 +5288,7 @@ var require_emfPlusDrawer = __commonJS({
       }
       // EmfPlusPath (MS-EMFPLUS 2.2.1.6) 解析：data 起点（已跳过 EmfPlusObject 的 GraphicsVersion）
       // 实际 layout: PathPointCount(4) + PathPointFlags(4) + PathPoints(Count × stride) + PathPointTypes(Count if non-RLE) + AlignmentPadding(0..3)
-      // 注意：graphicsVersion 是 EmfPlusPath 自身 Version 字段（spec 2.2.1.6）；POI 的 EmfPlusObject.init 先读 graphicsVersion 后再传给 EmfPlusPath.init
+      // 注意：graphicsVersion 是 EmfPlusPath 自身 Version 字段（spec 2.2.1.6）；解析 EmfPlusObject 时先读 graphicsVersion 再交给 EmfPlusPath。
       // PathPointFlags:
       //   0x0800 RELATIVE_POSITION — 坐标相对于前一点（PathPointR，否则 PathPoint/PathPointF）
       //   0x1000 RLE_COMPRESSED    — PathPointTypes 为 RLE 编码
@@ -5455,7 +5474,7 @@ var require_emfPlusDrawer = __commonJS({
         __wmfEmfRendererLog("Processing EmfPlusDrawLine");
       }
       // 处理EMF+填充多边形记录：data = BrushId(4) + Count(4) + PointF[Count](8 each)
-      // （对齐 libemf2svg U_PMR_FILLPOLYGON_get：BrushId 在 data 首字段）
+      // （BrushId 在 data 首字段）
       processEmfPlusFillPolygon(flags, data) {
         if (data.length < 8) return;
         const brushId = this._emfPlusReadInt32(data, 0);
@@ -5530,7 +5549,7 @@ var require_emfPlusDrawer = __commonJS({
         this._emfPlusTracePath(path);
         this.ctx.stroke();
       }
-      // 处理EMF+绘制图像记录（0x401A，MS-EMFPLUS 2.3.4.9；对齐 POI HemfPlusDraw.EmfPlusDrawImage）：
+      // 处理EMF+绘制图像记录（0x401A，MS-EMFPLUS 2.3.4.9）：
       // data = imageAttributesId(4) + srcUnit(4) + srcRect RectF(16，源裁剪，像素单位)
       //        + RectData（目标框：flags&0x4000(C) 压缩为 EmfPlusRect(4×int16)，否则 EmfPlusRectF(4×float)）。
       // srcRect 被缩放填充到 RectData；此前漏读 RectData 导致图被画到源坐标位置。
@@ -5685,7 +5704,7 @@ var require_emfPlusDrawer = __commonJS({
           return null;
         }
       }
-      // EmfPlusDrawString（0x401C，MS-EMFPLUS 2.3.4.14 / libemf2svg U_PMR_DRAWSTRING_get）：
+      // EmfPlusDrawString（0x401C，MS-EMFPLUS 2.3.4.14）：
       // FontId = flags 低字节；data = BrushId(4) + FormatId(4) + Length(4) + RectF(16) + UTF16LE[Length]
       // 字距/字符间距暂忽略（PNG→SVG 静态图对齐为主）。
       processEmfPlusDrawString(flags, data) {
@@ -5769,7 +5788,7 @@ var require_emfPlusDrawer = __commonJS({
         __wmfEmfRendererLog("EMF+ DrawEllipse");
       }
       // 处理EMF+填充椭圆记录：data = BrushId(4) + RectF(16)
-      // （对齐 libemf2svg U_PMR_FILLELLIPSE_get：BrushId 在 data 首字段）
+      // （BrushId 在 data 首字段）
       processEmfPlusFillEllipse(flags, data) {
         if (data.length < 20) return;
         const brushId = this._emfPlusReadInt32(data, 0);
@@ -5795,7 +5814,7 @@ var require_emfPlusDrawer = __commonJS({
         __wmfEmfRendererLog("Processing EmfPlusDrawArc");
       }
       // 处理EMF+填充饼图记录：data = BrushId(4) + StartAngle(float) + SweepAngle(float) + RectF(16)
-      // （对齐 libemf2svg U_PMR_FILLPIE_get；角度为度，顺时针自 3 点方向）
+      // （角度为度，顺时针自 3 点方向）
       processEmfPlusFillPie(flags, data) {
         if (data.length < 28) return;
         const brushId = this._emfPlusReadInt32(data, 0);
@@ -6063,7 +6082,7 @@ var require_emfPlusDrawer = __commonJS({
         this.ctx.fillRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
         __wmfEmfRendererLog("EMF+ Clear:", color);
       }
-      // EmfPlusFillRects（0x400A，MS-EMFPLUS 2.3.4.20 / libemf2svg U_PMR_FILLRECTS_get）：
+      // EmfPlusFillRects（0x400A，MS-EMFPLUS 2.3.4.20）：
       // data = BrushId(4) + Count(4) + Rect[Count]。BrushId 为 ARGB（flags&0x8000）或对象表索引；
       // flags&0x4000（U_PPF_C）为 1 时矩形是 4×int16（8 字节），否则 4×float32（16 字节）。
       processEmfPlusFillRectangles(flags, data) {
