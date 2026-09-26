@@ -359,11 +359,23 @@
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
+          <!--
+            Built-in samples live in examples/. The *.emf ones come from the public
+            EMF test corpus (test_files/emf-corpus) to demo EMF coverage;
+            see test_files/CORPUS-README.md.
+          -->
           <select id="sampleSelect" title="Load a built-in sample file">
             <option value="" selected>Sample…</option>
-            <option value="sample.wmf">Shape demo</option>
-            <option value="mathtype.wmf">MathType formula</option>
-            <option value="icon.wmf">Small icon</option>
+            <optgroup label="WMF">
+              <option value="sample.wmf">Shape demo</option>
+              <option value="mathtype.wmf">MathType formula</option>
+              <option value="icon.wmf">Small icon</option>
+            </optgroup>
+            <optgroup label="EMF">
+              <option value="emf-network.emf">Network graph</option>
+              <option value="emf-chart.emf">Statistical chart</option>
+              <option value="emf-starburst.emf">Starburst clipart</option>
+            </optgroup>
           </select>
           <button id="openBtn" title="Open another file">Open file</button>
         </div>
@@ -397,6 +409,15 @@
             MathType formula
           </button>
           <button type="button" data-sample="icon.wmf">Small icon</button>
+          <button type="button" data-sample="emf-network.emf">
+            Network graph (EMF)
+          </button>
+          <button type="button" data-sample="emf-chart.emf">
+            Statistical chart (EMF)
+          </button>
+          <button type="button" data-sample="emf-starburst.emf">
+            Starburst (EMF)
+          </button>
         </div>
       </div>
 
