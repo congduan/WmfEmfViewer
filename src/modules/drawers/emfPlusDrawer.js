@@ -4,8 +4,10 @@ const GdiObjectManager = require('../../utils/gdiObjectManager');
 const GeometryUtils = require('../../utils/geometryUtils');
 const { readFloat32, readDword, readShort } = require('../../utils/binaryReader');
 const { argbToCss, readArgb } = require('../../utils/colorUtils');
+const { applyCanvasSize, clearCanvas, applyDefaultPenBrush } = require('../../utils/surface');
 const { decodeUtf16Le, readUtf16Name } = require('../../utils/textCodec');
 const { DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require('../../utils/constants');
+const NestedMetafilePlayer = require('../../utils/nestedMetafilePlayer');
 
 // EMF+ 记录分派表：记录类型 -> 处理方法名（processEmfPlusRecordType 中调用 this[方法名](flags, data)）。
 // 值为 null 表示已识别但无需处理（与原 switch 的空分支等价）。
@@ -149,7 +151,7 @@ class EmfPlusDrawer {
 
   // 坐标映射（EMF+ 坐标通常与 EMF 设备坐标一致，经由 coordinateTransformer）
   _emfPlusMapPoint(x, y) {
-    const t = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+    const t = this.coordinateTransformer.transform(x, y);
     return t;
   }
 
@@ -275,35 +277,12 @@ class EmfPlusDrawer {
       canvasHeight = viewHeight;
     }
 
-    // HiDPI 支持：获取设备像素比
-    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-    this.devicePixelRatio = dpr;
-
-    // 设置 Canvas 实际尺寸（考虑设备像素比）
-    this.ctx.canvas.width = Math.round(canvasWidth * dpr);
-    this.ctx.canvas.height = Math.round(canvasHeight * dpr);
-
-    // 设置 CSS 显示尺寸（逻辑像素）
-    this.ctx.canvas.style.width = canvasWidth + 'px';
-    this.ctx.canvas.style.height = canvasHeight + 'px';
-
-    // 缩放上下文以匹配设备像素比
-    this.ctx.scale(dpr, dpr);
-
-    console.log('Canvas size set to:', canvasWidth, 'x', canvasHeight, '(DPR:', dpr, ', actual:', this.ctx.canvas.width, 'x', this.ctx.canvas.height + ')');
-
-    // 清空Canvas
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-    console.log('Canvas cleared');
-
-    // 设置默认绘制样式
-    this.ctx.strokeStyle = '#000000'; // 黑色描边
-    this.ctx.fillStyle = '#ffffff'; // 白色填充
-    this.ctx.lineWidth = 2;
+    // Canvas sizing, clearing and default styles (host detection lives in utils/surface)
+    this.devicePixelRatio = applyCanvasSize(this.ctx, canvasWidth, canvasHeight);
+    clearCanvas(this.ctx, canvasWidth, canvasHeight);
+    applyDefaultPenBrush(this.ctx, { lineWidth: 2 });
     this.fillColor = '#ffffff';
     this.strokeColor = '#000000';
-    console.log('Drawing styles set');
 
     // 重置路径状态
     this.currentPath = [];
@@ -524,7 +503,7 @@ class EmfPlusDrawer {
         return;
       }
       if (img.type !== 'imageEmf') return;
-      const nested = this._renderNestedEmf(img.data);
+      const nested = NestedMetafilePlayer.renderNestedToSvgNodes(img.data);
       if (!nested) return;
       const W = nested.width || 1;
       const H = nested.height || 1;
@@ -553,32 +532,7 @@ class EmfPlusDrawer {
     return Math.round(v * 100) / 100;
   }
 
-  // 用同一渲染管线把嵌套 EMF 渲染为独立节点列表（递归播放，支持 EMF+ 内嵌）
-  _renderNestedEmf(bytes) {
-    try {
-      const MetafileParserCtor = require('../../utils/metafileParser.js');
-      const EmfDrawerCtor = require('./emfDrawer.js');
-      const SvgContextCtor = require('../svgContext.js');
-      const parser = new MetafileParserCtor(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
-      const result = parser.parse();
-      if (!result || result.error || !result.records) return null;
-      const subCtx = new SvgContextCtor();
-      const drawer = new EmfDrawerCtor(subCtx);
-      drawer.draw(result, { viewWidth: 800, viewHeight: 600 });
-      // 嵌套 EMF 画布尺寸（bounds）作为源坐标空间
-      // header 可能是 WMF/EMF 任一头结构（联合类型），此处只关心 EMF 的 bounds
-      const header = /** @type {{bounds?: {left:number,top:number,right:number,bottom:number}}} */ (result.header);
-      let W = DEFAULT_VIEW_WIDTH, H = DEFAULT_VIEW_HEIGHT;
-      if (header && header.bounds) {
-        W = Math.abs(header.bounds.right - header.bounds.left);
-        H = Math.abs(header.bounds.bottom - header.bounds.top);
-      }
-      return { nodes: subCtx.nodes, defs: subCtx.defs, width: W || 1, height: H || 1 };
-    } catch (e) {
-      console.log('EMF+ nested EMF render failed:', /** @type {Error} */ (e).message);
-      return null;
-    }
-  }
+  // 嵌套 EMF 的独立渲染已下沉到 utils/nestedMetafilePlayer.renderNestedToSvgNodes
 
   // EmfPlusDrawString（0x401C，MS-EMFPLUS 2.3.4.14）：
   // FontId = flags 低字节；data = BrushId(4) + FormatId(4) + Length(4) + RectF(16) + UTF16LE[Length]

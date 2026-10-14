@@ -13,6 +13,7 @@
 // utils/binaryReader 与 utils/geometryUtils，而不是堆在基类的桩方法里。
 const CoordinateTransformer = require('../../utils/coordinateTransformer');
 const GdiObjectManager = require('../../utils/gdiObjectManager');
+const { applyCanvasSize, clearCanvas, applyDefaultPenBrush } = require('../../utils/surface');
 const { DEFAULT_DPI, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require('../../utils/constants');
 
 class BaseDrawer {
@@ -99,35 +100,12 @@ class BaseDrawer {
             this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
         }
 
-        // HiDPI 支持：获取设备像素比
-        const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-        this.devicePixelRatio = dpr;
-
-        // 设置 Canvas 实际尺寸（考虑设备像素比）
-        this.ctx.canvas.width = Math.round(canvasWidth * dpr);
-        this.ctx.canvas.height = Math.round(canvasHeight * dpr);
-
-        // 设置 CSS 显示尺寸（逻辑像素）
-        this.ctx.canvas.style.width = canvasWidth + 'px';
-        this.ctx.canvas.style.height = canvasHeight + 'px';
-
-        // 缩放上下文以匹配设备像素比
-        this.ctx.scale(dpr, dpr);
-
-        console.log('Canvas size set to:', canvasWidth, 'x', canvasHeight, '(DPR:', dpr, ', actual:', this.ctx.canvas.width, 'x', this.ctx.canvas.height + ')');
-
-        // 清空Canvas
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-        console.log('Canvas cleared');
-
-        // 设置默认绘制样式
-        this.ctx.strokeStyle = '#000000'; // 黑色描边
-        this.ctx.fillStyle = '#ffffff'; // 白色填充
-        this.ctx.lineWidth = 2;
+        // Canvas sizing, clearing and default styles (host detection lives in utils/surface)
+        this.devicePixelRatio = applyCanvasSize(this.ctx, canvasWidth, canvasHeight);
+        clearCanvas(this.ctx, canvasWidth, canvasHeight);
+        applyDefaultPenBrush(this.ctx, { lineWidth: 2 });
         this.fillColor = '#ffffff';
         this.strokeColor = '#000000';
-        console.log('Drawing styles set');
 
         // 重置路径状态
         this.currentPath = [];

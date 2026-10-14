@@ -1,14 +1,13 @@
 // EMF绘制模块
 const CoordinateTransformer = require('../../utils/coordinateTransformer');
 const GdiObjectManager = require('../../utils/gdiObjectManager');
-const EmfPlusParser = require('../parsers/emfPlusParser');
-const EmfPlusDrawer = require('./emfPlusDrawer');
 const GeometryUtils = require('../../utils/geometryUtils');
 const { readDword, readLong, readFloat32 } = require('../../utils/binaryReader');
 const { colorRefToHex } = require('../../utils/colorUtils');
 const { readUtf16Name, decodeUtf16Le, decodeSingleBytes, decodeAnsiBytes } = require('../../utils/textCodec');
-const { resolveTempCanvas, wrapImageData } = require('../../utils/bitmapSurface');
-const { SIGNATURES, RECORD_TYPES, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require('../../utils/constants');
+const { applyCanvasSize, clearCanvas, applyDefaultPenBrush, resolveTempCanvas, wrapImageData } = require('../../utils/surface');
+const { SIGNATURES, RECORD_TYPES, FILE_TYPES, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require('../../utils/constants');
+const NestedMetafilePlayer = require('../../utils/nestedMetafilePlayer');
 
 // EMF 记录分派表：记录类型 -> 处理方法名（processEmfRecordType 中调用 this[方法名](data)）。
 // 值为 null 表示已识别但无需处理/暂不支持（与原 switch 的空分支等价，不打未知记录日志）。
@@ -214,13 +213,10 @@ class EmfDrawer {
       canvasHeight = viewHeight;
     }
 
-    // HiDPI 支持：获取设备像素比
-    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-    this.devicePixelRatio = dpr;
-
-    // 设置 Canvas 实际尺寸（考虑设备像素比）
-    this.ctx.canvas.width = Math.round(canvasWidth * dpr);
-    this.ctx.canvas.height = Math.round(canvasHeight * dpr);
+    // Canvas sizing (host detection lives in utils/surface). The file-declared
+    // window/viewport ranges and pxPerMm computed below only touch non-context
+    // state, so their position relative to the sizing call is irrelevant.
+    this.devicePixelRatio = applyCanvasSize(this.ctx, canvasWidth, canvasHeight);
 
     // 缓存 canvas 实际尺寸供 setViewport*Ex 换算 vpOrg 使用
     this._canvasW = canvasWidth;
@@ -244,30 +240,12 @@ class EmfDrawer {
       this.coordinateTransformer.setPxPerMm(pxX / mmX);
     }
 
-    // 设置 CSS 显示尺寸（逻辑像素）
-    this.ctx.canvas.style.width = canvasWidth + 'px';
-    this.ctx.canvas.style.height = canvasHeight + 'px';
-
-    // 缩放上下文以匹配设备像素比
-    this.ctx.scale(dpr, dpr);
-
-    console.log('Canvas size set to:', canvasWidth, 'x', canvasHeight, '(DPR:', dpr, ', actual:', this.ctx.canvas.width, 'x', this.ctx.canvas.height + ')');
-
-    // 清空Canvas
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-    console.log('Canvas cleared');
-
+    clearCanvas(this.ctx, canvasWidth, canvasHeight);
     // 设置默认绘制样式（GDI 默认：BLACK_PEN = 1px 黑色，WHITE_BRUSH 填充）
-    this.ctx.strokeStyle = '#000000'; // 黑色描边
-    this.ctx.fillStyle = '#ffffff'; // 白色填充
-    this.ctx.lineWidth = 1;
     // 默认笔 = PS_SOLID|PS_COSMETIC|PS_ENDCAP_ROUND|PS_JOIN_ROUND（位域全 0）→ round/round
-    this.ctx.lineCap = 'round';
-    this.ctx.lineJoin = 'round';
+    applyDefaultPenBrush(this.ctx, { lineWidth: 1, lineCap: 'round', lineJoin: 'round' });
     this.fillColor = '#ffffff';
     this.strokeColor = '#000000';
-    console.log('Drawing styles set');
 
     // 重置路径状态
     this.currentPath = [];
@@ -478,7 +456,7 @@ class EmfDrawer {
       for (let i = 0; i < count; i++) {
         const x = readLong(data, 20 + i * 8);
         const y = readLong(data, 24 + i * 8);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(x, y);
         points.push(transformed);
       }
 
@@ -510,7 +488,7 @@ class EmfDrawer {
     for (let i = 0; i < count; i++) {
       const x = readLong(data, 20 + i * 8);
       const y = readLong(data, 24 + i * 8);
-      const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const transformed = this.coordinateTransformer.transform(x, y);
 
       if (i === 0) {
         this.ctx.moveTo(transformed.x, transformed.y);
@@ -536,7 +514,7 @@ class EmfDrawer {
     for (let i = 0; i < count; i++) {
       const x = readLong(data, 20 + i * 8);
       const y = readLong(data, 24 + i * 8);
-      const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const transformed = this.coordinateTransformer.transform(x, y);
 
       if (i === 0) {
         this.ctx.moveTo(transformed.x, transformed.y);
@@ -561,7 +539,7 @@ class EmfDrawer {
     for (let i = 0; i < count; i++) {
       const x = readLong(data, 20 + i * 8);
       const y = readLong(data, 24 + i * 8);
-      const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const transformed = this.coordinateTransformer.transform(x, y);
       points.push(transformed);
     }
 
@@ -580,7 +558,7 @@ class EmfDrawer {
       }
     } else {
       this.ctx.beginPath();
-      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
       this.ctx.moveTo(start.x, start.y);
       for (let i = 0; i < points.length; i += 3) {
         if (i + 2 < points.length) {
@@ -619,17 +597,17 @@ class EmfDrawer {
       for (let i = 0; i < count; i++) {
         const x = readLong(data, 20 + i * 8);
         const y = readLong(data, 24 + i * 8);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(x, y);
         this.ctx.lineTo(transformed.x, transformed.y);
       }
     } else {
       this.ctx.beginPath();
-      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
       this.ctx.moveTo(start.x, start.y);
       for (let i = 0; i < count; i++) {
         const x = readLong(data, 20 + i * 8);
         const y = readLong(data, 24 + i * 8);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(x, y);
         this.ctx.lineTo(transformed.x, transformed.y);
       }
       this.ctx.stroke();
@@ -665,7 +643,7 @@ class EmfDrawer {
       for (let j = 0; j < count; j++) {
         const x = readLong(data, pointOffset);
         const y = readLong(data, pointOffset + 4);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(x, y);
 
         if (j === 0) {
           this.ctx.moveTo(transformed.x, transformed.y);
@@ -705,7 +683,7 @@ class EmfDrawer {
       for (let j = 0; j < count; j++) {
         const x = readLong(data, pointOffset);
         const y = readLong(data, pointOffset + 4);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(x, y);
 
         if (j === 0) {
           this.ctx.moveTo(transformed.x, transformed.y);
@@ -734,7 +712,7 @@ class EmfDrawer {
     for (let i = 0; i < count; i++) {
       const x = this.readInt16FromData(data, offset + i * 4);
       const y = this.readInt16FromData(data, offset + i * 4 + 2);
-      points.push(this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height));
+      points.push(this.coordinateTransformer.transform(x, y));
     }
     return points;
   }
@@ -815,7 +793,7 @@ class EmfDrawer {
       }
     } else {
       this.ctx.beginPath();
-      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
       this.ctx.moveTo(start.x, start.y);
       for (let i = 0; i + 2 < points.length; i += 3) {
         this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
@@ -840,7 +818,7 @@ class EmfDrawer {
       points.forEach(p => this.ctx.lineTo(p.x, p.y));
     } else {
       this.ctx.beginPath();
-      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
       this.ctx.moveTo(start.x, start.y);
       points.forEach(p => this.ctx.lineTo(p.x, p.y));
       this.ctx.stroke();
@@ -959,7 +937,7 @@ class EmfDrawer {
       : decodeSingleBytes(data, stringOffset, cChars);
 
     // ETO_OPAQUE：先用背景色填充矩形
-    const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformed = this.coordinateTransformer.transform(x, y);
     const savedFillStyle = this.ctx.fillStyle;
     this.ctx.fillStyle = this.textColor;
     this.ctx.fillText(text, transformed.x, transformed.y);
@@ -995,11 +973,10 @@ class EmfDrawer {
     if (readDword(data, 4) !== SIGNATURES.EMF_PLUS_COMMENT_ID) return; // 非 EMF+ 注释
     try {
       if (this._skipEmfPlusPlayback) return; // 双模式：GDI 记录已覆盖内容，跳过 EMF+ 回放
-      const parser = new EmfPlusParser(data); // parseEmfPlusRecords 只依赖入参
-      const emfPlusRecords = parser.parseEmfPlusRecords(data);
+      const emfPlusRecords = NestedMetafilePlayer.parseEmfPlusStream(data);
       if (emfPlusRecords.length === 0) return;
       if (!this._emfPlusDrawer) {
-        this._emfPlusDrawer = new EmfPlusDrawer(this.ctx);
+        this._emfPlusDrawer = NestedMetafilePlayer.createDrawer(FILE_TYPES.EMF_PLUS, this.ctx);
         // 共享坐标变换：EMF+ 记录与 EMF 记录共享同一设备坐标系
         //（window/viewport/世界变换等由外层 EMF 记录维护，内嵌 EMF+ 沿用）
         this._emfPlusDrawer.coordinateTransformer = this.coordinateTransformer;
@@ -1007,9 +984,7 @@ class EmfDrawer {
       // 双模式文件（EMF+ 与 EMF 记录混排）：EMF+ 描边同样乘全局
       // world 缩放（test-182：EMF+ 孪生形状描边不缩放会留 25px 灰色涂抹），
       // 故不旁路 strokeScaleProvider；EMF+-only 文件无 provider、不受影响。
-      for (const rec of emfPlusRecords) {
-        this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
-      }
+      NestedMetafilePlayer.playEmfPlusRecords(this._emfPlusDrawer, emfPlusRecords);
     } catch (e) {
       console.log('EMF+ GDIComment playback failed:', /** @type {Error} */(e).message);
     }
@@ -1098,7 +1073,7 @@ class EmfDrawer {
     // 路径记录（BeginPath/EndPath）中：MoveToEx 开启新子路径（GDI 语义），
     // 后续 To 记录从新位置续接（_ensurePathStart 只在无子路径时 moveTo）。
     if (this._pathActive()) {
-      const t = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const t = this.coordinateTransformer.transform(x, y);
       this.ctx.moveTo(t.x, t.y);
     }
     this.currentPos = { x, y };
@@ -1187,8 +1162,8 @@ class EmfDrawer {
     const top = readDword(data, 4);
     const right = readDword(data, 8);
     const bottom = readDword(data, 12);
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
     // 注意：此处刻意**不**对半轴取绝对值，与既有行为保持一致（见 geometryUtils 顶部说明）
     const { cx, cy, rx, ry } = GeometryUtils.ellipseFromCorners(transformedLeftTop, transformedRightBottom);
     this.ctx.beginPath();
@@ -1203,8 +1178,8 @@ class EmfDrawer {
     const top = readLong(data, 4);
     const right = readLong(data, 8);
     const bottom = readLong(data, 12);
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
     const width = Math.abs(transformedRightBottom.x - transformedLeftTop.x);
     const height = Math.abs(transformedRightBottom.y - transformedLeftTop.y);
     const x = Math.min(transformedLeftTop.x, transformedRightBottom.x);
@@ -1220,13 +1195,13 @@ class EmfDrawer {
     if (data.length < 8) return;
     const x = readLong(data, 0);
     const y = readLong(data, 4);
-    const to = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+    const to = this.coordinateTransformer.transform(x, y);
     if (this._pathActive()) {
       // 路径记录：只追加线段，渲染推迟到 FILLPATH/STROKEPATH
       this._ensurePathStart();
       this.ctx.lineTo(to.x, to.y);
     } else {
-      const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
       // 每条线独立 beginPath，避免路径段跨记录累积
       this.ctx.beginPath();
       this.ctx.moveTo(from.x, from.y);
@@ -1260,7 +1235,7 @@ class EmfDrawer {
   // 路径记录中确保子路径起点在"当前位置"（首记录无 MoveToEx 时）
   _ensurePathStart() {
     if (!this.ctx._hasSubpath) {
-      const s = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const s = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
       this.ctx.moveTo(s.x, s.y);
     }
   }
@@ -1402,11 +1377,9 @@ class EmfDrawer {
     if ((options & 0x0002) === 0) return;
     if (rclOff + 16 > data.length) return;
     const bg1 = this.coordinateTransformer.transform(
-      readLong(data, rclOff), readLong(data, rclOff + 4),
-      this.ctx.canvas.width, this.ctx.canvas.height);
+      readLong(data, rclOff), readLong(data, rclOff + 4));
     const bg2 = this.coordinateTransformer.transform(
-      readLong(data, rclOff + 8), readLong(data, rclOff + 12),
-      this.ctx.canvas.width, this.ctx.canvas.height);
+      readLong(data, rclOff + 8), readLong(data, rclOff + 12));
     const bgW = Math.abs(bg2.x - bg1.x);
     const bgH = Math.abs(bg2.y - bg1.y);
     if (bgW > 0 && bgH > 0) {
@@ -1515,7 +1488,7 @@ class EmfDrawer {
           // 对旋转文本输出 rotate(θ, x, y+dy) translate(0, dy)，枢轴同样落在基线上。
           // 等比例尺度取变换线性部分的 x 轴长度（world 为等比缩放时即为它）。
           const gscale = Math.hypot(matrix.a, matrix.b) || 1;
-          const dev = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const dev = this.coordinateTransformer.transform(x, y);
           // 设备空间下文本 x 轴的方向角（SVG 顺时针为正）。
           // 直接取变换线性部分 x 轴的方向角即可，**不要**按行列式符号取反：
           // 该角度即为期望的 rotate() 值（det>0 时 = −escapement/10，
@@ -1755,7 +1728,7 @@ class EmfDrawer {
   // （test-041~049 簇 RMSE 0.12 的主因之一）。
   _drawDecodedDib(dib, destX, destY, destW, destH) {
     if (!dib || destW === 0 || destH === 0) return;
-    const t1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
+    const t1 = this.coordinateTransformer.transform(destX, destY);
     // 尺寸向量：映射线性部分。mapSizeAsPoint（含 viewportOrg 放大的点映射行为）
     // 仅对带 __pointCalSize 标记的记录启用
     // （有源 DIB 的 STRETCHDIBITS，见 processEmfStretchDibBits）。
@@ -1788,7 +1761,7 @@ class EmfDrawer {
     if (w <= 0 || h <= 0) return;
 
     // 浏览器/真实 canvas：临时 canvas + drawImage；SvgContext：putImageData（SVG image 天然缩放）
-    // 宿主探测与 ImageData 包装见 utils/bitmapSurface
+    // Host detection and ImageData wrapping live in utils/surface
     const tempCanvas = resolveTempCanvas(this.ctx, dib.width, dib.height);
 
     if (tempCanvas) {
@@ -1804,7 +1777,7 @@ class EmfDrawer {
     console.log('  DIB drawn at:', x, y, w, h, '(source', dib.width, 'x', dib.height + ')');
   }
 
-  // ImageData wrapping now lives in utils/bitmapSurface (wrapImageData)
+  // ImageData wrapping now lives in utils/surface (wrapImageData)
 
   processEmfBitBlt(data) {
     // EMR_BITBLT (MS-EMF 2.3.1.1)，data 内偏移（已剥离 8 字节记录头）：
@@ -1994,8 +1967,8 @@ class EmfDrawer {
   // BLT 无位图时的纯色填充（BLACKNESS/WHITENESS 或占位）
   _fillBltRect(x, y, w, h, color) {
     if (!color || color === 'transparent' || color === 'none') return;
-    const t1 = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-    const t2 = this.coordinateTransformer.transform(x + Math.abs(w), y + Math.abs(h), this.ctx.canvas.width, this.ctx.canvas.height);
+    const t1 = this.coordinateTransformer.transform(x, y);
+    const t2 = this.coordinateTransformer.transform(x + Math.abs(w), y + Math.abs(h));
     const rx = Math.min(t1.x, t2.x), ry = Math.min(t1.y, t2.y);
     const rw = Math.abs(t2.x - t1.x), rh = Math.abs(t2.y - t1.y);
     if (rw <= 0 || rh <= 0) return;
@@ -2030,7 +2003,7 @@ class EmfDrawer {
     const y = readLong(data, 4);
     const color = readDword(data, 8);
     const hexColor = colorRefToHex(color);
-    const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformed = this.coordinateTransformer.transform(x, y);
 
     this.ctx.fillStyle = hexColor;
     this.ctx.fillRect(transformed.x, transformed.y, 1, 1);
@@ -2090,8 +2063,8 @@ class EmfDrawer {
     const right = readLong(data, 8);
     const bottom = readLong(data, 12);
 
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
 
     // 注意：不得在此 ctx.save()。裁剪区的生命周期由 EMF 级 SaveDC/RestoreDC 管理
     // （clip 已纳入 _captureDcState/_restoreDcState）；这里的 save 会让 RestoreDC 的
@@ -2132,8 +2105,8 @@ class EmfDrawer {
   _buildRgnPath(rects) {
     this.ctx.beginPath();
     for (const rc of rects) {
-      const lt = this.coordinateTransformer.transform(rc.l, rc.t, this.ctx.canvas.width, this.ctx.canvas.height);
-      const rb = this.coordinateTransformer.transform(rc.r, rc.b, this.ctx.canvas.width, this.ctx.canvas.height);
+      const lt = this.coordinateTransformer.transform(rc.l, rc.t);
+      const rb = this.coordinateTransformer.transform(rc.r, rc.b);
       this.ctx.rect(lt.x, lt.y, rb.x - lt.x, rb.y - lt.y);
     }
   }
@@ -2363,7 +2336,7 @@ class EmfDrawer {
     const startAngle = readDword(data, 12); // 以度为单位
     const sweepAngle = readDword(data, 16); // 以度为单位
 
-    const transformed = this.coordinateTransformer.transform(centerX, centerY, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformed = this.coordinateTransformer.transform(centerX, centerY);
     const startRad = (startAngle * Math.PI) / 180;
     const endRad = ((startAngle + sweepAngle) * Math.PI) / 180;
 
@@ -2382,8 +2355,8 @@ class EmfDrawer {
     const cornerWidth = readLong(data, 16);
     const cornerHeight = readLong(data, 20);
 
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
     const width = transformedRightBottom.x - transformedLeftTop.x;
     const height = transformedRightBottom.y - transformedLeftTop.y;
     const rx = cornerWidth / 2;
@@ -2402,8 +2375,8 @@ class EmfDrawer {
   // GDI 顺时针（AD_CLOCKWISE）= 画布 anticlockwise=false。
   // 几何计算见 utils/geometryUtils（与 WmfDrawer 共用同一实现）。
   _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {
-    const st = this.coordinateTransformer.transform(startX, startY, this.ctx.canvas.width, this.ctx.canvas.height);
-    const en = this.coordinateTransformer.transform(endX, endY, this.ctx.canvas.width, this.ctx.canvas.height);
+    const st = this.coordinateTransformer.transform(startX, startY);
+    const en = this.coordinateTransformer.transform(endX, endY);
     return GeometryUtils.arcAngles(cx, cy, rx, ry, st, en, this.arcDirection !== 0x02);
   }
 
@@ -2421,8 +2394,8 @@ class EmfDrawer {
     const endX = readLong(data, 24);
     const endY = readLong(data, 28);
 
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
     const ellipse = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
     if (ellipse.rx === 0 || ellipse.ry === 0) return;
 
@@ -2525,8 +2498,8 @@ class EmfDrawer {
     const endX = readLong(data, 24);
     const endY = readLong(data, 28);
 
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
     const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
     const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
     const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
@@ -2540,7 +2513,7 @@ class EmfDrawer {
     const arcStart = { x: centerX + radiusX * Math.cos(startAngle), y: centerY + radiusY * Math.sin(startAngle) };
     const arcEnd = { x: centerX + radiusX * Math.cos(endAngle), y: centerY + radiusY * Math.sin(endAngle) };
 
-    const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+    const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
     this.ctx.beginPath();
     this.ctx.moveTo(from.x, from.y);
     this.ctx.lineTo(arcStart.x, arcStart.y);
@@ -2576,7 +2549,7 @@ class EmfDrawer {
       const x = readLong(data, 20 + i * 8);
       const y = readLong(data, 24 + i * 8);
       const type = data[20 + count * 8 + i];
-      const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const transformed = this.coordinateTransformer.transform(x, y);
       let closeFlag = (type & 1) !== 0;
       switch (type & 0x06) {
         case 0x02: // PT_LINETO
@@ -2588,7 +2561,7 @@ class EmfDrawer {
           for (let k = 1; k <= 2; k++) {
             const bx = readLong(data, 20 + (i + k) * 8);
             const by = readLong(data, 24 + (i + k) * 8);
-            pts.push(this.coordinateTransformer.transform(bx, by, this.ctx.canvas.width, this.ctx.canvas.height));
+            pts.push(this.coordinateTransformer.transform(bx, by));
           }
           this.ctx.bezierCurveTo(pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
           closeFlag = (data[20 + count * 8 + i + 2] & 1) !== 0;
@@ -2692,7 +2665,7 @@ class EmfDrawer {
 
       // 检查坐标值是否合理
       if (Math.abs(x) < 50000 && Math.abs(y) < 50000) {
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(x, y);
         points.push(transformed);
       }
     }

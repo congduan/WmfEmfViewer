@@ -205,7 +205,6 @@ src/
 │
 ├── utils/               # Utility modules
 │   ├── binaryReader.js          # Little-endian byte readers shared by all drawers
-│   ├── bitmapSurface.js         # Bitmap landing: host detection + ImageData wrapping
 │   ├── colorUtils.js            # COLORREF / ARGB -> CSS color conversion
 │   ├── constants.js             # Shared file types, signatures, defaults
 │   ├── coordinateTransformer.js # Coordinate transformations
@@ -213,6 +212,8 @@ src/
 │   ├── gdiObjectManager.js      # GDI object state manager
 │   ├── mathTypeMtefParser.js    # MathType MTEF payload reader
 │   ├── metafileParser.js        # Main parser orchestrator
+│   ├── nestedMetafilePlayer.js  # Nested metafile playback (WMFC / EMF+ comments / EMF+ images)
+│   ├── surface.js               # Surface layer: DPR, canvas sizing/styles, bitmap landing
 │   ├── textCodec.js             # Text decoding (DBCS / ANSI / UTF-16LE) shared by all drawers
 │   └── webviewHtml.ts           # Shared webview HTML builder (extension layer)
 │

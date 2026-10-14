@@ -442,6 +442,8 @@ var require_coordinateTransformer = __commonJS({
        * @param {number} x
        * @param {number} y
        * @param {number} [canvasWidth] 预留参数（兼容旧调用签名，未参与计算）
+       *        全部调用方已改为只传 x/y（原先传 this.ctx.canvas.width/height，
+       *        该值是 DPR 缩放后的物理尺寸、且本方法并不使用），保留形参仅为外部兼容
        * @param {number} [canvasHeight] 预留参数（兼容旧调用签名，未参与计算）
        * @returns {Point}
        */
@@ -1817,12 +1819,75 @@ var require_emfPlusParser = __commonJS({
   }
 });
 
+// src/utils/surface.js
+var require_surface = __commonJS({
+  "src/utils/surface.js"(exports2, module2) {
+    "use strict";
+    var DEFAULT_CANVAS_BACKGROUND = "#ffffff";
+    function getDevicePixelRatio() {
+      return typeof window !== "undefined" && window.devicePixelRatio || 1;
+    }
+    function applyCanvasSize(ctx, canvasWidth, canvasHeight, dpr = getDevicePixelRatio()) {
+      ctx.canvas.width = Math.round(canvasWidth * dpr);
+      ctx.canvas.height = Math.round(canvasHeight * dpr);
+      ctx.canvas.style.width = canvasWidth + "px";
+      ctx.canvas.style.height = canvasHeight + "px";
+      ctx.scale(dpr, dpr);
+      __wmfEmfRendererLog("Canvas size set to:", canvasWidth, "x", canvasHeight, "(DPR:", dpr, ", actual:", ctx.canvas.width, "x", ctx.canvas.height + ")");
+      return dpr;
+    }
+    function clearCanvas(ctx, canvasWidth, canvasHeight, color = DEFAULT_CANVAS_BACKGROUND) {
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      __wmfEmfRendererLog("Canvas cleared");
+    }
+    function applyDefaultPenBrush(ctx, style) {
+      ctx.strokeStyle = "#000000";
+      ctx.fillStyle = "#ffffff";
+      ctx.lineWidth = style.lineWidth;
+      if (style.lineCap !== void 0) ctx.lineCap = style.lineCap;
+      if (style.lineJoin !== void 0) ctx.lineJoin = style.lineJoin;
+      __wmfEmfRendererLog("Drawing styles set");
+    }
+    function resolveTempCanvas(ctx, width, height) {
+      if (typeof document !== "undefined") {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        return canvas;
+      }
+      const canvasCtor = ctx && ctx.canvas ? ctx.canvas.constructor : null;
+      const isRealCanvasCtor = typeof canvasCtor === "function" && canvasCtor.name !== "Object";
+      if (!isRealCanvasCtor) return null;
+      return new canvasCtor(width, height);
+    }
+    function wrapImageData(bitmap) {
+      if (typeof ImageData !== "undefined") {
+        try {
+          return new ImageData(bitmap.data, bitmap.width, bitmap.height);
+        } catch (e) {
+        }
+      }
+      return { width: bitmap.width, height: bitmap.height, data: bitmap.data };
+    }
+    module2.exports = {
+      getDevicePixelRatio,
+      applyCanvasSize,
+      clearCanvas,
+      applyDefaultPenBrush,
+      resolveTempCanvas,
+      wrapImageData
+    };
+  }
+});
+
 // src/modules/drawers/baseDrawer.js
 var require_baseDrawer = __commonJS({
   "src/modules/drawers/baseDrawer.js"(exports2, module2) {
     "use strict";
     var CoordinateTransformer2 = require_coordinateTransformer();
     var GdiObjectManager2 = require_gdiObjectManager();
+    var { applyCanvasSize, clearCanvas, applyDefaultPenBrush } = require_surface();
     var { DEFAULT_DPI, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
     var BaseDrawer2 = class {
       constructor(ctx) {
@@ -1889,23 +1954,11 @@ var require_baseDrawer = __commonJS({
           this.coordinateTransformer.setWindowExt(canvasWidth, canvasHeight);
           this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
         }
-        const dpr = typeof window !== "undefined" && window.devicePixelRatio || 1;
-        this.devicePixelRatio = dpr;
-        this.ctx.canvas.width = Math.round(canvasWidth * dpr);
-        this.ctx.canvas.height = Math.round(canvasHeight * dpr);
-        this.ctx.canvas.style.width = canvasWidth + "px";
-        this.ctx.canvas.style.height = canvasHeight + "px";
-        this.ctx.scale(dpr, dpr);
-        __wmfEmfRendererLog("Canvas size set to:", canvasWidth, "x", canvasHeight, "(DPR:", dpr, ", actual:", this.ctx.canvas.width, "x", this.ctx.canvas.height + ")");
-        this.ctx.fillStyle = "#ffffff";
-        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-        __wmfEmfRendererLog("Canvas cleared");
-        this.ctx.strokeStyle = "#000000";
-        this.ctx.fillStyle = "#ffffff";
-        this.ctx.lineWidth = 2;
+        this.devicePixelRatio = applyCanvasSize(this.ctx, canvasWidth, canvasHeight);
+        clearCanvas(this.ctx, canvasWidth, canvasHeight);
+        applyDefaultPenBrush(this.ctx, { lineWidth: 2 });
         this.fillColor = "#ffffff";
         this.strokeColor = "#000000";
-        __wmfEmfRendererLog("Drawing styles set");
         this.currentPath = [];
         this.pathState = "idle";
       }
@@ -2145,38 +2198,6 @@ var require_textCodec = __commonJS({
       readUtf16Name,
       decodeSingleBytes,
       decodeAnsiBytes
-    };
-  }
-});
-
-// src/utils/bitmapSurface.js
-var require_bitmapSurface = __commonJS({
-  "src/utils/bitmapSurface.js"(exports2, module2) {
-    "use strict";
-    function resolveTempCanvas(ctx, width, height) {
-      if (typeof document !== "undefined") {
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        return canvas;
-      }
-      const canvasCtor = ctx && ctx.canvas ? ctx.canvas.constructor : null;
-      const isRealCanvasCtor = typeof canvasCtor === "function" && canvasCtor.name !== "Object";
-      if (!isRealCanvasCtor) return null;
-      return new canvasCtor(width, height);
-    }
-    function wrapImageData(bitmap) {
-      if (typeof ImageData !== "undefined") {
-        try {
-          return new ImageData(bitmap.data, bitmap.width, bitmap.height);
-        } catch (e) {
-        }
-      }
-      return { width: bitmap.width, height: bitmap.height, data: bitmap.data };
-    }
-    module2.exports = {
-      resolveTempCanvas,
-      wrapImageData
     };
   }
 });
@@ -2879,8 +2900,10 @@ var require_emfPlusDrawer = __commonJS({
     var GeometryUtils = require_geometryUtils();
     var { readFloat32, readDword, readShort } = require_binaryReader();
     var { argbToCss, readArgb } = require_colorUtils();
+    var { applyCanvasSize, clearCanvas, applyDefaultPenBrush } = require_surface();
     var { decodeUtf16Le, readUtf16Name } = require_textCodec();
     var { DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
+    var NestedMetafilePlayer = require_nestedMetafilePlayer();
     var EMF_PLUS_RECORD_HANDLERS = {
       // ========== 全局/控制记录 ==========
       16385: "processEmfPlusHeader",
@@ -3060,7 +3083,7 @@ var require_emfPlusDrawer = __commonJS({
       }
       // 坐标映射（EMF+ 坐标通常与 EMF 设备坐标一致，经由 coordinateTransformer）
       _emfPlusMapPoint(x, y) {
-        const t = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const t = this.coordinateTransformer.transform(x, y);
         return t;
       }
       // EmfPlusPath (MS-EMFPLUS 2.2.1.6) 解析：data 起点（已跳过 EmfPlusObject 的 GraphicsVersion）
@@ -3186,23 +3209,11 @@ var require_emfPlusDrawer = __commonJS({
           canvasWidth = viewWidth;
           canvasHeight = viewHeight;
         }
-        const dpr = typeof window !== "undefined" && window.devicePixelRatio || 1;
-        this.devicePixelRatio = dpr;
-        this.ctx.canvas.width = Math.round(canvasWidth * dpr);
-        this.ctx.canvas.height = Math.round(canvasHeight * dpr);
-        this.ctx.canvas.style.width = canvasWidth + "px";
-        this.ctx.canvas.style.height = canvasHeight + "px";
-        this.ctx.scale(dpr, dpr);
-        __wmfEmfRendererLog("Canvas size set to:", canvasWidth, "x", canvasHeight, "(DPR:", dpr, ", actual:", this.ctx.canvas.width, "x", this.ctx.canvas.height + ")");
-        this.ctx.fillStyle = "#ffffff";
-        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-        __wmfEmfRendererLog("Canvas cleared");
-        this.ctx.strokeStyle = "#000000";
-        this.ctx.fillStyle = "#ffffff";
-        this.ctx.lineWidth = 2;
+        this.devicePixelRatio = applyCanvasSize(this.ctx, canvasWidth, canvasHeight);
+        clearCanvas(this.ctx, canvasWidth, canvasHeight);
+        applyDefaultPenBrush(this.ctx, { lineWidth: 2 });
         this.fillColor = "#ffffff";
         this.strokeColor = "#000000";
-        __wmfEmfRendererLog("Drawing styles set");
         this.currentPath = [];
         this.pathState = "idle";
         for (let i = 0; i < metafileData.records.length; i++) {
@@ -3397,7 +3408,7 @@ var require_emfPlusDrawer = __commonJS({
             return;
           }
           if (img.type !== "imageEmf") return;
-          const nested = this._renderNestedEmf(img.data);
+          const nested = NestedMetafilePlayer.renderNestedToSvgNodes(img.data);
           if (!nested) return;
           const W = nested.width || 1;
           const H = nested.height || 1;
@@ -3425,37 +3436,7 @@ var require_emfPlusDrawer = __commonJS({
       _fmtN(v) {
         return Math.round(v * 100) / 100;
       }
-      // 用同一渲染管线把嵌套 EMF 渲染为独立节点列表（递归播放，支持 EMF+ 内嵌）
-      _renderNestedEmf(bytes) {
-        try {
-          const MetafileParserCtor = require_metafileParser();
-          const EmfDrawerCtor = require_emfDrawer();
-          const SvgContextCtor = require_svgContext();
-          const parser = new MetafileParserCtor(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
-          const result = parser.parse();
-          if (!result || result.error || !result.records) return null;
-          const subCtx = new SvgContextCtor();
-          const drawer = new EmfDrawerCtor(subCtx);
-          drawer.draw(result, { viewWidth: 800, viewHeight: 600 });
-          const header = (
-            /** @type {{bounds?: {left:number,top:number,right:number,bottom:number}}} */
-            result.header
-          );
-          let W = DEFAULT_VIEW_WIDTH, H = DEFAULT_VIEW_HEIGHT;
-          if (header && header.bounds) {
-            W = Math.abs(header.bounds.right - header.bounds.left);
-            H = Math.abs(header.bounds.bottom - header.bounds.top);
-          }
-          return { nodes: subCtx.nodes, defs: subCtx.defs, width: W || 1, height: H || 1 };
-        } catch (e) {
-          __wmfEmfRendererLog(
-            "EMF+ nested EMF render failed:",
-            /** @type {Error} */
-            e.message
-          );
-          return null;
-        }
-      }
+      // 嵌套 EMF 的独立渲染已下沉到 utils/nestedMetafilePlayer.renderNestedToSvgNodes
       // EmfPlusDrawString（0x401C，MS-EMFPLUS 2.3.4.14）：
       // FontId = flags 低字节；data = BrushId(4) + FormatId(4) + Length(4) + RectF(16) + UTF16LE[Length]
       // 字距/字符间距暂忽略（PNG→SVG 静态图对齐为主）。
@@ -3765,14 +3746,13 @@ var require_emfDrawer = __commonJS({
     "use strict";
     var CoordinateTransformer2 = require_coordinateTransformer();
     var GdiObjectManager2 = require_gdiObjectManager();
-    var EmfPlusParser2 = require_emfPlusParser();
-    var EmfPlusDrawer2 = require_emfPlusDrawer();
     var GeometryUtils = require_geometryUtils();
     var { readDword, readLong, readFloat32 } = require_binaryReader();
     var { colorRefToHex } = require_colorUtils();
     var { readUtf16Name, decodeUtf16Le, decodeSingleBytes, decodeAnsiBytes } = require_textCodec();
-    var { resolveTempCanvas, wrapImageData } = require_bitmapSurface();
-    var { SIGNATURES, RECORD_TYPES, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
+    var { applyCanvasSize, clearCanvas, applyDefaultPenBrush, resolveTempCanvas, wrapImageData } = require_surface();
+    var { SIGNATURES, RECORD_TYPES, FILE_TYPES, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
+    var NestedMetafilePlayer = require_nestedMetafilePlayer();
     var EMF_RECORD_HANDLERS = {
       // ========== 基础记录 ==========
       1: null,
@@ -4042,10 +4022,7 @@ var require_emfDrawer = __commonJS({
           canvasWidth = viewWidth;
           canvasHeight = viewHeight;
         }
-        const dpr = typeof window !== "undefined" && window.devicePixelRatio || 1;
-        this.devicePixelRatio = dpr;
-        this.ctx.canvas.width = Math.round(canvasWidth * dpr);
-        this.ctx.canvas.height = Math.round(canvasHeight * dpr);
+        this.devicePixelRatio = applyCanvasSize(this.ctx, canvasWidth, canvasHeight);
         this._canvasW = canvasWidth;
         this._canvasH = canvasHeight;
         const _initW = metafileData.header.bounds && metafileData.header.bounds.right - metafileData.header.bounds.left || canvasWidth;
@@ -4059,21 +4036,10 @@ var require_emfDrawer = __commonJS({
           const pxX = metafileData.header.szlDevice.cx || metafileData.header.szlDevice.cy || 1;
           this.coordinateTransformer.setPxPerMm(pxX / mmX);
         }
-        this.ctx.canvas.style.width = canvasWidth + "px";
-        this.ctx.canvas.style.height = canvasHeight + "px";
-        this.ctx.scale(dpr, dpr);
-        __wmfEmfRendererLog("Canvas size set to:", canvasWidth, "x", canvasHeight, "(DPR:", dpr, ", actual:", this.ctx.canvas.width, "x", this.ctx.canvas.height + ")");
-        this.ctx.fillStyle = "#ffffff";
-        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-        __wmfEmfRendererLog("Canvas cleared");
-        this.ctx.strokeStyle = "#000000";
-        this.ctx.fillStyle = "#ffffff";
-        this.ctx.lineWidth = 1;
-        this.ctx.lineCap = "round";
-        this.ctx.lineJoin = "round";
+        clearCanvas(this.ctx, canvasWidth, canvasHeight);
+        applyDefaultPenBrush(this.ctx, { lineWidth: 1, lineCap: "round", lineJoin: "round" });
         this.fillColor = "#ffffff";
         this.strokeColor = "#000000";
-        __wmfEmfRendererLog("Drawing styles set");
         this.currentPath = [];
         this.pathState = "idle";
         this.currentPos = { x: 0, y: 0 };
@@ -4235,7 +4201,7 @@ var require_emfDrawer = __commonJS({
           for (let i = 0; i < count; i++) {
             const x = readLong(data, 20 + i * 8);
             const y = readLong(data, 24 + i * 8);
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            const transformed = this.coordinateTransformer.transform(x, y);
             points.push(transformed);
           }
           this.ctx.beginPath();
@@ -4264,7 +4230,7 @@ var require_emfDrawer = __commonJS({
         for (let i = 0; i < count; i++) {
           const x = readLong(data, 20 + i * 8);
           const y = readLong(data, 24 + i * 8);
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const transformed = this.coordinateTransformer.transform(x, y);
           if (i === 0) {
             this.ctx.moveTo(transformed.x, transformed.y);
           } else {
@@ -4284,7 +4250,7 @@ var require_emfDrawer = __commonJS({
         for (let i = 0; i < count; i++) {
           const x = readLong(data, 20 + i * 8);
           const y = readLong(data, 24 + i * 8);
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const transformed = this.coordinateTransformer.transform(x, y);
           if (i === 0) {
             this.ctx.moveTo(transformed.x, transformed.y);
           } else {
@@ -4302,7 +4268,7 @@ var require_emfDrawer = __commonJS({
         for (let i = 0; i < count; i++) {
           const x = readLong(data, 20 + i * 8);
           const y = readLong(data, 24 + i * 8);
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const transformed = this.coordinateTransformer.transform(x, y);
           points.push(transformed);
         }
         if (this._pathActive()) {
@@ -4321,7 +4287,7 @@ var require_emfDrawer = __commonJS({
           }
         } else {
           this.ctx.beginPath();
-          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
           this.ctx.moveTo(start.x, start.y);
           for (let i = 0; i < points.length; i += 3) {
             if (i + 2 < points.length) {
@@ -4355,17 +4321,17 @@ var require_emfDrawer = __commonJS({
           for (let i = 0; i < count; i++) {
             const x = readLong(data, 20 + i * 8);
             const y = readLong(data, 24 + i * 8);
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            const transformed = this.coordinateTransformer.transform(x, y);
             this.ctx.lineTo(transformed.x, transformed.y);
           }
         } else {
           this.ctx.beginPath();
-          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
           this.ctx.moveTo(start.x, start.y);
           for (let i = 0; i < count; i++) {
             const x = readLong(data, 20 + i * 8);
             const y = readLong(data, 24 + i * 8);
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            const transformed = this.coordinateTransformer.transform(x, y);
             this.ctx.lineTo(transformed.x, transformed.y);
           }
           this.ctx.stroke();
@@ -4392,7 +4358,7 @@ var require_emfDrawer = __commonJS({
           for (let j = 0; j < count; j++) {
             const x = readLong(data, pointOffset);
             const y = readLong(data, pointOffset + 4);
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            const transformed = this.coordinateTransformer.transform(x, y);
             if (j === 0) {
               this.ctx.moveTo(transformed.x, transformed.y);
             } else {
@@ -4420,7 +4386,7 @@ var require_emfDrawer = __commonJS({
           for (let j = 0; j < count; j++) {
             const x = readLong(data, pointOffset);
             const y = readLong(data, pointOffset + 4);
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            const transformed = this.coordinateTransformer.transform(x, y);
             if (j === 0) {
               this.ctx.moveTo(transformed.x, transformed.y);
             } else {
@@ -4445,7 +4411,7 @@ var require_emfDrawer = __commonJS({
         for (let i = 0; i < count; i++) {
           const x = this.readInt16FromData(data, offset + i * 4);
           const y = this.readInt16FromData(data, offset + i * 4 + 2);
-          points.push(this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height));
+          points.push(this.coordinateTransformer.transform(x, y));
         }
         return points;
       }
@@ -4513,7 +4479,7 @@ var require_emfDrawer = __commonJS({
           }
         } else {
           this.ctx.beginPath();
-          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
           this.ctx.moveTo(start.x, start.y);
           for (let i = 0; i + 2 < points.length; i += 3) {
             this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
@@ -4535,7 +4501,7 @@ var require_emfDrawer = __commonJS({
           points.forEach((p) => this.ctx.lineTo(p.x, p.y));
         } else {
           this.ctx.beginPath();
-          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
           this.ctx.moveTo(start.x, start.y);
           points.forEach((p) => this.ctx.lineTo(p.x, p.y));
           this.ctx.stroke();
@@ -4626,7 +4592,7 @@ var require_emfDrawer = __commonJS({
         if (!(options & ETO_NO_RECT)) this._fillOpaqueTextRect(options, data, 28);
         if (cChars === 0 || stringOffset + cChars * charWidth > data.length) return;
         const text = charWidth === 2 ? decodeUtf16Le(data, stringOffset, cChars) : decodeSingleBytes(data, stringOffset, cChars);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(x, y);
         const savedFillStyle = this.ctx.fillStyle;
         this.ctx.fillStyle = this.textColor;
         this.ctx.fillText(text, transformed.x, transformed.y);
@@ -4659,16 +4625,13 @@ var require_emfDrawer = __commonJS({
         if (readDword(data, 4) !== SIGNATURES.EMF_PLUS_COMMENT_ID) return;
         try {
           if (this._skipEmfPlusPlayback) return;
-          const parser = new EmfPlusParser2(data);
-          const emfPlusRecords = parser.parseEmfPlusRecords(data);
+          const emfPlusRecords = NestedMetafilePlayer.parseEmfPlusStream(data);
           if (emfPlusRecords.length === 0) return;
           if (!this._emfPlusDrawer) {
-            this._emfPlusDrawer = new EmfPlusDrawer2(this.ctx);
+            this._emfPlusDrawer = NestedMetafilePlayer.createDrawer(FILE_TYPES.EMF_PLUS, this.ctx);
             this._emfPlusDrawer.coordinateTransformer = this.coordinateTransformer;
           }
-          for (const rec of emfPlusRecords) {
-            this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
-          }
+          NestedMetafilePlayer.playEmfPlusRecords(this._emfPlusDrawer, emfPlusRecords);
         } catch (e) {
           __wmfEmfRendererLog(
             "EMF+ GDIComment playback failed:",
@@ -4739,7 +4702,7 @@ var require_emfDrawer = __commonJS({
         const x = readLong(data, 0);
         const y = readLong(data, 4);
         if (this._pathActive()) {
-          const t = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const t = this.coordinateTransformer.transform(x, y);
           this.ctx.moveTo(t.x, t.y);
         }
         this.currentPos = { x, y };
@@ -4808,8 +4771,8 @@ var require_emfDrawer = __commonJS({
         const top = readDword(data, 4);
         const right = readDword(data, 8);
         const bottom = readDword(data, 12);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
         const { cx, cy, rx, ry } = GeometryUtils.ellipseFromCorners(transformedLeftTop, transformedRightBottom);
         this.ctx.beginPath();
         this.ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
@@ -4822,8 +4785,8 @@ var require_emfDrawer = __commonJS({
         const top = readLong(data, 4);
         const right = readLong(data, 8);
         const bottom = readLong(data, 12);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
         const width = Math.abs(transformedRightBottom.x - transformedLeftTop.x);
         const height = Math.abs(transformedRightBottom.y - transformedLeftTop.y);
         const x = Math.min(transformedLeftTop.x, transformedRightBottom.x);
@@ -4838,12 +4801,12 @@ var require_emfDrawer = __commonJS({
         if (data.length < 8) return;
         const x = readLong(data, 0);
         const y = readLong(data, 4);
-        const to = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const to = this.coordinateTransformer.transform(x, y);
         if (this._pathActive()) {
           this._ensurePathStart();
           this.ctx.lineTo(to.x, to.y);
         } else {
-          const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
           this.ctx.beginPath();
           this.ctx.moveTo(from.x, from.y);
           this.ctx.lineTo(to.x, to.y);
@@ -4872,7 +4835,7 @@ var require_emfDrawer = __commonJS({
       // 路径记录中确保子路径起点在"当前位置"（首记录无 MoveToEx 时）
       _ensurePathStart() {
         if (!this.ctx._hasSubpath) {
-          const s = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const s = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
           this.ctx.moveTo(s.x, s.y);
         }
       }
@@ -4995,15 +4958,11 @@ var require_emfDrawer = __commonJS({
         if (rclOff + 16 > data.length) return;
         const bg1 = this.coordinateTransformer.transform(
           readLong(data, rclOff),
-          readLong(data, rclOff + 4),
-          this.ctx.canvas.width,
-          this.ctx.canvas.height
+          readLong(data, rclOff + 4)
         );
         const bg2 = this.coordinateTransformer.transform(
           readLong(data, rclOff + 8),
-          readLong(data, rclOff + 12),
-          this.ctx.canvas.width,
-          this.ctx.canvas.height
+          readLong(data, rclOff + 12)
         );
         const bgW = Math.abs(bg2.x - bg1.x);
         const bgH = Math.abs(bg2.y - bg1.y);
@@ -5059,7 +5018,7 @@ var require_emfDrawer = __commonJS({
                 };
               }
               const gscale = Math.hypot(matrix.a, matrix.b) || 1;
-              const dev = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+              const dev = this.coordinateTransformer.transform(x, y);
               let rotDeg = 0;
               if (Math.abs(matrix.b) > 1e-9 || Math.abs(matrix.c) > 1e-9) {
                 rotDeg = Math.atan2(matrix.b, matrix.a) * 180 / Math.PI;
@@ -5290,7 +5249,7 @@ var require_emfDrawer = __commonJS({
       // （test-041~049 簇 RMSE 0.12 的主因之一）。
       _drawDecodedDib(dib, destX, destY, destW, destH) {
         if (!dib || destW === 0 || destH === 0) return;
-        const t1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
+        const t1 = this.coordinateTransformer.transform(destX, destY);
         const size = dib.__pointCalSize ? this.coordinateTransformer.mapSizeAsPoint(destW, destH) : this.coordinateTransformer.mapSize(destW, destH);
         let x = t1.x;
         let y = t1.y;
@@ -5331,7 +5290,7 @@ var require_emfDrawer = __commonJS({
         }
         __wmfEmfRendererLog("  DIB drawn at:", x, y, w, h, "(source", dib.width, "x", dib.height + ")");
       }
-      // ImageData wrapping now lives in utils/bitmapSurface (wrapImageData)
+      // ImageData wrapping now lives in utils/surface (wrapImageData)
       processEmfBitBlt(data) {
         if (data.length < 92) return;
         const xDest = readLong(data, 16);
@@ -5496,8 +5455,8 @@ var require_emfDrawer = __commonJS({
       // BLT 无位图时的纯色填充（BLACKNESS/WHITENESS 或占位）
       _fillBltRect(x, y, w, h, color) {
         if (!color || color === "transparent" || color === "none") return;
-        const t1 = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-        const t2 = this.coordinateTransformer.transform(x + Math.abs(w), y + Math.abs(h), this.ctx.canvas.width, this.ctx.canvas.height);
+        const t1 = this.coordinateTransformer.transform(x, y);
+        const t2 = this.coordinateTransformer.transform(x + Math.abs(w), y + Math.abs(h));
         const rx = Math.min(t1.x, t2.x), ry = Math.min(t1.y, t2.y);
         const rw = Math.abs(t2.x - t1.x), rh = Math.abs(t2.y - t1.y);
         if (rw <= 0 || rh <= 0) return;
@@ -5523,7 +5482,7 @@ var require_emfDrawer = __commonJS({
         const y = readLong(data, 4);
         const color = readDword(data, 8);
         const hexColor = colorRefToHex(color);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(x, y);
         this.ctx.fillStyle = hexColor;
         this.ctx.fillRect(transformed.x, transformed.y, 1, 1);
         __wmfEmfRendererLog("EMF SetPixelV:", x, y, hexColor);
@@ -5569,8 +5528,8 @@ var require_emfDrawer = __commonJS({
         const top = readLong(data, 4);
         const right = readLong(data, 8);
         const bottom = readLong(data, 12);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
         this.ctx.beginPath();
         this.ctx.rect(
           transformedLeftTop.x,
@@ -5605,8 +5564,8 @@ var require_emfDrawer = __commonJS({
       _buildRgnPath(rects) {
         this.ctx.beginPath();
         for (const rc of rects) {
-          const lt = this.coordinateTransformer.transform(rc.l, rc.t, this.ctx.canvas.width, this.ctx.canvas.height);
-          const rb = this.coordinateTransformer.transform(rc.r, rc.b, this.ctx.canvas.width, this.ctx.canvas.height);
+          const lt = this.coordinateTransformer.transform(rc.l, rc.t);
+          const rb = this.coordinateTransformer.transform(rc.r, rc.b);
           this.ctx.rect(lt.x, lt.y, rb.x - lt.x, rb.y - lt.y);
         }
       }
@@ -5822,7 +5781,7 @@ var require_emfDrawer = __commonJS({
         const radius = readDword(data, 8);
         const startAngle = readDword(data, 12);
         const sweepAngle = readDword(data, 16);
-        const transformed = this.coordinateTransformer.transform(centerX, centerY, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(centerX, centerY);
         const startRad = startAngle * Math.PI / 180;
         const endRad = (startAngle + sweepAngle) * Math.PI / 180;
         this.ctx.beginPath();
@@ -5838,8 +5797,8 @@ var require_emfDrawer = __commonJS({
         const bottom = readLong(data, 12);
         const cornerWidth = readLong(data, 16);
         const cornerHeight = readLong(data, 20);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
         const width = transformedRightBottom.x - transformedLeftTop.x;
         const height = transformedRightBottom.y - transformedLeftTop.y;
         const rx = cornerWidth / 2;
@@ -5856,8 +5815,8 @@ var require_emfDrawer = __commonJS({
       // GDI 顺时针（AD_CLOCKWISE）= 画布 anticlockwise=false。
       // 几何计算见 utils/geometryUtils（与 WmfDrawer 共用同一实现）。
       _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {
-        const st = this.coordinateTransformer.transform(startX, startY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const en = this.coordinateTransformer.transform(endX, endY, this.ctx.canvas.width, this.ctx.canvas.height);
+        const st = this.coordinateTransformer.transform(startX, startY);
+        const en = this.coordinateTransformer.transform(endX, endY);
         return GeometryUtils.arcAngles(cx, cy, rx, ry, st, en, this.arcDirection !== 2);
       }
       // EMR_ARC / EMR_CHORD / EMR_PIE 的记录结构完全相同
@@ -5873,8 +5832,8 @@ var require_emfDrawer = __commonJS({
         const startY = readLong(data, 20);
         const endX = readLong(data, 24);
         const endY = readLong(data, 28);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
         const ellipse = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
         if (ellipse.rx === 0 || ellipse.ry === 0) return;
         const angles = this._calcArcAngles(ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry, startX, startY, endX, endY);
@@ -5955,8 +5914,8 @@ var require_emfDrawer = __commonJS({
         const startY = readLong(data, 20);
         const endX = readLong(data, 24);
         const endY = readLong(data, 28);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
         const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
         const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
         const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
@@ -5966,7 +5925,7 @@ var require_emfDrawer = __commonJS({
         const full = Math.abs(endAngle - startAngle) < 1e-6;
         const arcStart = { x: centerX + radiusX * Math.cos(startAngle), y: centerY + radiusY * Math.sin(startAngle) };
         const arcEnd = { x: centerX + radiusX * Math.cos(endAngle), y: centerY + radiusY * Math.sin(endAngle) };
-        const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y);
         this.ctx.beginPath();
         this.ctx.moveTo(from.x, from.y);
         this.ctx.lineTo(arcStart.x, arcStart.y);
@@ -5994,7 +5953,7 @@ var require_emfDrawer = __commonJS({
           const x = readLong(data, 20 + i * 8);
           const y = readLong(data, 24 + i * 8);
           const type = data[20 + count * 8 + i];
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const transformed = this.coordinateTransformer.transform(x, y);
           let closeFlag = (type & 1) !== 0;
           switch (type & 6) {
             case 2:
@@ -6006,7 +5965,7 @@ var require_emfDrawer = __commonJS({
               for (let k = 1; k <= 2; k++) {
                 const bx = readLong(data, 20 + (i + k) * 8);
                 const by = readLong(data, 24 + (i + k) * 8);
-                pts.push(this.coordinateTransformer.transform(bx, by, this.ctx.canvas.width, this.ctx.canvas.height));
+                pts.push(this.coordinateTransformer.transform(bx, by));
               }
               this.ctx.bezierCurveTo(pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
               closeFlag = (data[20 + count * 8 + i + 2] & 1) !== 0;
@@ -6088,7 +6047,7 @@ var require_emfDrawer = __commonJS({
           const x = readDword(data, i);
           const y = readDword(data, i + 4);
           if (Math.abs(x) < 5e4 && Math.abs(y) < 5e4) {
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            const transformed = this.coordinateTransformer.transform(x, y);
             points.push(transformed);
           }
         }
@@ -6113,6 +6072,79 @@ var require_emfDrawer = __commonJS({
   }
 });
 
+// src/utils/nestedMetafilePlayer.js
+var require_nestedMetafilePlayer = __commonJS({
+  "src/utils/nestedMetafilePlayer.js"(exports2, module2) {
+    "use strict";
+    var MetafileParser2 = require_metafileParser();
+    var EmfParser2 = require_emfParser();
+    var EmfPlusParser2 = require_emfPlusParser();
+    var SvgContext2 = require_svgContext();
+    var { FILE_TYPES, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
+    function createDrawer2(fileType, ctx) {
+      switch (fileType) {
+        case FILE_TYPES.EMF_PLUS:
+          return new (require_emfPlusDrawer())(ctx);
+        case FILE_TYPES.WMF:
+        case FILE_TYPES.PLACEABLE_WMF:
+          return new (require_wmfDrawer())(ctx);
+        case FILE_TYPES.EMF:
+        default:
+          return new (require_emfDrawer())(ctx);
+      }
+    }
+    function drawEmfBytes(bytes, ctx, options) {
+      const parsed = new EmfParser2(bytes).parse();
+      createDrawer2(FILE_TYPES.EMF, ctx).draw(parsed, options);
+      return parsed;
+    }
+    function parseEmfPlusStream(data) {
+      return new EmfPlusParser2(data).parseEmfPlusRecords(data);
+    }
+    function playEmfPlusRecords(drawer, records) {
+      for (const rec of records) {
+        drawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
+      }
+    }
+    function renderNestedToSvgNodes(bytes) {
+      try {
+        const parser = new MetafileParser2(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+        const result = parser.parse();
+        if (!result || result.error || !result.records) return null;
+        const subCtx = new SvgContext2();
+        createDrawer2(FILE_TYPES.EMF, subCtx).draw(result, {
+          viewWidth: DEFAULT_VIEW_WIDTH,
+          viewHeight: DEFAULT_VIEW_HEIGHT
+        });
+        const header = (
+          /** @type {{bounds?: {left: number, top: number, right: number, bottom: number}}} */
+          result.header
+        );
+        let W = DEFAULT_VIEW_WIDTH, H = DEFAULT_VIEW_HEIGHT;
+        if (header && header.bounds) {
+          W = Math.abs(header.bounds.right - header.bounds.left);
+          H = Math.abs(header.bounds.bottom - header.bounds.top);
+        }
+        return { nodes: subCtx.nodes, defs: subCtx.defs, width: W || 1, height: H || 1 };
+      } catch (e) {
+        __wmfEmfRendererLog(
+          "EMF+ nested EMF render failed:",
+          /** @type {Error} */
+          e.message
+        );
+        return null;
+      }
+    }
+    module2.exports = {
+      createDrawer: createDrawer2,
+      drawEmfBytes,
+      parseEmfPlusStream,
+      playEmfPlusRecords,
+      renderNestedToSvgNodes
+    };
+  }
+});
+
 // src/modules/drawers/wmfDrawer.js
 var require_wmfDrawer = __commonJS({
   "src/modules/drawers/wmfDrawer.js"(exports2, module2) {
@@ -6123,7 +6155,8 @@ var require_wmfDrawer = __commonJS({
     var { readWord, readShort, readDword, readLong, readString } = require_binaryReader();
     var { colorRefToHex } = require_colorUtils();
     var { dbcsLabelForCharset, decodeLocalBytes, printableAscii, mergeDbcsRuns } = require_textCodec();
-    var { resolveTempCanvas } = require_bitmapSurface();
+    var { applyCanvasSize, clearCanvas, applyDefaultPenBrush, resolveTempCanvas } = require_surface();
+    var NestedMetafilePlayer = require_nestedMetafilePlayer();
     var WMF_RECORD_HANDLERS = {
       // ========== 状态记录 (State Records) ==========
       259: "processSetMapMode",
@@ -6288,26 +6321,8 @@ var require_wmfDrawer = __commonJS({
             if (emfData && emfData.length > 0) {
               __wmfEmfRendererLog("EMF \u6570\u636E\u91CD\u7EC4\u5B8C\u6210\uFF0C\u5927\u5C0F:", (emfData.length / 1024).toFixed(2), "KB");
               try {
-                let EmfParser2, EmfDrawer2;
-                if (typeof require !== "undefined") {
-                  EmfParser2 = require_emfParser();
-                  EmfDrawer2 = require_emfDrawer();
-                } else if (typeof window !== "undefined") {
-                  const g = (
-                    /** @type {Record<string, any>} */
-                    /** @type {unknown} */
-                    window
-                  );
-                  EmfParser2 = g.EmfParser;
-                  EmfDrawer2 = g.EmfDrawer;
-                } else {
-                  throw new Error("Unsupported environment");
-                }
-                const emfParser = new EmfParser2(emfData);
-                const emfParsedData = emfParser.parse();
+                const emfParsedData = NestedMetafilePlayer.drawEmfBytes(emfData, this.ctx, options);
                 __wmfEmfRendererLog("EMF \u89E3\u6790\u5B8C\u6210\uFF0C\u8BB0\u5F55\u6570:", emfParsedData.records.length);
-                const emfDrawer = new EmfDrawer2(this.ctx);
-                emfDrawer.draw(emfParsedData, options);
                 this.emfPlusDetected = true;
                 this.emfPlusRecordCount = emfParsedData.records.length;
                 __wmfEmfRendererLog("\u2705 EMF+ Dual \u683C\u5F0F\u6E32\u67D3\u5B8C\u6210");
@@ -6761,7 +6776,7 @@ var require_wmfDrawer = __commonJS({
         if (data.length < 4) return;
         const y = readShort(data, 0);
         const x = readShort(data, 2);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(x, y);
         __wmfEmfRendererLog("MoveTo:", x, y, "->", transformed.x, transformed.y);
         this.currentPosX = x;
         this.currentPosY = y;
@@ -6771,20 +6786,18 @@ var require_wmfDrawer = __commonJS({
         if (data.length < 4) return;
         const y = readShort(data, 0);
         const x = readShort(data, 2);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(x, y);
         __wmfEmfRendererLog("LineTo:", x, y, "->", transformed.x, transformed.y);
         let startX, startY;
         if (this.hasValidPosition) {
           const startTransformed = this.coordinateTransformer.transform(
             this.currentPosX,
-            this.currentPosY,
-            this.ctx.canvas.width,
-            this.ctx.canvas.height
+            this.currentPosY
           );
           startX = startTransformed.x;
           startY = startTransformed.y;
         } else {
-          const startTransformed = this.coordinateTransformer.transform(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
+          const startTransformed = this.coordinateTransformer.transform(0, 0);
           startX = startTransformed.x;
           startY = startTransformed.y;
         }
@@ -6803,8 +6816,8 @@ var require_wmfDrawer = __commonJS({
         const right = readShort(data, 2);
         const top = readShort(data, 4);
         const left = readShort(data, 6);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
         __wmfEmfRendererLog("Rectangle:", left, top, right, bottom);
         this.ctx.fillRect(
           transformedLeftTop.x,
@@ -6824,8 +6837,8 @@ var require_wmfDrawer = __commonJS({
       // GDI 坐标 Y 轴向下，"逆时针" 在屏幕上即逆时针 = 画布 anticlockwise=true
       // 几何计算见 utils/geometryUtils（与 EmfDrawer 共用同一实现）。
       _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {
-        const st = this.coordinateTransformer.transform(startX, startY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const en = this.coordinateTransformer.transform(endX, endY, this.ctx.canvas.width, this.ctx.canvas.height);
+        const st = this.coordinateTransformer.transform(startX, startY);
+        const en = this.coordinateTransformer.transform(endX, endY);
         return GeometryUtils.arcAngles(cx, cy, rx, ry, st, en, this.arcDirection !== 2);
       }
       processEllipse(data) {
@@ -6835,8 +6848,8 @@ var require_wmfDrawer = __commonJS({
         const top = readShort(data, 4);
         const left = readShort(data, 6);
         __wmfEmfRendererLog("Ellipse:", left, top, right, bottom);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
         const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
         if (rx === 0 || ry === 0) return;
         this.ctx.beginPath();
@@ -6853,8 +6866,8 @@ var require_wmfDrawer = __commonJS({
         const cornerWidth = readWord(data, 8);
         const cornerHeight = readWord(data, 10);
         __wmfEmfRendererLog("RoundRect:", left, top, right, bottom, "corner:", cornerWidth, cornerHeight);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
         const x = Math.min(transformedLeftTop.x, transformedRightBottom.x);
         const y = Math.min(transformedLeftTop.y, transformedRightBottom.y);
         const w = Math.abs(transformedRightBottom.x - transformedLeftTop.x);
@@ -6902,8 +6915,8 @@ var require_wmfDrawer = __commonJS({
         const endY = readShort(data, 12);
         const endX = readShort(data, 14);
         __wmfEmfRendererLog(kind + ":", left, top, right, bottom, "start:", startX, startY, "end:", endX, endY);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
         const ellipse = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
         if (ellipse.rx === 0 || ellipse.ry === 0) return;
         const angles = this._calcArcAngles(ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry, startX, startY, endX, endY);
@@ -7022,14 +7035,14 @@ var require_wmfDrawer = __commonJS({
           if (tempCanvas) {
             const tempCtx = tempCanvas.getContext("2d");
             tempCtx.putImageData(imageData, 0, 0);
-            const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-            const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight, this.ctx.canvas.width, this.ctx.canvas.height);
+            const transformed1 = this.coordinateTransformer.transform(destX, destY);
+            const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight);
             const w = Math.abs(transformed2.x - transformed1.x);
             const h = Math.abs(transformed2.y - transformed1.y);
             __wmfEmfRendererLog("  Rendering DIB to:", transformed1.x, transformed1.y, w, h);
             this.ctx.drawImage(tempCanvas, transformed1.x, transformed1.y, w, h);
           } else {
-            const transformed = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
+            const transformed = this.coordinateTransformer.transform(destX, destY);
             this.ctx.putImageData(imageData, transformed.x, transformed.y);
           }
           return true;
@@ -7083,8 +7096,8 @@ var require_wmfDrawer = __commonJS({
       }
       // 位图解析失败时绘制占位矩形
       _drawDibPlaceholder(destX, destY, destWidth, destHeight) {
-        const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed1 = this.coordinateTransformer.transform(destX, destY);
+        const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight);
         const w = Math.abs(transformed2.x - transformed1.x);
         const h = Math.abs(transformed2.y - transformed1.y);
         if (w <= 0 || h <= 0) return;
@@ -7106,7 +7119,7 @@ var require_wmfDrawer = __commonJS({
         for (let i = 0; i < numPoints; i++) {
           const x = readShort(data, 2 + i * 4);
           const y = readShort(data, 4 + i * 4);
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const transformed = this.coordinateTransformer.transform(x, y);
           if (i < 3 || i === numPoints - 1) {
             __wmfEmfRendererLog(`  Point ${i}: logical (${x}, ${y}) -> canvas (${transformed.x.toFixed(2)}, ${transformed.y.toFixed(2)})`);
           }
@@ -7127,7 +7140,7 @@ var require_wmfDrawer = __commonJS({
         for (let i = 0; i < numPoints; i++) {
           const x = readShort(data, 2 + i * 4);
           const y = readShort(data, 4 + i * 4);
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const transformed = this.coordinateTransformer.transform(x, y);
           if (i === 0) {
             this.ctx.moveTo(transformed.x, transformed.y);
           } else {
@@ -7157,7 +7170,7 @@ var require_wmfDrawer = __commonJS({
           for (let j = 0; j < numPoints; j++) {
             const x = readShort(data, offset);
             const y = readShort(data, offset + 2);
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            const transformed = this.coordinateTransformer.transform(x, y);
             if (i === 0 && j < 3) {
               __wmfEmfRendererLog(`    Point ${j}: logical (${x}, ${y}) -> canvas (${transformed.x.toFixed(2)}, ${transformed.y.toFixed(2)})`);
             }
@@ -7185,15 +7198,15 @@ var require_wmfDrawer = __commonJS({
         let finalX;
         let finalY;
         if (this.textUpdateCp && this.hasValidPosition) {
-          const transformed = this.coordinateTransformer.transform(this.currentPosX, this.currentPosY, this.ctx.canvas.width, this.ctx.canvas.height);
+          const transformed = this.coordinateTransformer.transform(this.currentPosX, this.currentPosY);
           finalX = transformed.x;
           finalY = transformed.y;
         } else if (x === 0 && y === 0 && this.hasValidPosition) {
-          const transformed = this.coordinateTransformer.transform(this.currentPosX, this.currentPosY, this.ctx.canvas.width, this.ctx.canvas.height);
+          const transformed = this.coordinateTransformer.transform(this.currentPosX, this.currentPosY);
           finalX = transformed.x;
           finalY = transformed.y;
         } else {
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          const transformed = this.coordinateTransformer.transform(x, y);
           finalX = transformed.x;
           finalY = transformed.y;
         }
@@ -7268,9 +7281,7 @@ var require_wmfDrawer = __commonJS({
             const ch = drawChars[i];
             const transformed = this.coordinateTransformer.transform(
               logicalX + advance,
-              logicalY,
-              this.ctx.canvas.width,
-              this.ctx.canvas.height
+              logicalY
             );
             this.ctx.fillText(ch, transformed.x, transformed.y);
             advance += drawDx[i] || 0;
@@ -7283,9 +7294,7 @@ var require_wmfDrawer = __commonJS({
         } else {
           const transformed = this.coordinateTransformer.transform(
             logicalX,
-            logicalY,
-            this.ctx.canvas.width,
-            this.ctx.canvas.height
+            logicalY
           );
           this.ctx.fillText(text, transformed.x, transformed.y);
           if (this.textUpdateCp) {

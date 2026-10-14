@@ -5,7 +5,8 @@ const GeometryUtils = require('../../utils/geometryUtils');
 const { readWord, readShort, readDword, readLong, readString } = require('../../utils/binaryReader');
 const { colorRefToHex } = require('../../utils/colorUtils');
 const { dbcsLabelForCharset, decodeLocalBytes, printableAscii, mergeDbcsRuns } = require('../../utils/textCodec');
-const { resolveTempCanvas } = require('../../utils/bitmapSurface');
+const { applyCanvasSize, clearCanvas, applyDefaultPenBrush, resolveTempCanvas } = require('../../utils/surface');
+const NestedMetafilePlayer = require('../../utils/nestedMetafilePlayer');
 
 // WMF 记录分派表：functionId -> 处理方法名（processRecord 中调用 this[方法名](record.data)）。
 // 值为 null 表示已识别但无需处理/Canvas 不支持（与原 switch 的空分支等价，不打未知记录日志）。
@@ -155,31 +156,12 @@ class WmfDrawer extends BaseDrawer {
         if (emfData && emfData.length > 0) {
           console.log('EMF 数据重组完成，大小:', (emfData.length / 1024).toFixed(2), 'KB');
 
-          // 使用 EMF 解析器解析
+          // 内嵌 EMF 的解析与播放统一走 utils/nestedMetafilePlayer
+          // （视口尺寸透传，保持自适应与缩放一致）
           try {
-            // 兼容 Node.js 和浏览器环境
-            let EmfParser, EmfDrawer;
-            if (typeof require !== 'undefined') {
-              // Node.js 环境
-              EmfParser = require('../parsers/emfParser');
-              EmfDrawer = require('./emfDrawer');
-            } else if (typeof window !== 'undefined') {
-              // 浏览器环境 - 使用全局类（由 browser.js bundle 挂载）
-              const g = /** @type {Record<string, any>} */ (/** @type {unknown} */ (window));
-              EmfParser = g.EmfParser;
-              EmfDrawer = g.EmfDrawer;
-            } else {
-              throw new Error('Unsupported environment');
-            }
-
-            const emfParser = new EmfParser(emfData);
-            const emfParsedData = emfParser.parse();
+            const emfParsedData = NestedMetafilePlayer.drawEmfBytes(emfData, this.ctx, options);
 
             console.log('EMF 解析完成，记录数:', emfParsedData.records.length);
-
-            // 使用 EMF 绘制器渲染（透传视口尺寸，保持自适应与缩放一致）
-            const emfDrawer = new EmfDrawer(this.ctx);
-            emfDrawer.draw(emfParsedData, options);
 
             // 设置标志
             this.emfPlusDetected = true;
@@ -640,7 +622,7 @@ class WmfDrawer extends BaseDrawer {
     if (data.length < 4) return;
     const y = readShort(data, 0);
     const x = readShort(data, 2);
-    const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformed = this.coordinateTransformer.transform(x, y);
     console.log('MoveTo:', x, y, '->', transformed.x, transformed.y);
 
     // 根据 MS-WMF 2.3.5.17 META_MOVETO:
@@ -660,7 +642,7 @@ class WmfDrawer extends BaseDrawer {
     if (data.length < 4) return;
     const y = readShort(data, 0);
     const x = readShort(data, 2);
-    const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformed = this.coordinateTransformer.transform(x, y);
     console.log('LineTo:', x, y, '->', transformed.x, transformed.y);
 
     // 根据 MS-WMF 2.3.5.12 META_LINETO:
@@ -672,15 +654,13 @@ class WmfDrawer extends BaseDrawer {
       // 有有效位置，从当前位置（逻辑坐标）开始
       const startTransformed = this.coordinateTransformer.transform(
         this.currentPosX,
-        this.currentPosY,
-        this.ctx.canvas.width,
-        this.ctx.canvas.height
+        this.currentPosY
       );
       startX = startTransformed.x;
       startY = startTransformed.y;
     } else {
       // 没有有效位置，从(0,0)开始
-      const startTransformed = this.coordinateTransformer.transform(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
+      const startTransformed = this.coordinateTransformer.transform(0, 0);
       startX = startTransformed.x;
       startY = startTransformed.y;
     }
@@ -706,8 +686,8 @@ class WmfDrawer extends BaseDrawer {
     const right = readShort(data, 2);
     const top = readShort(data, 4);
     const left = readShort(data, 6);
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
     console.log('Rectangle:', left, top, right, bottom);
     this.ctx.fillRect(transformedLeftTop.x, transformedLeftTop.y,
       transformedRightBottom.x - transformedLeftTop.x,
@@ -722,8 +702,8 @@ class WmfDrawer extends BaseDrawer {
   // GDI 坐标 Y 轴向下，"逆时针" 在屏幕上即逆时针 = 画布 anticlockwise=true
   // 几何计算见 utils/geometryUtils（与 EmfDrawer 共用同一实现）。
   _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {
-    const st = this.coordinateTransformer.transform(startX, startY, this.ctx.canvas.width, this.ctx.canvas.height);
-    const en = this.coordinateTransformer.transform(endX, endY, this.ctx.canvas.width, this.ctx.canvas.height);
+    const st = this.coordinateTransformer.transform(startX, startY);
+    const en = this.coordinateTransformer.transform(endX, endY);
     return GeometryUtils.arcAngles(cx, cy, rx, ry, st, en, this.arcDirection !== 0x02);
   }
 
@@ -736,8 +716,8 @@ class WmfDrawer extends BaseDrawer {
     const left = readShort(data, 6);
     console.log('Ellipse:', left, top, right, bottom);
 
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
     const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
     if (rx === 0 || ry === 0) return;
 
@@ -758,8 +738,8 @@ class WmfDrawer extends BaseDrawer {
     const cornerHeight = readWord(data, 10); // 圆角椭圆的全高
     console.log('RoundRect:', left, top, right, bottom, 'corner:', cornerWidth, cornerHeight);
 
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
     const x = Math.min(transformedLeftTop.x, transformedRightBottom.x);
     const y = Math.min(transformedLeftTop.y, transformedRightBottom.y);
     const w = Math.abs(transformedRightBottom.x - transformedLeftTop.x);
@@ -814,8 +794,8 @@ class WmfDrawer extends BaseDrawer {
     const endX = readShort(data, 14);
     console.log(kind + ':', left, top, right, bottom, 'start:', startX, startY, 'end:', endX, endY);
 
-    const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformedLeftTop = this.coordinateTransformer.transform(left, top);
+    const transformedRightBottom = this.coordinateTransformer.transform(right, bottom);
     const ellipse = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
     if (ellipse.rx === 0 || ellipse.ry === 0) return;
 
@@ -941,20 +921,20 @@ class WmfDrawer extends BaseDrawer {
         }
       }
 
-      // Offscreen canvas (host detection now lives in utils/bitmapSurface)
+      // Offscreen canvas (host detection now lives in utils/surface)
       const tempCanvas = resolveTempCanvas(this.ctx, biWidth, absHeight);
 
       if (tempCanvas) {
         const tempCtx = tempCanvas.getContext('2d');
         tempCtx.putImageData(imageData, 0, 0);
-        const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed1 = this.coordinateTransformer.transform(destX, destY);
+        const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight);
         const w = Math.abs(transformed2.x - transformed1.x);
         const h = Math.abs(transformed2.y - transformed1.y);
         console.log('  Rendering DIB to:', transformed1.x, transformed1.y, w, h);
         this.ctx.drawImage(tempCanvas, transformed1.x, transformed1.y, w, h);
       } else {
-        const transformed = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(destX, destY);
         this.ctx.putImageData(imageData, transformed.x, transformed.y);
       }
       return true;
@@ -1016,8 +996,8 @@ class WmfDrawer extends BaseDrawer {
 
   // 位图解析失败时绘制占位矩形
   _drawDibPlaceholder(destX, destY, destWidth, destHeight) {
-    const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-    const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight, this.ctx.canvas.width, this.ctx.canvas.height);
+    const transformed1 = this.coordinateTransformer.transform(destX, destY);
+    const transformed2 = this.coordinateTransformer.transform(destX + destWidth, destY + destHeight);
     const w = Math.abs(transformed2.x - transformed1.x);
     const h = Math.abs(transformed2.y - transformed1.y);
     if (w <= 0 || h <= 0) return;
@@ -1042,7 +1022,7 @@ class WmfDrawer extends BaseDrawer {
     for (let i = 0; i < numPoints; i++) {
       const x = readShort(data, 2 + i * 4);
       const y = readShort(data, 4 + i * 4);
-      const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const transformed = this.coordinateTransformer.transform(x, y);
 
       if (i < 3 || i === numPoints - 1) {
         console.log(`  Point ${i}: logical (${x}, ${y}) -> canvas (${transformed.x.toFixed(2)}, ${transformed.y.toFixed(2)})`);
@@ -1068,7 +1048,7 @@ class WmfDrawer extends BaseDrawer {
     for (let i = 0; i < numPoints; i++) {
       const x = readShort(data, 2 + i * 4);
       const y = readShort(data, 4 + i * 4);
-      const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const transformed = this.coordinateTransformer.transform(x, y);
 
       if (i === 0) {
         this.ctx.moveTo(transformed.x, transformed.y);
@@ -1107,7 +1087,7 @@ class WmfDrawer extends BaseDrawer {
       for (let j = 0; j < numPoints; j++) {
         const x = readShort(data, offset);
         const y = readShort(data, offset + 2);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformed = this.coordinateTransformer.transform(x, y);
 
         if (i === 0 && j < 3) {
           console.log(`    Point ${j}: logical (${x}, ${y}) -> canvas (${transformed.x.toFixed(2)}, ${transformed.y.toFixed(2)})`);
@@ -1142,16 +1122,16 @@ class WmfDrawer extends BaseDrawer {
     let finalX;
     let finalY;
     if (this.textUpdateCp && this.hasValidPosition) {
-      const transformed = this.coordinateTransformer.transform(this.currentPosX, this.currentPosY, this.ctx.canvas.width, this.ctx.canvas.height);
+      const transformed = this.coordinateTransformer.transform(this.currentPosX, this.currentPosY);
       finalX = transformed.x;
       finalY = transformed.y;
     } else if (x === 0 && y === 0 && this.hasValidPosition) {
       // 兼容旧文件：坐标为 0 时使用当前位置
-      const transformed = this.coordinateTransformer.transform(this.currentPosX, this.currentPosY, this.ctx.canvas.width, this.ctx.canvas.height);
+      const transformed = this.coordinateTransformer.transform(this.currentPosX, this.currentPosY);
       finalX = transformed.x;
       finalY = transformed.y;
     } else {
-      const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+      const transformed = this.coordinateTransformer.transform(x, y);
       finalX = transformed.x;
       finalY = transformed.y;
     }
@@ -1261,9 +1241,7 @@ class WmfDrawer extends BaseDrawer {
         const ch = drawChars[i];
         const transformed = this.coordinateTransformer.transform(
           logicalX + advance,
-          logicalY,
-          this.ctx.canvas.width,
-          this.ctx.canvas.height
+          logicalY
         );
         this.ctx.fillText(ch, transformed.x, transformed.y);
         advance += drawDx[i] || 0;
@@ -1277,9 +1255,7 @@ class WmfDrawer extends BaseDrawer {
     } else {
       const transformed = this.coordinateTransformer.transform(
         logicalX,
-        logicalY,
-        this.ctx.canvas.width,
-        this.ctx.canvas.height
+        logicalY
       );
       this.ctx.fillText(text, transformed.x, transformed.y);
 

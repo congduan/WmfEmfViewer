@@ -353,6 +353,8 @@ class CoordinateTransformer {
    * @param {number} x
    * @param {number} y
    * @param {number} [canvasWidth] 预留参数（兼容旧调用签名，未参与计算）
+   *        全部调用方已改为只传 x/y（原先传 this.ctx.canvas.width/height，
+   *        该值是 DPR 缩放后的物理尺寸、且本方法并不使用），保留形参仅为外部兼容
    * @param {number} [canvasHeight] 预留参数（兼容旧调用签名，未参与计算）
    * @returns {Point}
    */
