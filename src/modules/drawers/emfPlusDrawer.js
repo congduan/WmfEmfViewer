@@ -31,15 +31,15 @@ const EMF_PLUS_RECORD_HANDLERS = {
   0x400E: 'processEmfPlusFillEllipse',       // EmfPlusFillEllipse
   0x400F: 'processEmfPlusDrawEllipse',       // EmfPlusDrawEllipse
   0x4010: 'processEmfPlusFillPie',           // EmfPlusFillPie
-  0x4011: null,           // EmfPlusDrawPie
-  0x4012: null,           // EmfPlusDrawArc
-  0x4013: null,        // EmfPlusFillRegion
+  0x4011: 'processEmfPlusDrawPie',           // EmfPlusDrawPie
+  0x4012: 'processEmfPlusDrawArc',           // EmfPlusDrawArc
+  0x4013: null,                              // EmfPlusFillRegion（Region 对象未解析，见 processEmfPlusObject 的 U_OT_Region 分支）
   0x4014: 'processEmfPlusFillPath',          // EmfPlusFillPath
   0x4015: 'processEmfPlusDrawPath',          // EmfPlusDrawPath
-  0x4016: null,   // EmfPlusFillClosedCurve
-  0x4017: null,   // EmfPlusDrawClosedCurve
-  0x4018: null,         // EmfPlusDrawCurve
-  0x4019: null,       // EmfPlusDrawBeziers
+  0x4016: 'processEmfPlusFillClosedCurve',   // EmfPlusFillClosedCurve
+  0x4017: 'processEmfPlusDrawClosedCurve',   // EmfPlusDrawClosedCurve
+  0x4018: 'processEmfPlusDrawCurve',         // EmfPlusDrawCurve
+  0x4019: 'processEmfPlusDrawBeziers',       // EmfPlusDrawBeziers
 
   // ========== 图像/文本绘制 ==========
   0x401A: 'processEmfPlusDrawImage',         // EmfPlusDrawImage
@@ -664,6 +664,184 @@ class EmfPlusDrawer {
     this.ctx.closePath();
     this.ctx.fill();
     console.log('EMF+ FillPie');
+  }
+
+  // ---- Shared point/spline helpers for the curve records below ----
+
+  // Decode Count points starting at `offset` and map them to canvas space.
+  // Compressed points (flags 0x4000) follow the same convention as
+  // _emfPlusReadPointX/Y, which is what the already-implemented DrawImagePoints
+  // path uses. No corpus sample exercises the compressed case for these records.
+  _emfPlusReadPoints(flags, data, offset, count) {
+    const pts = [];
+    const stride = (flags & 0x4000) ? 4 : 8;
+    for (let i = 0; i < count; i++) {
+      const o = offset + i * stride;
+      if (o + stride > data.length) break;
+      pts.push(this._emfPlusMapPoint(
+        this._emfPlusReadPointX(flags, data, o),
+        this._emfPlusReadPointY(flags, data, o)
+      ));
+    }
+    return pts;
+  }
+
+  // Cardinal spline -> cubic Beziers, written into the current path.
+  // Tension uses GDI+ semantics: 0 draws straight lines, 1 is the most crooked
+  // (GDI+ documents the range 0..1, values outside are clamped).
+  // Control points are computed after mapping, which is equivalent for affine
+  // transforms because they are linear combinations of the input points.
+  _emfPlusTraceSpline(points, tension, closed) {
+    const ctx = this.ctx;
+    const n = points.length;
+    if (n === 0) return false;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    const t = Math.max(0, Math.min(1, Number.isFinite(tension) ? tension : 0)) / 3;
+    if (n < 3 || t === 0) {
+      for (let i = 1; i < n; i++) ctx.lineTo(points[i].x, points[i].y);
+      if (closed) ctx.closePath();
+      return true;
+    }
+    const at = i => points[closed ? ((i % n) + n) % n : Math.max(0, Math.min(n - 1, i))];
+    const segments = closed ? n : n - 1;
+    for (let i = 0; i < segments; i++) {
+      const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+      ctx.bezierCurveTo(
+        p1.x + (p2.x - p0.x) * t, p1.y + (p2.y - p0.y) * t,
+        p2.x - (p3.x - p1.x) * t, p2.y - (p3.y - p1.y) * t,
+        p2.x, p2.y
+      );
+    }
+    if (closed) ctx.closePath();
+    return true;
+  }
+
+  // EmfPlusDrawPie (0x4011, MS-EMFPLUS 2.3.4.4).
+  // PenId is in the low byte of flags; layout is the same as EmfPlusFillPie minus
+  // the brush: StartAngle(4f) + SweepAngle(4f) + RectF(16). Angles are degrees,
+  // clockwise from the 3 o'clock direction.
+  processEmfPlusDrawPie(flags, data) {
+    if (data.length < 24) return;
+    const start = readFloat32(data, 0);
+    const sweep = readFloat32(data, 4);
+    const x = readFloat32(data, 8), y = readFloat32(data, 12);
+    const w = readFloat32(data, 16), h = readFloat32(data, 20);
+    if (w === 0 || h === 0 || sweep === 0) return;
+    const pen = this._emfPlusResolvePen(flags & 0xFF);
+    const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(
+      this._emfPlusMapPoint(x, y),
+      this._emfPlusMapPoint(x + w, y + h)
+    );
+    if (rx === 0 || ry === 0) return;
+    this.ctx.strokeStyle = pen.color;
+    this.ctx.lineWidth = pen.width;
+    this.ctx.beginPath();
+    this.ctx.moveTo(cx, cy);
+    this.ctx.ellipse(cx, cy, rx, ry, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
+    this.ctx.closePath();
+    this.ctx.stroke();
+    console.log('EMF+ DrawPie');
+  }
+
+  // EmfPlusDrawArc (0x4012, MS-EMFPLUS 2.3.4.3): identical to EmfPlusDrawPie but
+  // draws the arc only (no lines to the centre, no closing segment).
+  processEmfPlusDrawArc(flags, data) {
+    if (data.length < 24) return;
+    const start = readFloat32(data, 0);
+    const sweep = readFloat32(data, 4);
+    const x = readFloat32(data, 8), y = readFloat32(data, 12);
+    const w = readFloat32(data, 16), h = readFloat32(data, 20);
+    if (w === 0 || h === 0 || sweep === 0) return;
+    const pen = this._emfPlusResolvePen(flags & 0xFF);
+    const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(
+      this._emfPlusMapPoint(x, y),
+      this._emfPlusMapPoint(x + w, y + h)
+    );
+    if (rx === 0 || ry === 0) return;
+    this.ctx.strokeStyle = pen.color;
+    this.ctx.lineWidth = pen.width;
+    this.ctx.beginPath();
+    this.ctx.ellipse(cx, cy, rx, ry, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
+    this.ctx.stroke();
+    console.log('EMF+ DrawArc');
+  }
+
+  // EmfPlusFillClosedCurve (0x4016, MS-EMFPLUS 2.3.4.11).
+  // Layout: BrushId(4) + Tension(4f) + Count(4) + Points(Count x 4/8 bytes).
+  processEmfPlusFillClosedCurve(flags, data) {
+    if (data.length < 12) return;
+    const brushId = readDword(data, 0);
+    const color = this._emfPlusResolveBrush(flags, brushId);
+    if (!color) return;
+    const tension = readFloat32(data, 4);
+    const count = readDword(data, 8);
+    if (count < 2 || count > 65536) return;
+    const pts = this._emfPlusReadPoints(flags, data, 12, count);
+    if (pts.length < 2) return;
+    this.ctx.fillStyle = color;
+    if (this._emfPlusTraceSpline(pts, tension, true)) this.ctx.fill();
+    console.log('EMF+ FillClosedCurve:', pts.length, '个点');
+  }
+
+  // EmfPlusDrawClosedCurve (0x4017, MS-EMFPLUS 2.3.4.10).
+  // PenId is in the low byte of flags; layout: Tension(4f) + Count(4) + Points.
+  processEmfPlusDrawClosedCurve(flags, data) {
+    if (data.length < 8) return;
+    const tension = readFloat32(data, 0);
+    const count = readDword(data, 4);
+    if (count < 2 || count > 65536) return;
+    const pts = this._emfPlusReadPoints(flags, data, 8, count);
+    if (pts.length < 2) return;
+    const pen = this._emfPlusResolvePen(flags & 0xFF);
+    this.ctx.strokeStyle = pen.color;
+    this.ctx.lineWidth = pen.width;
+    if (this._emfPlusTraceSpline(pts, tension, true)) this.ctx.stroke();
+    console.log('EMF+ DrawClosedCurve:', pts.length, '个点');
+  }
+
+  // EmfPlusDrawCurve (0x4018, MS-EMFPLUS 2.3.4.6).
+  // PenId is in the low byte of flags;
+  // layout: Tension(4f) + Offset(4) + Count(4) + NumberOfPoints(4) + Points.
+  // Offset (index of the first point) is honoured; the whole remaining run is
+  // drawn as one open spline.
+  processEmfPlusDrawCurve(flags, data) {
+    if (data.length < 16) return;
+    const tension = readFloat32(data, 0);
+    const offset = readDword(data, 4);
+    const total = readDword(data, 12);
+    if (total < 2 || total > 65536) return;
+    const all = this._emfPlusReadPoints(flags, data, 16, total);
+    const start = Math.max(0, Math.min(offset, all.length - 2));
+    const pts = all.slice(start);
+    if (pts.length < 2) return;
+    const pen = this._emfPlusResolvePen(flags & 0xFF);
+    this.ctx.strokeStyle = pen.color;
+    this.ctx.lineWidth = pen.width;
+    if (this._emfPlusTraceSpline(pts, tension, false)) this.ctx.stroke();
+    console.log('EMF+ DrawCurve:', pts.length, '个点');
+  }
+
+  // EmfPlusDrawBeziers (0x4019, MS-EMFPLUS 2.3.4.5).
+  // PenId is in the low byte of flags; layout: Count(4) + Points.
+  // Points come in groups of three control points continuing from the current
+  // position (first point is the start point).
+  processEmfPlusDrawBeziers(flags, data) {
+    if (data.length < 4) return;
+    const count = readDword(data, 0);
+    if (count < 4 || count > 65536) return;
+    const pts = this._emfPlusReadPoints(flags, data, 4, count);
+    if (pts.length < 4) return;
+    const pen = this._emfPlusResolvePen(flags & 0xFF);
+    this.ctx.strokeStyle = pen.color;
+    this.ctx.lineWidth = pen.width;
+    this.ctx.beginPath();
+    this.ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i + 2 < pts.length; i += 3) {
+      this.ctx.bezierCurveTo(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, pts[i + 2].x, pts[i + 2].y);
+    }
+    this.ctx.stroke();
+    console.log('EMF+ DrawBeziers:', pts.length, '个点');
   }
 
   // 补充缺失的处理方法
