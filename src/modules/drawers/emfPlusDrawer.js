@@ -2,6 +2,9 @@
 const CoordinateTransformer = require('../../utils/coordinateTransformer');
 const GdiObjectManager = require('../../utils/gdiObjectManager');
 const GeometryUtils = require('../../utils/geometryUtils');
+const { readFloat32, readDword, readShort } = require('../../utils/binaryReader');
+const { argbToCss, readArgb } = require('../../utils/colorUtils');
+const { decodeUtf16Le, readUtf16Name } = require('../../utils/textCodec');
 const { DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require('../../utils/constants');
 
 // EMF+ 记录分派表：记录类型 -> 处理方法名（processEmfPlusRecordType 中调用 this[方法名](flags, data)）。
@@ -11,8 +14,8 @@ const EMF_PLUS_RECORD_HANDLERS = {
   // ========== 全局/控制记录 ==========
   0x4001: 'processEmfPlusHeader',            // EmfPlusHeader
   0x4002: null,                              // EmfPlusEndOfFile
-  0x4003: 'processEmfPlusComment',           // EmfPlusComment
-  0x4004: 'processEmfPlusGetDC',             // EmfPlusGetDC
+  0x4003: null,           // EmfPlusComment
+  0x4004: null,             // EmfPlusGetDC
 
   // ========== 对象管理 ==========
   0x4008: 'processEmfPlusObject',            // EmfPlusObject
@@ -26,58 +29,58 @@ const EMF_PLUS_RECORD_HANDLERS = {
   0x400E: 'processEmfPlusFillEllipse',       // EmfPlusFillEllipse
   0x400F: 'processEmfPlusDrawEllipse',       // EmfPlusDrawEllipse
   0x4010: 'processEmfPlusFillPie',           // EmfPlusFillPie
-  0x4011: 'processEmfPlusDrawPie',           // EmfPlusDrawPie
-  0x4012: 'processEmfPlusDrawArc',           // EmfPlusDrawArc
-  0x4013: 'processEmfPlusFillRegion',        // EmfPlusFillRegion
+  0x4011: null,           // EmfPlusDrawPie
+  0x4012: null,           // EmfPlusDrawArc
+  0x4013: null,        // EmfPlusFillRegion
   0x4014: 'processEmfPlusFillPath',          // EmfPlusFillPath
   0x4015: 'processEmfPlusDrawPath',          // EmfPlusDrawPath
-  0x4016: 'processEmfPlusFillClosedCurve',   // EmfPlusFillClosedCurve
-  0x4017: 'processEmfPlusDrawClosedCurve',   // EmfPlusDrawClosedCurve
-  0x4018: 'processEmfPlusDrawCurve',         // EmfPlusDrawCurve
-  0x4019: 'processEmfPlusDrawBeziers',       // EmfPlusDrawBeziers
+  0x4016: null,   // EmfPlusFillClosedCurve
+  0x4017: null,   // EmfPlusDrawClosedCurve
+  0x4018: null,         // EmfPlusDrawCurve
+  0x4019: null,       // EmfPlusDrawBeziers
 
   // ========== 图像/文本绘制 ==========
   0x401A: 'processEmfPlusDrawImage',         // EmfPlusDrawImage
   0x401B: 'processEmfPlusDrawImagePoints',   // EmfPlusDrawImagePoints
   0x401C: 'processEmfPlusDrawString',        // EmfPlusDrawString
-  0x4036: 'processEmfPlusDrawDriverString',  // EmfPlusDrawDriverString
+  0x4036: null,  // EmfPlusDrawDriverString
 
   // ========== 状态/渲染参数记录 ==========
-  0x401D: 'processEmfPlusSetRenderingOrigin',   // EmfPlusSetRenderingOrigin
-  0x401E: 'processEmfPlusSetAntiAliasMode',     // EmfPlusSetAntiAliasMode
-  0x401F: 'processEmfPlusSetTextRenderingHint', // EmfPlusSetTextRenderingHint
-  0x4020: 'processEmfPlusSetTextContrast',      // EmfPlusSetTextContrast
-  0x4021: 'processEmfPlusSetInterpolationMode', // EmfPlusSetInterpolationMode
-  0x4022: 'processEmfPlusSetPixelOffsetMode',   // EmfPlusSetPixelOffsetMode
-  0x4023: 'processEmfPlusSetCompositingMode',   // EmfPlusSetCompositingMode
-  0x4024: 'processEmfPlusSetCompositingQuality', // EmfPlusSetCompositingQuality
+  0x401D: null,   // EmfPlusSetRenderingOrigin
+  0x401E: null,     // EmfPlusSetAntiAliasMode
+  0x401F: null, // EmfPlusSetTextRenderingHint
+  0x4020: null,      // EmfPlusSetTextContrast
+  0x4021: null, // EmfPlusSetInterpolationMode
+  0x4022: null,   // EmfPlusSetPixelOffsetMode
+  0x4023: null,   // EmfPlusSetCompositingMode
+  0x4024: null, // EmfPlusSetCompositingQuality
 
   // ========== 图形状态容器/变换 ==========
-  0x4025: 'processEmfPlusSave',                  // EmfPlusSave
-  0x4026: 'processEmfPlusRestore',               // EmfPlusRestore
-  0x4027: 'processEmfPlusBeginContainer',        // EmfPlusBeginContainer
-  0x4028: 'processEmfPlusBeginContainerNoParams', // EmfPlusBeginContainerNoParams
-  0x4029: 'processEmfPlusEndContainer',          // EmfPlusEndContainer
-  0x402A: 'processEmfPlusSetWorldTransform',     // EmfPlusSetWorldTransform
-  0x402B: 'processEmfPlusResetWorldTransform',   // EmfPlusResetWorldTransform
-  0x402C: 'processEmfPlusMultiplyWorldTransform', // EmfPlusMultiplyWorldTransform
-  0x402D: 'processEmfPlusTranslateWorldTransform', // EmfPlusTranslateWorldTransform
-  0x402E: 'processEmfPlusScaleWorldTransform',   // EmfPlusScaleWorldTransform
-  0x402F: 'processEmfPlusRotateWorldTransform',  // EmfPlusRotateWorldTransform
-  0x4030: 'processEmfPlusSetPageTransform',      // EmfPlusSetPageTransform
+  0x4025: null,                  // EmfPlusSave
+  0x4026: null,               // EmfPlusRestore
+  0x4027: null,        // EmfPlusBeginContainer
+  0x4028: null, // EmfPlusBeginContainerNoParams
+  0x4029: null,          // EmfPlusEndContainer
+  0x402A: null,     // EmfPlusSetWorldTransform
+  0x402B: null,   // EmfPlusResetWorldTransform
+  0x402C: null, // EmfPlusMultiplyWorldTransform
+  0x402D: null, // EmfPlusTranslateWorldTransform
+  0x402E: null,   // EmfPlusScaleWorldTransform
+  0x402F: null,  // EmfPlusRotateWorldTransform
+  0x4030: null,      // EmfPlusSetPageTransform
 
   // ========== 裁剪 ==========
-  0x4031: 'processEmfPlusResetClip',          // EmfPlusResetClip
-  0x4032: 'processEmfPlusSetClipRect',        // EmfPlusSetClipRect
-  0x4033: 'processEmfPlusSetClipPath',        // EmfPlusSetClipPath
-  0x4034: 'processEmfPlusSetClipRegion',      // EmfPlusSetClipRegion
-  0x4035: 'processEmfPlusOffsetClip',         // EmfPlusOffsetClip
+  0x4031: null,          // EmfPlusResetClip
+  0x4032: null,        // EmfPlusSetClipRect
+  0x4033: null,        // EmfPlusSetClipPath
+  0x4034: null,      // EmfPlusSetClipRegion
+  0x4035: null,         // EmfPlusOffsetClip
 
   // ========== 其他 ==========
-  0x4037: 'processEmfPlusStrokeFillPath',       // EmfPlusStrokeFillPath (非标准)
-  0x4038: 'processEmfPlusSerializableObject',   // EmfPlusSerializableObject
-  0x4039: 'processEmfPlusSetTSGraphics',        // EmfPlusSetTSGraphics
-  0x403A: 'processEmfPlusSetTSClip'             // EmfPlusSetTSClip
+  0x4037: null,       // EmfPlusStrokeFillPath (非标准)
+  0x4038: null,   // EmfPlusSerializableObject
+  0x4039: null,        // EmfPlusSetTSGraphics
+  0x403A: null             // EmfPlusSetTSClip
 };
 
 class EmfPlusDrawer {
@@ -96,48 +99,22 @@ class EmfPlusDrawer {
   }
 
   // ---- EMF+ 辅助方法 ----
-  // 读取小端 float32
-  _emfPlusReadFloat(data, offset) {
-    if (offset + 4 > data.length) return 0;
-    const buf = new DataView(data.buffer, data.byteOffset + offset, 4);
-    return buf.getFloat32(0, true);
-  }
-
-  // 32 位 ARGB -> CSS 颜色（支持透明度）
-  _emfPlusArgbToColor(argb) {
-    const a = (argb >>> 24) & 0xFF;
-    const r = (argb >>> 16) & 0xFF;
-    const g = (argb >>> 8) & 0xFF;
-    const b = argb & 0xFF;
-    if (a === 0xFF) {
-      return '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
-    }
-    return `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(3)})`;
-  }
-
-  // 读取 32 位 ARGB（无符号）
-  _emfPlusReadArgb(data, offset) {
-    if (offset + 4 > data.length) return 0xFFFFFFFF;
-    return (data[offset] & 0xFF) |
-      ((data[offset + 1] & 0xFF) << 8) |
-      ((data[offset + 2] & 0xFF) << 16) |
-      ((data[offset + 3] & 0xFF) << 24);
-  }
+  // float32 reading and ARGB color conversion now live in utils/binaryReader and utils/colorUtils
 
   // 启发式：提取渐变刷（Linear/PathGradient/Hatch）的主色。
   // GDI+ 写出的这类刷子里 StartColor/EndColor（或 ForeColor/BackColor）总是相邻的两个
   // alpha=0xFF 的 dword（实测 Excel/Office 产出均如此），故优先找相邻对，取前者作主色；
   // 找不到相邻对时退化为首个 alpha=0xFF 的 dword。
   _emfPlusFirstOpaqueArgb(data, offset) {
-    const argb = o => (o + 4 <= data.length ? this._emfPlusReadArgb(data, o) >>> 0 : 0);
+    const argb = o => (o + 4 <= data.length ? readArgb(data, o) >>> 0 : 0);
     const opaque = v => ((v >>> 24) & 0xFF) === 0xFF && (v & 0x00FFFFFF) !== 0;
     for (let o = offset; o + 8 <= data.length; o += 4) {
       const v1 = argb(o), v2 = argb(o + 4);
-      if (opaque(v1) && opaque(v2)) return this._emfPlusArgbToColor(v1);
+      if (opaque(v1) && opaque(v2)) return argbToCss(v1);
     }
     for (let o = offset; o + 4 <= data.length; o += 4) {
       const v = argb(o);
-      if (opaque(v)) return this._emfPlusArgbToColor(v);
+      if (opaque(v)) return argbToCss(v);
     }
     return null;
   }
@@ -148,7 +125,7 @@ class EmfPlusDrawer {
   //   非 solid 模式下 BrushId > 63 时按 ARGB 颜色处理（对象表索引只有 0-63）。
   _emfPlusResolveBrush(flags, brushId, data, offset) {
     if (flags & 0x8000) {
-      return this._emfPlusArgbToColor(brushId);
+      return argbToCss(brushId);
     }
     const obj = this.emfPlusObjects[brushId >>> 0];
     if (obj && obj.type === 'solidBrush') {
@@ -156,7 +133,7 @@ class EmfPlusDrawer {
     }
     // 兜底（容错）：BrushId 超出对象表范围则视为 ARGB 颜色直传
     if (brushId > 63 || brushId >= 0x01000000) {
-      return this._emfPlusArgbToColor(brushId);
+      return argbToCss(brushId);
     }
     return '#000000';
   }
@@ -205,8 +182,8 @@ class EmfPlusDrawer {
         y = (data[offset + 2] & 0xFF) | ((data[offset + 3] & 0xFF) << 8);
         if (y & 0x8000) y |= 0xFFFF0000;
       } else {
-        x = this._emfPlusReadFloat(data, offset);
-        y = this._emfPlusReadFloat(data, offset + 4);
+        x = readFloat32(data, offset);
+        y = readFloat32(data, offset + 4);
       }
       points.push({ x, y });
       offset += stride;
@@ -385,17 +362,12 @@ class EmfPlusDrawer {
     };
   }
 
-  // 处理EMF+绘制线记录
-  processEmfPlusDrawLine(flags, data) {
-    console.log('Processing EmfPlusDrawLine');
-  }
-
   // 处理EMF+填充多边形记录：data = BrushId(4) + Count(4) + PointF[Count](8 each)
   // （BrushId 在 data 首字段）
   processEmfPlusFillPolygon(flags, data) {
     if (data.length < 8) return;
-    const brushId = this._emfPlusReadInt32(data, 0);
-    const count = this._emfPlusReadInt32(data, 4);
+    const brushId = readDword(data, 0);
+    const count = readDword(data, 4);
     if (count < 1 || count > 65536) return;
     const color = this._emfPlusResolveBrush(flags, brushId);
     if (!color) return;
@@ -404,8 +376,8 @@ class EmfPlusDrawer {
     for (let i = 0; i < count; i++) {
       const o = 8 + i * 8;
       if (o + 8 > data.length) break;
-      const x = this._emfPlusReadFloat(data, o);
-      const y = this._emfPlusReadFloat(data, o + 4);
+      const x = readFloat32(data, o);
+      const y = readFloat32(data, o + 4);
       const p = this._emfPlusMapPoint(x, y);
       if (i === 0) {
         this.ctx.moveTo(p.x, p.y);
@@ -418,21 +390,6 @@ class EmfPlusDrawer {
     console.log('EMF+ FillPolygon:', count, '个点');
   }
 
-  // 处理EMF+绘制曲线记录
-  processEmfPlusDrawCurve(flags, data) {
-    console.log('Processing EmfPlusDrawCurve');
-  }
-
-  // 处理EMF+填充闭合曲线记录
-  processEmfPlusFillClosedCurve(flags, data) {
-    console.log('Processing EmfPlusFillClosedCurve');
-  }
-
-  // 处理EMF+绘制闭合曲线记录
-  processEmfPlusDrawClosedCurve(flags, data) {
-    console.log('Processing EmfPlusDrawClosedCurve');
-  }
-
   // EmfPlusFillPath (0x4014, MS-EMFPLUS 2.3.4.17)：flags[7..0]=pathId, flags[15]=S(ARGB 直传), data[0..3]=brushId/ARGB
   processEmfPlusFillPath(flags, data) {
     if (data.length < 4) return;
@@ -441,7 +398,7 @@ class EmfPlusDrawer {
     const brushId = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
     const path = this.emfPlusObjects[pathId];
     if (!path || path.type !== 'path') return;
-    const color = solid ? this._emfPlusArgbToColor(brushId) : this._emfPlusResolveBrush(0, brushId);
+    const color = solid ? argbToCss(brushId) : this._emfPlusResolveBrush(0, brushId);
     if (!color) return;
     this.ctx.fillStyle = color;
     this._emfPlusTracePath(path);
@@ -458,7 +415,7 @@ class EmfPlusDrawer {
     if (!path || path.type !== 'path') return;
     let color = '#000000', width = 1;
     if (solid) {
-      color = this._emfPlusArgbToColor(penId);
+      color = argbToCss(penId);
     } else {
       const pen = this.emfPlusObjects[penId];
       if (pen && pen.type === 'pen') { color = pen.color; width = pen.width || 1; }
@@ -476,23 +433,23 @@ class EmfPlusDrawer {
   processEmfPlusDrawImage(flags, data) {
     const img = this.emfPlusObjects[flags & 0xFF];
     if (!img || data.length < 24) return;
-    const sx = this._emfPlusReadFloat(data, 8);
-    const sy = this._emfPlusReadFloat(data, 12);
-    const sw = this._emfPlusReadFloat(data, 16);
-    const sh = this._emfPlusReadFloat(data, 20);
+    const sx = readFloat32(data, 8);
+    const sy = readFloat32(data, 12);
+    const sw = readFloat32(data, 16);
+    const sh = readFloat32(data, 20);
     const compressed = (flags & 0x4000) !== 0;
     if (24 + (compressed ? 8 : 16) > data.length) return;
     let dx, dy, dw, dh;
     if (compressed) {
-      dx = this._emfPlusReadInt16(data, 24);
-      dy = this._emfPlusReadInt16(data, 26);
-      dw = this._emfPlusReadInt16(data, 28);
-      dh = this._emfPlusReadInt16(data, 30);
+      dx = readShort(data, 24);
+      dy = readShort(data, 26);
+      dw = readShort(data, 28);
+      dh = readShort(data, 30);
     } else {
-      dx = this._emfPlusReadFloat(data, 24);
-      dy = this._emfPlusReadFloat(data, 28);
-      dw = this._emfPlusReadFloat(data, 32);
-      dh = this._emfPlusReadFloat(data, 36);
+      dx = readFloat32(data, 24);
+      dy = readFloat32(data, 28);
+      dw = readFloat32(data, 32);
+      dh = readFloat32(data, 36);
     }
     const ul = this._emfPlusMapPoint(dx, dy);
     const ur = this._emfPlusMapPoint(dx + dw, dy);
@@ -505,7 +462,7 @@ class EmfPlusDrawer {
     const img = this.emfPlusObjects[flags & 0xFF];
     if (!img || data.length < 28) return;
     // imageAttributesId(4) + sourceUnit(4) + srcRect(16) + count(4) + points[3]
-    const count = this._emfPlusReadInt32(data, 24);
+    const count = readDword(data, 24);
     if (count !== 3) return;
     const pts = [];
     for (let i = 0; i < 3; i++) {
@@ -517,17 +474,7 @@ class EmfPlusDrawer {
     this._drawImageObj(img, pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
   }
 
-  _emfPlusReadInt32(data, offset) {
-    if (offset + 4 > data.length) return 0;
-    const b = data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24);
-    return b | 0;
-  }
-
-  // 有符号 int16 小端（U_PPF_C 压缩矩形/点坐标用）
-  _emfPlusReadInt16(data, offset) {
-    if (offset + 2 > data.length) return 0;
-    return ((data[offset] | (data[offset + 1] << 8)) << 16) >> 16;
-  }
+  // int32/int16 reading now lives in utils/binaryReader (readDword/readShort)
 
   // EMF+ 页面单位 -> 画布像素的比例（用当前坐标变换实测 100 单位的水平跨度）
   _emfPlusUnitsToPx() {
@@ -555,14 +502,14 @@ class EmfPlusDrawer {
       const v = (data[o] | (data[o + 1] << 8)) << 16 >> 16;
       return v / 4096;
     }
-    return this._emfPlusReadFloat(data, o);
+    return readFloat32(data, o);
   }
   _emfPlusReadPointY(flags, data, o) {
     if (flags & 0x4000) {
       const v = (data[o + 2] | (data[o + 3] << 8)) << 16 >> 16;
       return v / 4096;
     }
-    return this._emfPlusReadFloat(data, o + 4);
+    return readFloat32(data, o + 4);
   }
 
   // 渲染嵌套 EMF / 位图对象到指定平行四边形（3 点：左上 / 右上 / 左下）
@@ -639,21 +586,15 @@ class EmfPlusDrawer {
   processEmfPlusDrawString(flags, data) {
     if (data.length < 28) return;
     const fontId = flags & 0xFF;
-    const brushId = this._emfPlusReadInt32(data, 0);
-    const len = this._emfPlusReadInt32(data, 8);
+    const brushId = readDword(data, 0);
+    const len = readDword(data, 8);
     if (len < 1 || len > 65536) return;
-    const layoutX = this._emfPlusReadFloat(data, 12);
-    const layoutY = this._emfPlusReadFloat(data, 16);
+    const layoutX = readFloat32(data, 12);
+    const layoutY = readFloat32(data, 16);
     const strOff = 28;
     if (strOff + len * 2 > data.length) return;
-    // 解码 UTF16LE 字符串
-    const slice = data.slice(strOff, strOff + len * 2);
-    let text = '';
-    for (let i = 0; i + 1 < slice.length; i += 2) {
-      const code = slice[i] | (slice[i + 1] << 8);
-      if (code === 0) break;
-      text += String.fromCharCode(code);
-    }
+    // 解码 UTF16LE 字符串（遇 NUL 终止）
+    const text = decodeUtf16Le(data, strOff, len, { breakAtNul: true });
     if (!text) return;
     // 取 brush 颜色（BrushId 为 ARGB 直传或对象表索引）
     const color = this._emfPlusResolveBrush(flags, brushId);
@@ -686,8 +627,8 @@ class EmfPlusDrawer {
     for (let i = 0; i < count; i++) {
       const o = 4 + i * 8;
       if (o + 8 > data.length) break;
-      const x = this._emfPlusReadFloat(data, o);
-      const y = this._emfPlusReadFloat(data, o + 4);
+      const x = readFloat32(data, o);
+      const y = readFloat32(data, o + 4);
       const p = this._emfPlusMapPoint(x, y);
       if (i === 0) {
         this.ctx.moveTo(p.x, p.y);
@@ -699,19 +640,14 @@ class EmfPlusDrawer {
     console.log('EMF+ DrawLines:', count, '个点');
   }
 
-  // 处理EMF+绘制贝塞尔曲线记录
-  processEmfPlusDrawBeziers(flags, data) {
-    console.log('Processing EmfPlusDrawBeziers');
-  }
-
   // 处理EMF+绘制椭圆记录：PenId(4) + RectF(16)
   processEmfPlusDrawEllipse(flags, data) {
     if (data.length < 16) return;
     const pen = this._emfPlusResolvePen(flags & 0xFF);
-    const x = this._emfPlusReadFloat(data, 0);
-    const y = this._emfPlusReadFloat(data, 4);
-    const w = this._emfPlusReadFloat(data, 8);
-    const h = this._emfPlusReadFloat(data, 12);
+    const x = readFloat32(data, 0);
+    const y = readFloat32(data, 4);
+    const w = readFloat32(data, 8);
+    const h = readFloat32(data, 12);
     const tl = this._emfPlusMapPoint(x, y);
     const br = this._emfPlusMapPoint(x + w, y + h);
     const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(tl, br);
@@ -728,13 +664,13 @@ class EmfPlusDrawer {
   // （BrushId 在 data 首字段）
   processEmfPlusFillEllipse(flags, data) {
     if (data.length < 20) return;
-    const brushId = this._emfPlusReadInt32(data, 0);
+    const brushId = readDword(data, 0);
     const color = this._emfPlusResolveBrush(flags, brushId);
     if (!color) return;
-    const x = this._emfPlusReadFloat(data, 4);
-    const y = this._emfPlusReadFloat(data, 8);
-    const w = this._emfPlusReadFloat(data, 12);
-    const h = this._emfPlusReadFloat(data, 16);
+    const x = readFloat32(data, 4);
+    const y = readFloat32(data, 8);
+    const w = readFloat32(data, 12);
+    const h = readFloat32(data, 16);
     const tl = this._emfPlusMapPoint(x, y);
     const br = this._emfPlusMapPoint(x + w, y + h);
     const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(tl, br);
@@ -747,24 +683,19 @@ class EmfPlusDrawer {
     console.log('EMF+ FillEllipse');
   }
 
-  // 处理EMF+绘制弧线记录
-  processEmfPlusDrawArc(flags, data) {
-    console.log('Processing EmfPlusDrawArc');
-  }
-
   // 处理EMF+填充饼图记录：data = BrushId(4) + StartAngle(float) + SweepAngle(float) + RectF(16)
   // （角度为度，顺时针自 3 点方向）
   processEmfPlusFillPie(flags, data) {
     if (data.length < 28) return;
-    const brushId = this._emfPlusReadInt32(data, 0);
+    const brushId = readDword(data, 0);
     const color = this._emfPlusResolveBrush(flags, brushId);
     if (!color) return;
-    const start = this._emfPlusReadFloat(data, 4);
-    const sweep = this._emfPlusReadFloat(data, 8);
-    const x = this._emfPlusReadFloat(data, 12);
-    const y = this._emfPlusReadFloat(data, 16);
-    const w = this._emfPlusReadFloat(data, 20);
-    const h = this._emfPlusReadFloat(data, 24);
+    const start = readFloat32(data, 4);
+    const sweep = readFloat32(data, 8);
+    const x = readFloat32(data, 12);
+    const y = readFloat32(data, 16);
+    const w = readFloat32(data, 20);
+    const h = readFloat32(data, 24);
     if (w === 0 || h === 0 || sweep === 0) return;
     const tl = this._emfPlusMapPoint(x, y);
     const br = this._emfPlusMapPoint(x + w, y + h);
@@ -781,136 +712,6 @@ class EmfPlusDrawer {
     console.log('EMF+ FillPie');
   }
 
-  // 处理EMF+绘制饼图记录
-  processEmfPlusDrawPie(flags, data) {
-    console.log('Processing EmfPlusDrawPie');
-  }
-
-  // 处理EMF+绘制驱动字符串记录
-  processEmfPlusDrawDriverString(flags, data) {
-    console.log('Processing EmfPlusDrawDriverString');
-  }
-
-  // 处理EMF+设置渲染原点记录
-  processEmfPlusSetRenderingOrigin(flags, data) {
-    console.log('Processing EmfPlusSetRenderingOrigin');
-  }
-
-  // 处理EMF+设置抗锯齿模式记录
-  processEmfPlusSetAntiAliasMode(flags, data) {
-    console.log('Processing EmfPlusSetAntiAliasMode');
-  }
-
-  // 处理EMF+设置文本渲染提示记录
-  processEmfPlusSetTextRenderingHint(flags, data) {
-    console.log('Processing EmfPlusSetTextRenderingHint');
-  }
-
-  // 处理EMF+设置插值模式记录
-  processEmfPlusSetInterpolationMode(flags, data) {
-    console.log('Processing EmfPlusSetInterpolationMode');
-  }
-
-  // 处理EMF+设置像素偏移模式记录
-  processEmfPlusSetPixelOffsetMode(flags, data) {
-    console.log('Processing EmfPlusSetPixelOffsetMode');
-  }
-
-  // 处理EMF+设置合成模式记录
-  processEmfPlusSetCompositingMode(flags, data) {
-    console.log('Processing EmfPlusSetCompositingMode');
-  }
-
-  // 处理EMF+设置合成质量记录
-  processEmfPlusSetCompositingQuality(flags, data) {
-    console.log('Processing EmfPlusSetCompositingQuality');
-  }
-
-  // 处理EMF+保存记录
-  processEmfPlusSave(flags, data) {
-    console.log('Processing EmfPlusSave');
-  }
-
-  // 处理EMF+恢复记录
-  processEmfPlusRestore(flags, data) {
-    console.log('Processing EmfPlusRestore');
-  }
-
-  // 处理EMF+开始容器记录
-  processEmfPlusBeginContainer(flags, data) {
-    console.log('Processing EmfPlusBeginContainer');
-  }
-
-  // 处理EMF+开始无参数容器记录
-  processEmfPlusBeginContainerNoParams(flags, data) {
-    console.log('Processing EmfPlusBeginContainerNoParams');
-  }
-
-  // 处理EMF+结束容器记录
-  processEmfPlusEndContainer(flags, data) {
-    console.log('Processing EmfPlusEndContainer');
-  }
-
-  // 处理EMF+设置世界变换记录
-  processEmfPlusSetWorldTransform(flags, data) {
-    console.log('Processing EmfPlusSetWorldTransform');
-  }
-
-  // 处理EMF+重置世界变换记录
-  processEmfPlusResetWorldTransform(flags, data) {
-    console.log('Processing EmfPlusResetWorldTransform');
-  }
-
-  // 处理EMF+乘以世界变换记录
-  processEmfPlusMultiplyWorldTransform(flags, data) {
-    console.log('Processing EmfPlusMultiplyWorldTransform');
-  }
-
-  // 处理EMF+平移世界变换记录
-  processEmfPlusTranslateWorldTransform(flags, data) {
-    console.log('Processing EmfPlusTranslateWorldTransform');
-  }
-
-  // 处理EMF+缩放世界变换记录
-  processEmfPlusScaleWorldTransform(flags, data) {
-    console.log('Processing EmfPlusScaleWorldTransform');
-  }
-
-  // 处理EMF+旋转世界变换记录
-  processEmfPlusRotateWorldTransform(flags, data) {
-    console.log('Processing EmfPlusRotateWorldTransform');
-  }
-
-  // 处理EMF+设置页面变换记录
-  processEmfPlusSetPageTransform(flags, data) {
-    console.log('Processing EmfPlusSetPageTransform');
-  }
-
-  // 处理EMF+重置裁剪记录
-  processEmfPlusResetClip(flags, data) {
-    console.log('Processing EmfPlusResetClip');
-  }
-
-  // 处理EMF+设置裁剪矩形记录
-  processEmfPlusSetClipRect(flags, data) {
-    console.log('Processing EmfPlusSetClipRect');
-  }
-
-  // 处理EMF+设置裁剪路径记录
-  processEmfPlusSetClipPath(flags, data) {
-    console.log('Processing EmfPlusSetClipPath');
-  }
-
-  // 处理EMF+设置裁剪区域记录
-  processEmfPlusSetClipRegion(flags, data) {
-    console.log('Processing EmfPlusSetClipRegion');
-  }
-
-  // 处理EMF+偏移裁剪记录
-  processEmfPlusOffsetClip(flags, data) {
-    console.log('Processing EmfPlusOffsetClip');
-  }
-
   // 补充缺失的处理方法
   processEmfPlusHeader(flags, data) {
     // EmfPlusHeader：data = Version(4) + EmfPlusFlags(4) + ...
@@ -918,14 +719,6 @@ class EmfPlusDrawer {
       const version = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16) | ((data[3] & 0xFF) << 24);
       console.log('EMF+ Header, version: 0x' + version.toString(16));
     }
-  }
-
-  processEmfPlusComment(flags, data) {
-    console.log('Processing EmfPlusComment');
-  }
-
-  processEmfPlusGetDC(flags, data) {
-    console.log('Processing EmfPlusGetDC');
   }
 
   // EmfPlusObject：ObjectId = flags & 0xFF；ObjectType 位于 flags 位 8..14（0x7f00）
@@ -941,10 +734,10 @@ class EmfPlusDrawer {
     this._objTypeStats['0x'+objectType.toString(16)] = (this._objTypeStats['0x'+objectType.toString(16)]||0)+1;
     if (objectType === 0x0100) { // EmfPlusBrush
       if (data.length < 8) return;
-      const brushType = this._emfPlusReadInt32(data, 0);
+      const brushType = readDword(data, 0);
       if (brushType === 0) { // Solid: EmfPlusSolidBrushData = ARGB
-        const argb = this._emfPlusReadArgb(data, 4);
-        this.emfPlusObjects[objectId] = { type: 'solidBrush', color: this._emfPlusArgbToColor(argb) };
+        const argb = readArgb(data, 4);
+        this.emfPlusObjects[objectId] = { type: 'solidBrush', color: argbToCss(argb) };
       } else if (brushType === 1 || brushType === 3 || brushType === 4) {
         // Hatch/PathGradient/LinearGradient：完整解析较复杂（可选字段随 BrushDataFlags 变化），
         // 这里启发式提取首个不透明（alpha>=0x80）ARGB 作为主色——对静态渲染已足够接近。
@@ -959,9 +752,9 @@ class EmfPlusDrawer {
       //   DashedLineCap(4) DashedLineOffset(4) DashedLineData(4+n*4) Alignment(4)
       //   CompoundLine(4+n*4) CustomStartCap(4+..) CustomEndCap(4+..)；随后固定为 EmfPlusBrush。
       if (data.length < 16) return;
-      const penDataFlags = this._emfPlusReadInt32(data, 4);
-      const unitType = this._emfPlusReadInt32(data, 8);
-      let width = this._emfPlusReadFloat(data, 12) || 1;
+      const penDataFlags = readDword(data, 4);
+      const unitType = readDword(data, 8);
+      let width = readFloat32(data, 12) || 1;
       let o = 16;
       // 跳过可选字段
       if (penDataFlags & 0x01) o += 24;                    // PenDataTransform: XFORM 6×float
@@ -973,28 +766,28 @@ class EmfPlusDrawer {
       if (penDataFlags & 0x40) o += 4;                     // DashedLineCap
       if (penDataFlags & 0x80) o += 4;                     // DashedLineOffset float
       if (penDataFlags & 0x100) {                          // DashedLineData: count + count*float
-        const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+        const n = o + 4 <= data.length ? readDword(data, o) : 0;
         o += 4 + Math.max(0, Math.min(n, 1000)) * 4;
       }
       if (penDataFlags & 0x200) o += 4;                    // Alignment
       if (penDataFlags & 0x400) {                          // CompoundLine: count + count*float
-        const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+        const n = o + 4 <= data.length ? readDword(data, o) : 0;
         o += 4 + Math.max(0, Math.min(n, 1000)) * 4;
       }
       if (penDataFlags & 0x800) {                          // CustomStartCap: size + data
-        const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+        const n = o + 4 <= data.length ? readDword(data, o) : 0;
         o += 4 + Math.max(0, n);
       }
       if (penDataFlags & 0x1000) {                         // CustomEndCap: size + data
-        const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+        const n = o + 4 <= data.length ? readDword(data, o) : 0;
         o += 4 + Math.max(0, n);
       }
       // 随后固定为 EmfPlusBrush：BrushType(4) + BrushData（Solid=0 → ARGB(4)）
       let color = '#000000';
       if (o + 4 <= data.length) {
-        const brushType = this._emfPlusReadInt32(data, o);
+        const brushType = readDword(data, o);
         if (brushType === 0 && o + 8 <= data.length) {
-          color = this._emfPlusArgbToColor(this._emfPlusReadArgb(data, o + 4));
+          color = argbToCss(readArgb(data, o + 4));
         } else if (brushType !== 0) {
           const c = this._emfPlusFirstOpaqueArgb(data, o + 4);
           if (c) color = c;
@@ -1014,17 +807,12 @@ class EmfPlusDrawer {
       let styleFlags = 0;
       let face = 'sans-serif';
       if (data.length >= 12) {
-        emSize = this._emfPlusReadFloat(data, 0) || 12;
-        styleFlags = this._emfPlusReadInt32(data, 8);
+        emSize = readFloat32(data, 0) || 12;
+        styleFlags = readDword(data, 8);
         if (data.length >= 20) {
-          const nameLen = this._emfPlusReadInt32(data, 16);
+          const nameLen = readDword(data, 16);
           if (nameLen > 0 && nameLen < 64 && 20 + nameLen * 2 <= data.length) {
-            let name = '';
-            for (let i = 0; i < nameLen; i++) {
-              const c = data[20 + i * 2] | (data[21 + i * 2] << 8);
-              if (!c) break;
-              name += String.fromCharCode(c);
-            }
+            const name = readUtf16Name(data, 20, nameLen);
             face = this._emfPlusFontFamilyFromName(name);
           }
         }
@@ -1043,10 +831,10 @@ class EmfPlusDrawer {
       }
     } else if (objectType === 0x0500) { // EmfPlusImage
       if (data.length < 8) return;
-      const type = this._emfPlusReadInt32(data, 4);
+      const type = readDword(data, 4);
       if (type === 1) { // bitmap
         // width(8) height(12) stride(16) pixelFormat(20) bitmapType(24)
-        const bitmapType = data.length >= 28 ? this._emfPlusReadInt32(data, 24) : 0;
+        const bitmapType = data.length >= 28 ? readDword(data, 24) : 0;
         if ((bitmapType === 1 || bitmapType === 2) && data.length > 28) {
           // PNG / JPEG 原生编码直接引用
           const mime = bitmapType === 1 ? 'image/png' : 'image/jpeg';
@@ -1056,8 +844,8 @@ class EmfPlusDrawer {
           // 原生像素格式（BITMAPINFO + 像素）后续扩展
         }
       } else if (type === 2) { // metafile（内嵌 EMF/WMF）
-        const mfType = data.length >= 16 ? this._emfPlusReadInt32(data, 8) : 0;
-        const mfSize = data.length >= 16 ? this._emfPlusReadInt32(data, 12) : 0;
+        const mfType = data.length >= 16 ? readDword(data, 8) : 0;
+        const mfSize = data.length >= 16 ? readDword(data, 12) : 0;
         if (mfType === 3 && mfSize > 0 && 16 + mfSize <= data.length) {
           this.emfPlusObjects[objectId] = { type: 'imageEmf', data: data.slice(16, 16 + mfSize) };
         }
@@ -1070,8 +858,8 @@ class EmfPlusDrawer {
   // EmfPlusClear：data = ARGB(4)，用指定颜色填充整个画布
   processEmfPlusClear(flags, data) {
     if (data.length < 4) return;
-    const argb = this._emfPlusReadArgb(data, 0);
-    const color = this._emfPlusArgbToColor(argb);
+    const argb = readArgb(data, 0);
+    const color = argbToCss(argb);
     this.ctx.fillStyle = color;
     this.ctx.fillRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
     console.log('EMF+ Clear:', color);
@@ -1082,8 +870,8 @@ class EmfPlusDrawer {
   // flags&0x4000（U_PPF_C）为 1 时矩形是 4×int16（8 字节），否则 4×float32（16 字节）。
   processEmfPlusFillRectangles(flags, data) {
     if (data.length < 8) return;
-    const brushId = this._emfPlusReadInt32(data, 0);
-    const count = this._emfPlusReadInt32(data, 4);
+    const brushId = readDword(data, 0);
+    const count = readDword(data, 4);
     if (count < 1 || count > 4096) return; // 防异常计数
     const color = this._emfPlusResolveBrush(flags, brushId);
     if (!color) return;
@@ -1093,10 +881,10 @@ class EmfPlusDrawer {
     for (let i = 0; i < count; i++) {
       const o = 8 + i * step;
       if (o + step > data.length) break;
-      const x = int16 ? this._emfPlusReadInt16(data, o) : this._emfPlusReadFloat(data, o);
-      const y = int16 ? this._emfPlusReadInt16(data, o + 2) : this._emfPlusReadFloat(data, o + 4);
-      const w = int16 ? this._emfPlusReadInt16(data, o + 4) : this._emfPlusReadFloat(data, o + 8);
-      const h = int16 ? this._emfPlusReadInt16(data, o + 6) : this._emfPlusReadFloat(data, o + 12);
+      const x = int16 ? readShort(data, o) : readFloat32(data, o);
+      const y = int16 ? readShort(data, o + 2) : readFloat32(data, o + 4);
+      const w = int16 ? readShort(data, o + 4) : readFloat32(data, o + 8);
+      const h = int16 ? readShort(data, o + 6) : readFloat32(data, o + 12);
       const tl = this._emfPlusMapPoint(x, y);
       const br = this._emfPlusMapPoint(x + w, y + h);
       this.ctx.fillRect(tl.x, tl.y, Math.abs(br.x - tl.x), Math.abs(br.y - tl.y));
@@ -1117,10 +905,10 @@ class EmfPlusDrawer {
     for (let i = 0; i < count; i++) {
       const o = 4 + i * 16;
       if (o + 16 > data.length) break;
-      const x = this._emfPlusReadFloat(data, o);
-      const y = this._emfPlusReadFloat(data, o + 4);
-      const w = this._emfPlusReadFloat(data, o + 8);
-      const h = this._emfPlusReadFloat(data, o + 12);
+      const x = readFloat32(data, o);
+      const y = readFloat32(data, o + 4);
+      const w = readFloat32(data, o + 8);
+      const h = readFloat32(data, o + 12);
       const tl = this._emfPlusMapPoint(x, y);
       const br = this._emfPlusMapPoint(x + w, y + h);
       this.ctx.strokeRect(tl.x, tl.y, Math.abs(br.x - tl.x), Math.abs(br.y - tl.y));
@@ -1128,29 +916,6 @@ class EmfPlusDrawer {
     console.log('EMF+ DrawRects:', count, '个矩形');
   }
 
-  processEmfPlusFillRegion(flags, data) {
-    console.log('Processing EmfPlusFillRegion');
-  }
-
-  processEmfPlusSetTextContrast(flags, data) {
-    console.log('Processing EmfPlusSetTextContrast');
-  }
-
-  processEmfPlusStrokeFillPath(flags, data) {
-    console.log('Processing EmfPlusStrokeFillPath');
-  }
-
-  processEmfPlusSerializableObject(flags, data) {
-    console.log('Processing EmfPlusSerializableObject');
-  }
-
-  processEmfPlusSetTSGraphics(flags, data) {
-    console.log('Processing EmfPlusSetTSGraphics');
-  }
-
-  processEmfPlusSetTSClip(flags, data) {
-    console.log('Processing EmfPlusSetTSClip');
-  }
 }
 
 module.exports = EmfPlusDrawer;

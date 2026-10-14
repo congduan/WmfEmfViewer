@@ -1,8 +1,11 @@
 // WMF绘制模块
 const BaseDrawer = require('./baseDrawer');
-const EmfPlusDrawer = require('./emfPlusDrawer');
 const MathTypeMtefParser = require('../../utils/mathTypeMtefParser');
 const GeometryUtils = require('../../utils/geometryUtils');
+const { readWord, readShort, readDword, readLong, readString } = require('../../utils/binaryReader');
+const { colorRefToHex } = require('../../utils/colorUtils');
+const { dbcsLabelForCharset, decodeLocalBytes, printableAscii, mergeDbcsRuns } = require('../../utils/textCodec');
+const { resolveTempCanvas } = require('../../utils/bitmapSurface');
 
 // WMF 记录分派表：functionId -> 处理方法名（processRecord 中调用 this[方法名](record.data)）。
 // 值为 null 表示已识别但无需处理/Canvas 不支持（与原 switch 的空分支等价，不打未知记录日志）。
@@ -79,7 +82,6 @@ class WmfDrawer extends BaseDrawer {
     this.emfPlusDetected = false;
     this.emfPlusRecordCount = 0;
     this.emfPlusRecords = []; // 存储解析出的 EMF+ 记录
-    this.emfPlusDrawer = null; // EMF+ 绘制器
     this.currentPosX = 0; // 当前画笔位置 X（逻辑坐标）
     this.currentPosY = 0; // 当前画笔位置 Y（逻辑坐标）
     this.hasValidPosition = false; // 标记是否有有效的当前位置
@@ -215,7 +217,7 @@ class WmfDrawer extends BaseDrawer {
     const data = record.data;
     if (data.length < 8) return null;
 
-    const escapeFunction = this.readWordFromData(data, 0);
+    const escapeFunction = readWord(data, 0);
 
     // MFCOMMENT (0x000F)
     if (escapeFunction !== 0x000F) return null;
@@ -304,36 +306,7 @@ class WmfDrawer extends BaseDrawer {
   }
 
   // ========== 辅助方法 ==========
-  readWordFromData(data, offset) {
-    if (offset + 1 >= data.length) return 0;
-    return data[offset] | (data[offset + 1] << 8);
-  }
-
-  readShortFromData(data, offset) {
-    const value = this.readWordFromData(data, offset);
-    return (value & 0x8000) ? value - 0x10000 : value;
-  }
-
-  readDwordFromData(data, offset) {
-    if (offset + 3 >= data.length) return 0;
-    return data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24);
-  }
-
-  // 读取有符号 32 位整数
-  readLongFromData(data, offset) {
-    const value = this.readDwordFromData(data, offset);
-    return value > 0x7FFFFFFF ? value - 0x100000000 : value;
-  }
-
-  readStringFromData(data, offset, length) {
-    let str = '';
-    for (let i = 0; i < length && offset + i < data.length; i++) {
-      if (data[offset + i] !== 0) {
-        str += String.fromCharCode(data[offset + i]);
-      }
-    }
-    return str;
-  }
+  // Byte readers now live in utils/binaryReader (readWord/readShort/readDword/readLong/readString)
 
   mapSymbolString(text) {
     // MathType 使用 "Symbol"/"Symbol Tiger Expert" 等 Symbol 字体，
@@ -400,93 +373,88 @@ class WmfDrawer extends BaseDrawer {
     return out;
   }
 
-  rgbToHex(rgb) {
-    const r = (rgb & 0xFF).toString(16).padStart(2, '0');
-    const g = ((rgb >> 8) & 0xFF).toString(16).padStart(2, '0');
-    const b = ((rgb >> 16) & 0xFF).toString(16).padStart(2, '0');
-    return `#${r}${g}${b}`;
-  }
+  // Color conversion now lives in utils/colorUtils (colorRefToHex)
 
   // ========== 实现绘制方法 ==========
   processSetMapMode(data) {
     if (data.length < 2) return;
-    const mode = this.readWordFromData(data, 0);
+    const mode = readWord(data, 0);
     console.log('SetMapMode:', mode);
     this.coordinateTransformer.setMapMode(mode);
   }
 
   processSetWindowOrg(data) {
     if (data.length < 4) return;
-    const y = this.readShortFromData(data, 0);
-    const x = this.readShortFromData(data, 2);
+    const y = readShort(data, 0);
+    const x = readShort(data, 2);
     console.log('SetWindowOrg:', x, y);
     this.coordinateTransformer.setWindowOrg(x, y);
   }
 
   processSetWindowExt(data) {
     if (data.length < 4) return;
-    const y = this.readShortFromData(data, 0);
-    const x = this.readShortFromData(data, 2);
+    const y = readShort(data, 0);
+    const x = readShort(data, 2);
     console.log('SetWindowExt:', x, y);
     this.coordinateTransformer.setWindowExt(x, y);
   }
 
   processSetViewportOrg(data) {
     if (data.length < 4) return;
-    const y = this.readShortFromData(data, 0);
-    const x = this.readShortFromData(data, 2);
+    const y = readShort(data, 0);
+    const x = readShort(data, 2);
     console.log('SetViewportOrg:', x, y);
     this.coordinateTransformer.setViewportOrg(x, y);
   }
 
   processSetViewportExt(data) {
     if (data.length < 4) return;
-    const y = this.readShortFromData(data, 0);
-    const x = this.readShortFromData(data, 2);
+    const y = readShort(data, 0);
+    const x = readShort(data, 2);
     console.log('SetViewportExt:', x, y);
     this.coordinateTransformer.setViewportExt(x, y);
   }
 
   processSetBkColor(data) {
     if (data.length < 4) return;
-    const color = this.readDwordFromData(data, 0);
+    const color = readDword(data, 0);
     console.log('SetBkColor:', color);
   }
 
   processSetBkMode(data) {
     if (data.length < 2) return;
-    const mode = this.readWordFromData(data, 0);
+    const mode = readWord(data, 0);
     console.log('SetBkMode:', mode);
   }
 
   processSetTextColor(data) {
     if (data.length < 4) return;
-    const color = this.readDwordFromData(data, 0);
+    const color = readDword(data, 0);
     console.log('SetTextColor:', color);
-    this.ctx.fillStyle = this.rgbToHex(color);
+    this.ctx.fillStyle = colorRefToHex(color);
   }
 
   processSetROP2(data) {
     if (data.length < 2) return;
-    const rop2 = this.readWordFromData(data, 0);
+    const rop2 = readWord(data, 0);
     console.log('SetROP2:', rop2);
   }
 
   processSetPolyFillMode(data) {
     if (data.length < 2) return;
-    const mode = this.readWordFromData(data, 0);
+    const mode = readWord(data, 0);
     console.log('SetPolyFillMode:', mode);
   }
 
   processSetStretchBltMode(data) {
     if (data.length < 2) return;
-    const mode = this.readWordFromData(data, 0);
+    const mode = readWord(data, 0);
     console.log('SetStretchBltMode:', mode);
   }
 
   processSetTextAlign(data) {
     if (data.length < 2) return;
-    const align = this.readWordFromData(data, 0);
+    const align = readWord(data, 0);
     console.log('SetTextAlign:', align);
 
     this.textAlignFlags = align;
@@ -515,10 +483,10 @@ class WmfDrawer extends BaseDrawer {
 
   processCreatePenIndirect(data) {
     if (data.length < 10) return;
-    const style = this.readWordFromData(data, 0);
-    const originalWidth = this.readWordFromData(data, 2);
+    const style = readWord(data, 0);
+    const originalWidth = readWord(data, 2);
     let width = originalWidth;
-    const color = this.readDwordFromData(data, 6);
+    const color = readDword(data, 6);
 
     // 使用坐标转换器的缩放比例来计算线条像素宽度
     const scale = this.coordinateTransformer.getScale();
@@ -526,25 +494,25 @@ class WmfDrawer extends BaseDrawer {
     console.log('Pen width conversion:', originalWidth, 'logical units ->', width, 'pixels (scale:', scale.x, ')');
 
     console.log('CreatePenIndirect:', style, width, color);
-    const penColor = this.rgbToHex(color);
+    const penColor = colorRefToHex(color);
     this.gdiObjectManager.createPen(style, width, penColor);
   }
 
   processCreateBrushIndirect(data) {
     if (data.length < 8) return;
-    const style = this.readWordFromData(data, 0);
-    const color = this.readDwordFromData(data, 2);
+    const style = readWord(data, 0);
+    const color = readDword(data, 2);
     console.log('CreateBrushIndirect:', style, color);
-    const brushColor = this.rgbToHex(color);
+    const brushColor = colorRefToHex(color);
     this.gdiObjectManager.createBrush(style, brushColor);
   }
 
   // META_CREATEBRUSH (0x00F8, 已废弃)：仅含 ColorRef (4 字节)，按实心画刷处理
   processCreateBrush(data) {
     if (data.length < 4) return;
-    const color = this.readDwordFromData(data, 0);
+    const color = readDword(data, 0);
     console.log('CreateBrush (obsolete):', color);
-    this.gdiObjectManager.createBrush(0 /* BS_SOLID */, this.rgbToHex(color));
+    this.gdiObjectManager.createBrush(0 /* BS_SOLID */, colorRefToHex(color));
   }
 
   processCreateFontIndirect(data) {
@@ -567,12 +535,12 @@ class WmfDrawer extends BaseDrawer {
     if (data.length < 18) return;
 
     // Height 是有符号整数,需要转换
-    let height = this.readWordFromData(data, 0);
+    let height = readWord(data, 0);
     if (height > 32767) height = height - 65536; // 转换为有符号
     height = Math.abs(height); // 使用绝对值作为字体大小
 
-    const width = this.readWordFromData(data, 2);
-    const weight = this.readWordFromData(data, 8);
+    const width = readWord(data, 2);
+    const weight = readWord(data, 8);
     const italic = data[10];
     const underline = data[11];
     const strikeOut = data[12];
@@ -589,17 +557,11 @@ class WmfDrawer extends BaseDrawer {
     // DBCS 字符集（如 Big5"新細明體"）的字体名是双字节本地编码，需按字符集解码；
     // 其余情况仅接受可打印 ASCII，避免把控制字节/局部字节拼进字体名。
     let faceName = '';
-    const charsetLabel = this.getDbcsCharsetLabel(charset);
+    const charsetLabel = dbcsLabelForCharset(charset);
     if (charsetLabel && faceBytes.some(b => b > 126)) {
-      try {
-        faceName = new TextDecoder(charsetLabel).decode(Uint8Array.from(faceBytes));
-      } catch (e) { /* TextDecoder 不支持时回退 */ }
+      faceName = decodeLocalBytes(faceBytes, charsetLabel);
     }
-    if (!faceName) {
-      for (const b of faceBytes) {
-        if (b >= 32 && b <= 126) faceName += String.fromCharCode(b);
-      }
-    }
+    if (!faceName) faceName = printableAscii(faceBytes);
     if (faceName === '') faceName = 'Arial'; // 默认字体
 
     console.log('CreateFontIndirect: height=', height, 'width=', width, 'weight=', weight, 'charset=', charset, 'faceName=', faceName);
@@ -610,14 +572,14 @@ class WmfDrawer extends BaseDrawer {
 
   processSelectClipRgn(data) {
     if (data.length < 2) return;
-    const regionIndex = this.readWordFromData(data, 0);
+    const regionIndex = readWord(data, 0);
     console.log('SelectClipRgn:', regionIndex);
     // 简单实现：暂时忽略裁剪区域
   }
 
   processSelectObject(data) {
     if (data.length < 2) return;
-    const objectIndex = this.readWordFromData(data, 0);
+    const objectIndex = readWord(data, 0);
     console.log('SelectObject:', objectIndex);
     const obj = this.gdiObjectManager.selectObject(objectIndex);
     if (obj) {
@@ -669,15 +631,15 @@ class WmfDrawer extends BaseDrawer {
 
   processDeleteObject(data) {
     if (data.length < 2) return;
-    const objectIndex = this.readWordFromData(data, 0);
+    const objectIndex = readWord(data, 0);
     console.log('DeleteObject:', objectIndex);
     this.gdiObjectManager.deleteObject(objectIndex);
   }
 
   processMoveTo(data) {
     if (data.length < 4) return;
-    const y = this.readShortFromData(data, 0);
-    const x = this.readShortFromData(data, 2);
+    const y = readShort(data, 0);
+    const x = readShort(data, 2);
     const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
     console.log('MoveTo:', x, y, '->', transformed.x, transformed.y);
 
@@ -696,8 +658,8 @@ class WmfDrawer extends BaseDrawer {
 
   processLineTo(data) {
     if (data.length < 4) return;
-    const y = this.readShortFromData(data, 0);
-    const x = this.readShortFromData(data, 2);
+    const y = readShort(data, 0);
+    const x = readShort(data, 2);
     const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
     console.log('LineTo:', x, y, '->', transformed.x, transformed.y);
 
@@ -740,10 +702,10 @@ class WmfDrawer extends BaseDrawer {
 
   processRectangle(data) {
     if (data.length < 8) return;
-    const bottom = this.readShortFromData(data, 0);
-    const right = this.readShortFromData(data, 2);
-    const top = this.readShortFromData(data, 4);
-    const left = this.readShortFromData(data, 6);
+    const bottom = readShort(data, 0);
+    const right = readShort(data, 2);
+    const top = readShort(data, 4);
+    const left = readShort(data, 6);
     const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
     const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
     console.log('Rectangle:', left, top, right, bottom);
@@ -768,10 +730,10 @@ class WmfDrawer extends BaseDrawer {
   processEllipse(data) {
     // META_ELLIPSE: Bounds(8) = bottom, right, top, left
     if (data.length < 8) return;
-    const bottom = this.readShortFromData(data, 0);
-    const right = this.readShortFromData(data, 2);
-    const top = this.readShortFromData(data, 4);
-    const left = this.readShortFromData(data, 6);
+    const bottom = readShort(data, 0);
+    const right = readShort(data, 2);
+    const top = readShort(data, 4);
+    const left = readShort(data, 6);
     console.log('Ellipse:', left, top, right, bottom);
 
     const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
@@ -788,12 +750,12 @@ class WmfDrawer extends BaseDrawer {
   processRoundRect(data) {
     // META_ROUNDRECT: Bounds(8) + Width(2) + Height(2)
     if (data.length < 12) return;
-    const bottom = this.readShortFromData(data, 0);
-    const right = this.readShortFromData(data, 2);
-    const top = this.readShortFromData(data, 4);
-    const left = this.readShortFromData(data, 6);
-    const cornerWidth = this.readWordFromData(data, 8);  // 圆角椭圆的全宽
-    const cornerHeight = this.readWordFromData(data, 10); // 圆角椭圆的全高
+    const bottom = readShort(data, 0);
+    const right = readShort(data, 2);
+    const top = readShort(data, 4);
+    const left = readShort(data, 6);
+    const cornerWidth = readWord(data, 8);  // 圆角椭圆的全宽
+    const cornerHeight = readWord(data, 10); // 圆角椭圆的全高
     console.log('RoundRect:', left, top, right, bottom, 'corner:', cornerWidth, cornerHeight);
 
     const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
@@ -842,14 +804,14 @@ class WmfDrawer extends BaseDrawer {
   _drawArcRecord(data, kind) {
     // Bounds(8) = bottom, right, top, left + Start(4, y,x) + End(4, y,x)
     if (data.length < 16) return;
-    const bottom = this.readShortFromData(data, 0);
-    const right = this.readShortFromData(data, 2);
-    const top = this.readShortFromData(data, 4);
-    const left = this.readShortFromData(data, 6);
-    const startY = this.readShortFromData(data, 8);
-    const startX = this.readShortFromData(data, 10);
-    const endY = this.readShortFromData(data, 12);
-    const endX = this.readShortFromData(data, 14);
+    const bottom = readShort(data, 0);
+    const right = readShort(data, 2);
+    const top = readShort(data, 4);
+    const left = readShort(data, 6);
+    const startY = readShort(data, 8);
+    const startX = readShort(data, 10);
+    const endY = readShort(data, 12);
+    const endX = readShort(data, 14);
     console.log(kind + ':', left, top, right, bottom, 'start:', startX, startY, 'end:', endX, endY);
 
     const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
@@ -886,13 +848,13 @@ class WmfDrawer extends BaseDrawer {
         bmiOffset = dibOffset + 14;
       }
 
-      const biSize = this.readDwordFromData(data, bmiOffset);
+      const biSize = readDword(data, bmiOffset);
       if (biSize !== 40 && biSize !== 108 && biSize !== 124) return false;
 
-      const biWidth = this.readLongFromData(data, bmiOffset + 4);
-      const biHeightRaw = this.readLongFromData(data, bmiOffset + 8);
-      const biBitCount = this.readWordFromData(data, bmiOffset + 14);
-      const biCompression = this.readDwordFromData(data, bmiOffset + 16);
+      const biWidth = readLong(data, bmiOffset + 4);
+      const biHeightRaw = readLong(data, bmiOffset + 8);
+      const biBitCount = readWord(data, bmiOffset + 14);
+      const biCompression = readDword(data, bmiOffset + 16);
 
       if (biWidth <= 0 || biWidth > 20000 || Math.abs(biHeightRaw) > 20000) return false;
       if (biBitCount !== 1 && biBitCount !== 4 && biBitCount !== 8 &&
@@ -903,7 +865,7 @@ class WmfDrawer extends BaseDrawer {
       // 调色板（1/4/8bpp）
       let colorTableSize = 0;
       if (biBitCount <= 8) {
-        const biClrUsed = this.readDwordFromData(data, bmiOffset + 32);
+        const biClrUsed = readDword(data, bmiOffset + 32);
         colorTableSize = (biClrUsed || (1 << biBitCount)) * 4;
       }
       const bitsOffset = bmiOffset + biSize + colorTableSize;
@@ -979,19 +941,10 @@ class WmfDrawer extends BaseDrawer {
         }
       }
 
-      // 临时 canvas（浏览器可用真实 canvas 序列化；Node 环境降级）
-      // 注意：SvgContext 的 mock canvas 是普通对象，constructor 为 Object，不可用于创建画布
-      const canvasCtor = (typeof document === 'undefined' && this.ctx.canvas)
-        ? this.ctx.canvas.constructor
-        : null;
-      const isRealCanvasCtor = typeof canvasCtor === 'function' && canvasCtor.name !== 'Object';
-      const tempCanvas = typeof document !== 'undefined'
-        ? document.createElement('canvas')
-        : (isRealCanvasCtor ? new canvasCtor(biWidth, absHeight) : null);
+      // Offscreen canvas (host detection now lives in utils/bitmapSurface)
+      const tempCanvas = resolveTempCanvas(this.ctx, biWidth, absHeight);
 
       if (tempCanvas) {
-        tempCanvas.width = biWidth;
-        tempCanvas.height = absHeight;
         const tempCtx = tempCanvas.getContext('2d');
         tempCtx.putImageData(imageData, 0, 0);
         const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
@@ -1014,11 +967,11 @@ class WmfDrawer extends BaseDrawer {
   processDibBitBlt(data) {
     // META_DIBBITBLT (2.3.1.2.1)：RasterOperation(4) + YSrc(2) + XSrc(2) + Height(2) + Width(2) + YDest(2) + XDest(2) + DIB
     if (data.length < 16) return;
-    const rop = this.readDwordFromData(data, 0);
-    const destHeight = this.readShortFromData(data, 8);
-    const destWidth = this.readShortFromData(data, 10);
-    const destY = this.readShortFromData(data, 12);
-    const destX = this.readShortFromData(data, 14);
+    const rop = readDword(data, 0);
+    const destHeight = readShort(data, 8);
+    const destWidth = readShort(data, 10);
+    const destY = readShort(data, 12);
+    const destX = readShort(data, 14);
     console.log('DibBitBlt: rop=', rop.toString(16), 'dest=', destX, destY, destWidth, 'x', destHeight);
 
     if (!this.renderDib(data, 16, destX, destY, destWidth, destHeight)) {
@@ -1029,13 +982,13 @@ class WmfDrawer extends BaseDrawer {
   processDibStretchBlt(data) {
     // META_DIBSTRETCHBLT (2.3.1.3)：ROP(4) + SrcHeight(2) + SrcWidth(2) + YSrc(2) + XSrc(2) + DestHeight(2) + DestWidth(2) + YDest(2) + XDest(2) + DIB
     if (data.length < 20) return;
-    const rop = this.readDwordFromData(data, 0);
-    const srcHeight = this.readShortFromData(data, 4);
-    const srcWidth = this.readShortFromData(data, 6);
-    const destHeight = this.readShortFromData(data, 12);
-    const destWidth = this.readShortFromData(data, 14);
-    const destY = this.readShortFromData(data, 16);
-    const destX = this.readShortFromData(data, 18);
+    const rop = readDword(data, 0);
+    const srcHeight = readShort(data, 4);
+    const srcWidth = readShort(data, 6);
+    const destHeight = readShort(data, 12);
+    const destWidth = readShort(data, 14);
+    const destY = readShort(data, 16);
+    const destX = readShort(data, 18);
     console.log('DibStretchBlt: rop=', rop.toString(16), 'src=', srcWidth, 'x', srcHeight, 'dest=', destX, destY, destWidth, 'x', destHeight);
 
     if (!this.renderDib(data, 20, destX, destY, destWidth, destHeight)) {
@@ -1046,14 +999,14 @@ class WmfDrawer extends BaseDrawer {
   processStretchDib(data) {
     // META_STRETCHDIB (2.3.1.6)：ROP(4) + ColorUsage(2) + SrcHeight(2) + SrcWidth(2) + YSrc(2) + XSrc(2) + DestHeight(2) + DestWidth(2) + yDst(2) + xDst(2) + DIB
     if (data.length < 22) return;
-    const rop = this.readDwordFromData(data, 0);
-    const colorUsage = this.readWordFromData(data, 4);
-    const srcHeight = this.readShortFromData(data, 6);
-    const srcWidth = this.readShortFromData(data, 8);
-    const destHeight = this.readShortFromData(data, 14);
-    const destWidth = this.readShortFromData(data, 16);
-    const destY = this.readShortFromData(data, 18);
-    const destX = this.readShortFromData(data, 20);
+    const rop = readDword(data, 0);
+    const colorUsage = readWord(data, 4);
+    // SrcHeight(6)/SrcWidth(8) do not affect drawing: the target rect comes from
+    // Dest*, and the DIB size comes from BITMAPINFOHEADER
+    const destHeight = readShort(data, 14);
+    const destWidth = readShort(data, 16);
+    const destY = readShort(data, 18);
+    const destX = readShort(data, 20);
     console.log('StretchDib: rop=', rop.toString(16), 'colorUsage=', colorUsage, 'dest=', destX, destY, destWidth, 'x', destHeight);
 
     if (!this.renderDib(data, 22, destX, destY, destWidth, destHeight)) {
@@ -1080,15 +1033,15 @@ class WmfDrawer extends BaseDrawer {
 
   processPolyline(data) {
     if (data.length < 2) return;
-    const numPoints = this.readWordFromData(data, 0);
+    const numPoints = readWord(data, 0);
     console.log('Polyline, numPoints:', numPoints);
 
     if (data.length < 2 + numPoints * 4) return;
 
     this.ctx.beginPath();
     for (let i = 0; i < numPoints; i++) {
-      const x = this.readShortFromData(data, 2 + i * 4);
-      const y = this.readShortFromData(data, 4 + i * 4);
+      const x = readShort(data, 2 + i * 4);
+      const y = readShort(data, 4 + i * 4);
       const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
 
       if (i < 3 || i === numPoints - 1) {
@@ -1106,15 +1059,15 @@ class WmfDrawer extends BaseDrawer {
 
   processPolygon(data) {
     if (data.length < 2) return;
-    const numPoints = this.readWordFromData(data, 0);
+    const numPoints = readWord(data, 0);
     console.log('Polygon, numPoints:', numPoints);
 
     if (data.length < 2 + numPoints * 4) return;
 
     this.ctx.beginPath();
     for (let i = 0; i < numPoints; i++) {
-      const x = this.readShortFromData(data, 2 + i * 4);
-      const y = this.readShortFromData(data, 4 + i * 4);
+      const x = readShort(data, 2 + i * 4);
+      const y = readShort(data, 4 + i * 4);
       const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
 
       if (i === 0) {
@@ -1130,7 +1083,7 @@ class WmfDrawer extends BaseDrawer {
 
   processPolyPolygon(data) {
     if (data.length < 2) return;
-    const numPolygons = this.readWordFromData(data, 0);
+    const numPolygons = readWord(data, 0);
     console.log('PolyPolygon, numPolygons:', numPolygons);
 
     if (data.length < 2 + numPolygons * 2) return;
@@ -1139,7 +1092,7 @@ class WmfDrawer extends BaseDrawer {
     const pointCounts = [];
     let offset = 2;
     for (let i = 0; i < numPolygons; i++) {
-      pointCounts.push(this.readWordFromData(data, offset));
+      pointCounts.push(readWord(data, offset));
       offset += 2;
     }
 
@@ -1152,8 +1105,8 @@ class WmfDrawer extends BaseDrawer {
 
       this.ctx.beginPath();
       for (let j = 0; j < numPoints; j++) {
-        const x = this.readShortFromData(data, offset);
-        const y = this.readShortFromData(data, offset + 2);
+        const x = readShort(data, offset);
+        const y = readShort(data, offset + 2);
         const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
 
         if (i === 0 && j < 3) {
@@ -1175,16 +1128,16 @@ class WmfDrawer extends BaseDrawer {
 
   processTextOut(data) {
     if (data.length < 2) return;
-    const textLength = this.readWordFromData(data, 0);
+    const textLength = readWord(data, 0);
     if (data.length < 2 + textLength + 4) return;
 
-    let text = this.readStringFromData(data, 2, textLength);
+    let text = readString(data, 2, textLength);
     text = this.mapMathTypeString(text, textLength);
     // 按当前字体映射 Symbol 字体字符（mapMathTypeString 对 MTEF symbol 字符
     // 已做同样映射；对已输出的 Unicode 数学字符映射表不会重复修改）
     text = this.mapSymbolString(text);
-    const y = this.readShortFromData(data, 2 + textLength);
-    const x = this.readShortFromData(data, 4 + textLength);
+    const y = readShort(data, 2 + textLength);
+    const x = readShort(data, 4 + textLength);
 
     let finalX;
     let finalY;
@@ -1211,16 +1164,7 @@ class WmfDrawer extends BaseDrawer {
     }
   }
 
-  // DBCS CharSet -> TextDecoder 编码标签（非 DBCS 返回 null）
-  getDbcsCharsetLabel(charset) {
-    switch (charset) {
-      case 128: return 'shift_jis';
-      case 129: return 'euc-kr';
-      case 134: return 'gbk';
-      case 136: return 'big5';
-      default: return null;
-    }
-  }
+  // The DBCS CharSet -> encoding label map now lives in utils/textCodec (dbcsLabelForCharset)
 
   processExtTextOut(data) {
     if (data.length < 8) return;
@@ -1234,10 +1178,10 @@ class WmfDrawer extends BaseDrawer {
     // String (StringLength bytes) - 文本字符串
     // [Optional] Dx (StringLength * 2 bytes) - 字符间距数组
 
-    const y = this.readShortFromData(data, 0);
-    const x = this.readShortFromData(data, 2);
-    const stringLength = this.readWordFromData(data, 4);
-    const fwOpts = this.readWordFromData(data, 6);
+    const y = readShort(data, 0);
+    const x = readShort(data, 2);
+    const stringLength = readWord(data, 4);
+    const fwOpts = readWord(data, 6);
 
     let offset = 8;
 
@@ -1265,7 +1209,7 @@ class WmfDrawer extends BaseDrawer {
     if (data.length >= dxStart + stringLength * 2) {
       const dxSigned = [];
       for (let i = 0; i < stringLength; i++) {
-        dxSigned.push(this.readShortFromData(data, dxStart + i * 2));
+        dxSigned.push(readShort(data, dxStart + i * 2));
       }
       dxList = dxSigned;
     }
@@ -1275,26 +1219,15 @@ class WmfDrawer extends BaseDrawer {
     // 是 Big5 全角"（"）。按 Dx==0 边界合并字节并用对应编码解码。
     let chars = null;
     let charDx = null;
-    let text = this.readStringFromData(data, offset, stringLength);
-    const charsetLabel = this.getDbcsCharsetLabel(this.currentCharset);
+    let text = readString(data, offset, stringLength);
+    const charsetLabel = dbcsLabelForCharset(this.currentCharset);
     if (charsetLabel && dxList && dxList.some(v => v === 0)) {
-      try {
-        const runs = [];
-        for (let i = 0; i < stringLength; i++) {
-          if (dxList[i] === 0 && runs.length > 0) {
-            runs[runs.length - 1].bytes.push(rawBytes[i]);
-          } else {
-            runs.push({ bytes: [rawBytes[i]], dx: dxList[i] });
-          }
-        }
-        const decoder = new TextDecoder(charsetLabel);
-        const decoded = runs.map(r => decoder.decode(Uint8Array.from(r.bytes)));
-        if (decoded.join('').length > 0) {
-          chars = decoded;
-          charDx = runs.map(r => r.dx);
-          text = chars.join('');
-        }
-      } catch (e) { /* 解码失败时按单字节路径 */ }
+      const merged = mergeDbcsRuns(rawBytes, dxList, charsetLabel);
+      if (merged) {
+        chars = merged.chars;
+        charDx = merged.charDx;
+        text = merged.text;
+      }
     }
     text = this.mapMathTypeString(text, stringLength);
     // 按当前字体映射 Symbol 字体字符（含 MathType 的括号/积分拼装片段）
@@ -1379,7 +1312,7 @@ class WmfDrawer extends BaseDrawer {
   processEscape(data) {
     if (data.length < 2) return;
 
-    const escapeFunction = this.readWordFromData(data, 0);
+    const escapeFunction = readWord(data, 0);
     console.log('Escape function:', escapeFunction, '(0x' + escapeFunction.toString(16).padStart(4, '0') + ')');
 
     // MFCOMMENT (0x000F) - MathType 私有编码。
@@ -1399,7 +1332,7 @@ class WmfDrawer extends BaseDrawer {
   extractMathTypeMtef(data) {
     // MFCOMMENT layout: EscapeFunction (2 bytes) + ByteCount (2 bytes) + CommentData
     if (!data || data.length < 6) return null;
-    const byteCount = this.readWordFromData(data, 2);
+    const byteCount = readWord(data, 2);
     if (byteCount <= 0 || data.length < 4 + byteCount) return null;
     const commentData = data.slice(4, 4 + byteCount);
 
@@ -1426,8 +1359,8 @@ class WmfDrawer extends BaseDrawer {
     // AppsMFCC 头：id(8) + version(2) + totalLen(4) + dataLen(4) + signature(null 结尾) + data
     let offset = 8;
     if (offset + 10 > commentData.length) return null;
-    const totalLen = this.readDwordFromData(commentData, offset + 2);
-    const dataLen = this.readDwordFromData(commentData, offset + 6);
+    const totalLen = readDword(commentData, offset + 2);
+    const dataLen = readDword(commentData, offset + 6);
     offset += 10;
     // 跳过 null 结尾的 signature
     while (offset < commentData.length && commentData[offset] !== 0) offset++;

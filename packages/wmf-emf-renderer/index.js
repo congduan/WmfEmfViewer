@@ -1973,6 +1973,214 @@ var require_geometryUtils = __commonJS({
   }
 });
 
+// src/utils/binaryReader.js
+var require_binaryReader = __commonJS({
+  "src/utils/binaryReader.js"(exports2, module2) {
+    "use strict";
+    function readWord(data, offset) {
+      if (offset + 2 > data.length) return 0;
+      return data[offset] | data[offset + 1] << 8;
+    }
+    function readShort(data, offset) {
+      const value = readWord(data, offset);
+      return value & 32768 ? value - 65536 : value;
+    }
+    function readDword(data, offset) {
+      if (offset + 4 > data.length) return 0;
+      return data[offset] | data[offset + 1] << 8 | data[offset + 2] << 16 | data[offset + 3] << 24;
+    }
+    function readLong(data, offset) {
+      const value = readDword(data, offset);
+      return value > 2147483647 ? value - 4294967296 : value;
+    }
+    function readFloat32(data, offset) {
+      if (offset + 4 > data.length) return 0;
+      const v = (data[offset] | data[offset + 1] << 8 | data[offset + 2] << 16 | data[offset + 3] << 24) >>> 0;
+      const sign = v & 2147483648 ? -1 : 1;
+      const exp = v >>> 23 & 255;
+      const frac = v & 8388607;
+      if (exp === 255) return frac ? NaN : sign * Infinity;
+      if (exp === 0) return frac === 0 ? sign * 0 : sign * frac * Math.pow(2, -149);
+      return sign * (1 + frac / 8388608) * Math.pow(2, exp - 127);
+    }
+    function readString(data, offset, length) {
+      let str = "";
+      for (let i = 0; i < length && offset + i < data.length; i++) {
+        if (data[offset + i] !== 0) {
+          str += String.fromCharCode(data[offset + i]);
+        }
+      }
+      return str;
+    }
+    module2.exports = {
+      readWord,
+      readShort,
+      readDword,
+      readLong,
+      readFloat32,
+      readString
+    };
+  }
+});
+
+// src/utils/colorUtils.js
+var require_colorUtils = __commonJS({
+  "src/utils/colorUtils.js"(exports2, module2) {
+    "use strict";
+    function colorRefToHex(rgb) {
+      const r = (rgb & 255).toString(16).padStart(2, "0");
+      const g = (rgb >> 8 & 255).toString(16).padStart(2, "0");
+      const b = (rgb >> 16 & 255).toString(16).padStart(2, "0");
+      return `#${r}${g}${b}`;
+    }
+    function argbToCss(argb) {
+      const a = argb >>> 24 & 255;
+      const r = argb >>> 16 & 255;
+      const g = argb >>> 8 & 255;
+      const b = argb & 255;
+      if (a === 255) {
+        return "#" + [r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("");
+      }
+      return `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(3)})`;
+    }
+    function readArgb(data, offset) {
+      if (offset + 4 > data.length) return 4294967295;
+      return data[offset] & 255 | (data[offset + 1] & 255) << 8 | (data[offset + 2] & 255) << 16 | (data[offset + 3] & 255) << 24;
+    }
+    module2.exports = {
+      colorRefToHex,
+      argbToCss,
+      readArgb
+    };
+  }
+});
+
+// src/utils/textCodec.js
+var require_textCodec = __commonJS({
+  "src/utils/textCodec.js"(exports2, module2) {
+    "use strict";
+    var DBCS_CHARSET_LABELS = {
+      128: "shift_jis",
+      // SHIFTJIS_CHARSET
+      129: "euc-kr",
+      // HANGUL_CHARSET
+      134: "gbk",
+      // GB2312_CHARSET
+      136: "big5"
+      // CHINESEBIG5_CHARSET
+    };
+    function dbcsLabelForCharset(charset) {
+      return DBCS_CHARSET_LABELS[charset] || null;
+    }
+    function decodeLocalBytes(bytes, charsetLabel) {
+      try {
+        return new TextDecoder(charsetLabel).decode(Uint8Array.from(bytes));
+      } catch (e) {
+        return "";
+      }
+    }
+    function printableAscii(bytes) {
+      let out = "";
+      for (const b of bytes) {
+        if (b >= 32 && b <= 126) out += String.fromCharCode(b);
+      }
+      return out;
+    }
+    function mergeDbcsRuns(rawBytes, dxList, charsetLabel) {
+      try {
+        const decoder = new TextDecoder(charsetLabel);
+        const runs = [];
+        for (let i = 0; i < rawBytes.length; i++) {
+          if (dxList[i] === 0 && runs.length > 0) {
+            runs[runs.length - 1].bytes.push(rawBytes[i]);
+          } else {
+            runs.push({ bytes: [rawBytes[i]], dx: dxList[i] });
+          }
+        }
+        const chars = runs.map((r) => decoder.decode(Uint8Array.from(r.bytes)));
+        if (!chars.join("")) return null;
+        return { chars, charDx: runs.map((r) => r.dx), text: chars.join("") };
+      } catch (e) {
+        return null;
+      }
+    }
+    function decodeUtf16Le(data, offset, charCount, options = {}) {
+      const skipNul = options.skipNul === true;
+      const breakAtNul = options.breakAtNul === true;
+      let text = "";
+      for (let i = 0; i < charCount; i++) {
+        const code = data[offset + i * 2] | data[offset + i * 2 + 1] << 8;
+        if (code === 0) {
+          if (breakAtNul) break;
+          if (skipNul) continue;
+        }
+        text += String.fromCharCode(code);
+      }
+      return text;
+    }
+    function readUtf16Name(data, offset, maxChars) {
+      return decodeUtf16Le(data, offset, maxChars, { breakAtNul: true });
+    }
+    function decodeSingleBytes(data, offset, length) {
+      let text = "";
+      for (let i = 0; i < length; i++) {
+        text += String.fromCharCode(data[offset + i]);
+      }
+      return text;
+    }
+    function decodeAnsiBytes(data, offset, length) {
+      let text = "";
+      for (let i = 0; i < length; i++) {
+        const b = data[offset + i];
+        text += b >= 128 ? " " : String.fromCharCode(b);
+      }
+      return text;
+    }
+    module2.exports = {
+      dbcsLabelForCharset,
+      decodeLocalBytes,
+      printableAscii,
+      mergeDbcsRuns,
+      decodeUtf16Le,
+      readUtf16Name,
+      decodeSingleBytes,
+      decodeAnsiBytes
+    };
+  }
+});
+
+// src/utils/bitmapSurface.js
+var require_bitmapSurface = __commonJS({
+  "src/utils/bitmapSurface.js"(exports2, module2) {
+    "use strict";
+    function resolveTempCanvas(ctx, width, height) {
+      if (typeof document !== "undefined") {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        return canvas;
+      }
+      const canvasCtor = ctx && ctx.canvas ? ctx.canvas.constructor : null;
+      const isRealCanvasCtor = typeof canvasCtor === "function" && canvasCtor.name !== "Object";
+      if (!isRealCanvasCtor) return null;
+      return new canvasCtor(width, height);
+    }
+    function wrapImageData(bitmap) {
+      if (typeof ImageData !== "undefined") {
+        try {
+          return new ImageData(bitmap.data, bitmap.width, bitmap.height);
+        } catch (e) {
+        }
+      }
+      return { width: bitmap.width, height: bitmap.height, data: bitmap.data };
+    }
+    module2.exports = {
+      resolveTempCanvas,
+      wrapImageData
+    };
+  }
+});
+
 // src/utils/metafileParser.js
 var require_metafileParser = __commonJS({
   "src/utils/metafileParser.js"(exports2, module2) {
@@ -2084,2419 +2292,6 @@ var require_metafileParser = __commonJS({
       }
     };
     module2.exports = MetafileParser2;
-  }
-});
-
-// src/modules/drawers/emfDrawer.js
-var require_emfDrawer = __commonJS({
-  "src/modules/drawers/emfDrawer.js"(exports2, module2) {
-    "use strict";
-    var CoordinateTransformer2 = require_coordinateTransformer();
-    var GdiObjectManager2 = require_gdiObjectManager();
-    var EmfPlusParser2 = require_emfPlusParser();
-    var EmfPlusDrawer2 = require_emfPlusDrawer();
-    var GeometryUtils = require_geometryUtils();
-    var { SIGNATURES, RECORD_TYPES, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
-    var EMF_RECORD_HANDLERS = {
-      // ========== 基础记录 ==========
-      1: "processEmfHeader",
-      // EMR_HEADER
-      14: null,
-      // EMR_EOF
-      // ========== 绘图记录 (Drawing Records) ==========
-      2: "processEmfPolyBezier",
-      // EMR_POLYBEZIER
-      3: "processEmfPolygon",
-      // EMR_POLYGON
-      4: "processEmfPolyline",
-      // EMR_POLYLINE
-      5: "processEmfPolyBezierTo",
-      // EMR_POLYBEZIERTO
-      6: "processEmfPolylineTo",
-      // EMR_POLYLINETO
-      7: "processEmfPolyPolyline",
-      // EMR_POLYPOLYLINE
-      8: "processEmfPolyPolygon",
-      // EMR_POLYPOLYGON
-      27: "processEmfMoveToEx",
-      // EMR_MOVETOEX
-      54: "processEmfLineTo",
-      // EMR_LINETO
-      41: "processEmfAngleArc",
-      // EMR_ANGLEARC
-      42: "processEmfEllipse",
-      // EMR_ELLIPSE
-      43: "processEmfRectangle",
-      // EMR_RECTANGLE
-      44: "processEmfRoundRect",
-      // EMR_ROUNDRECT
-      45: "processEmfArc",
-      // EMR_ARC
-      55: "processEmfArcTo",
-      // EMR_ARCTO
-      46: "processEmfChord",
-      // EMR_CHORD
-      47: "processEmfPie",
-      // EMR_PIE
-      56: "processEmfPolyDraw",
-      // EMR_POLYDRAW
-      // ========== 路径记录 (Path Records) ==========
-      59: "processEmfBeginPath",
-      // EMR_BEGINPATH
-      60: "processEmfEndPath",
-      // EMR_ENDPATH
-      61: "processEmfCloseFigure",
-      // EMR_CLOSEFIGURE
-      62: "processEmfFillPath",
-      // EMR_FILLPATH
-      94: "processEmfCreateDibPatternBrushPT",
-      // EMR_CREATEDIBPATTERNBRUSHPT
-      63: "processEmfStrokeAndFillPath",
-      // EMR_STROKEANDFILLPATH
-      64: "processEmfStrokePath",
-      // EMR_STROKEPATH
-      65: "processEmfFlattenPath",
-      // EMR_FLATTENPATH
-      66: "processEmfWidenPath",
-      // EMR_WIDENPATH
-      68: "processEmfAbortPath",
-      // EMR_ABORTPATH
-      // ========== 状态记录 (State Records) ==========
-      9: "processEmfSetWindowExtEx",
-      // EMR_SETWINDOWEXTEX
-      10: "processEmfSetWindowOrgEx",
-      // EMR_SETWINDOWORGEX
-      11: "processEmfSetViewportExtEx",
-      // EMR_SETVIEWPORTEXTEX
-      12: "processEmfSetViewportOrgEx",
-      // EMR_SETVIEWPORTORGEX
-      13: "processEmfSetBrushOrgEx",
-      // EMR_SETBRUSHORGEX
-      15: "processEmfSetPixelV",
-      // EMR_SETPIXELV
-      16: "processEmfSetMapperFlags",
-      // EMR_SETMAPPERFLAGS
-      17: "processEmfSetMapMode",
-      // EMR_SETMAPMODE
-      18: "processEmfSetBkMode",
-      // EMR_SETBKMODE
-      19: "processEmfSetPolyFillMode",
-      // EMR_SETPOLYFILLMODE
-      20: "processEmfSetRop2",
-      // EMR_SETROP2
-      21: "processEmfSetStretchBltMode",
-      // EMR_SETSTRETCHBLTMODE
-      22: "processEmfSetTextAlign",
-      // EMR_SETTEXTALIGN
-      23: "processEmfSetColorAdjustment",
-      // EMR_SETCOLORADJUSTMENT
-      24: "processEmfSetTextColor",
-      // EMR_SETTEXTCOLOR
-      25: "processEmfSetBkColor",
-      // EMR_SETBKCOLOR
-      26: "processEmfOffsetClipRgn",
-      // EMR_OFFSETCLIPRGN
-      28: "processEmfSetMetaRgn",
-      // EMR_SETMETARGN
-      29: "processEmfExcludeClipRect",
-      // EMR_EXCLUDECLIPRECT
-      30: "processEmfIntersectClipRect",
-      // EMR_INTERSECTCLIPRECT
-      31: "processEmfScaleViewportExtEx",
-      // EMR_SCALEVIEWPORTEXTEX
-      32: "processEmfScaleWindowExtEx",
-      // EMR_SCALEWINDOWEXTEX
-      33: "processEmfSaveDC",
-      // EMR_SAVEDC
-      34: "processEmfRestoreDC",
-      // EMR_RESTOREDC
-      35: "processEmfSetWorldTransform",
-      // EMR_SETWORLDTRANSFORM
-      36: "processEmfModifyWorldTransform",
-      // EMR_MODIFYWORLDTRANSFORM
-      57: "processEmfSetArcDirection",
-      // EMR_SETARCDIRECTION
-      58: "processEmfSetMiterLimit",
-      // EMR_SETMITERLIMIT
-      // ========== 对象记录 (Object Records) ==========
-      37: "processEmfSelectObject",
-      // EMR_SELECTOBJECT
-      38: "processEmfCreatePen",
-      // EMR_CREATEPEN
-      39: "processEmfCreateBrushIndirect",
-      // EMR_CREATEBRUSHINDIRECT
-      40: "processEmfDeleteObject",
-      // EMR_DELETEOBJECT
-      93: "processEmfCreateMonoBrush",
-      // EMR_CREATEMONOBRUSH
-      95: "processEmfExtCreatePen",
-      // EMR_EXTCREATEPEN
-      82: "processEmfExtCreateFontIndirectW",
-      // EMR_EXTCREATEFONTINDIRECTW
-      99: "processEmfCreateColorSpaceW",
-      // EMR_CREATECOLORSPACE
-      // ========== 调色板记录 (Palette Records) ==========
-      48: "processEmfSelectPalette",
-      // EMR_SELECTPALETTE
-      49: "processEmfCreatePalette",
-      // EMR_CREATEPALETTE
-      50: "processEmfSetPaletteEntries",
-      // EMR_SETPALETTEENTRIES
-      51: "processEmfResizePalette",
-      // EMR_RESIZEPALETTE
-      52: "processEmfRealizePalette",
-      // EMR_REALIZEPALETTE
-      53: "processEmfExtFloodFill",
-      // EMR_EXTFLOODFILL
-      // ========== 位图记录 (Bitmap Records) ==========
-      // 五种记录字段布局各不相同（MS-EMF 2.3.1），必须分别解析，
-      // 位图数据一律按 offBmiSrc/offBitsSrc 精确定位（相对记录起始，含 8 字节 EMR 头）。
-      76: "processEmfBitBlt",
-      // EMR_BITBLT
-      77: "processEmfStretchBlt",
-      // EMR_STRETCHBLT
-      81: "processEmfStretchDibBits",
-      // EMR_STRETCHDIBITS
-      114: "processEmfAlphaBlend",
-      // EMR_ALPHABLEND
-      116: "processEmfTransparentBlt",
-      // EMR_TRANSPARENTBLT
-      // ========== 文本记录 (Text Records) ==========
-      83: "processEmfExtTextOutA",
-      // EMR_EXTTEXTOUTA
-      84: "processEmfExtTextOutW",
-      // EMR_EXTTEXTOUTW
-      108: "processEmfSmallTextOut",
-      // EMR_SMALLTEXTOUT
-      // ========== 16 位绘图记录 ==========
-      85: "processEmfPolyBezier16",
-      // EMR_POLYBEZIER16
-      86: "processEmfPolygon16",
-      // EMR_POLYGON16
-      87: "processEmfPolyline16",
-      // EMR_POLYLINE16
-      88: "processEmfPolyBezierTo16",
-      // EMR_POLYBEZIERTO16
-      89: "processEmfPolyLineTo16",
-      // EMR_POLYLINETO16
-      90: "processEmfPolyPolyline16",
-      // EMR_POLYPOLYLINE16
-      91: "processEmfPolyPolygon16",
-      // EMR_POLYPOLYGON16
-      92: "processEmfPolyDraw16",
-      // EMR_POLYDRAW16
-      // ========== 裁剪记录 ==========
-      67: "processEmfSelectClipPath",
-      // EMR_SELECTCLIPPATH
-      75: "processEmfExtSelectClipRgn",
-      // EMR_EXTSELECTCLIPRGN
-      // ========== 区域记录 (Region Records) ==========
-      71: "processEmfFillRgn",
-      // EMR_FILLRGN
-      72: "processEmfFrameRgn",
-      // EMR_FRAMERGN
-      74: "processEmfPaintRgn",
-      // EMR_PAINTRGN
-      // 0x49 EMR_INVERTRGN：像素取反需要读取背景，Canvas/SVG 无光栅反演（暂跳过）
-      // ========== 已识别但无需处理 ==========
-      70: "processEmfGdiComment",
-      // EMR_GDICOMMENT（含 EMF+ 内嵌数据时派发）
-      73: null,
-      // EMR_INVERTRGN（无光栅反演，未实现）
-      78: null,
-      // EMR_MASKBLT
-      79: null,
-      // EMR_PLGBLT
-      80: null,
-      // EMR_SETDIBITSTODEVICE
-      109: null,
-      // EMR_FORCEUFIMAPPING（仅影响字体匹配）
-      110: null,
-      // EMR_NAMEDESCAPE
-      118: null
-      // EMR_GRADIENTFILL
-    };
-    var EMF_DRAW_HANDLER_RE = /processEmf(Poly|Ellipse|Rectangle|RoundRect|Arc|Chord|Pie|LineTo|MoveToEx|ExtTextOut|SmallTextOut|BitBlt|StretchBlt|MaskBlt|PlgBlt|StretchDibBits|SetDibitsToDevice|AlphaBlend|TransparentBlt|GradientFill|FillRgn|FrameRgn|PaintRgn|ExtFloodFill|FillPath|StrokePath|StrokeAndFillPath|SetPixel)/;
-    var EmfDrawer2 = class {
-      constructor(ctx) {
-        this.ctx = ctx;
-        this.coordinateTransformer = new CoordinateTransformer2();
-        this.coordinateTransformer.setIgnoreWindowOrgs(true);
-        this.gdiObjectManager = new GdiObjectManager2();
-        this.currentPath = [];
-        this.pathState = "idle";
-        this.fillColor = "#000000";
-        this.strokeColor = "#000000";
-        this.lineWidth = 1;
-        this.arcDirection = 1;
-        this._penIsBlack = true;
-        this._penStockBlack = true;
-        this._penNull = false;
-        this.textColor = "#000000";
-        this.dcStateStack = [];
-        this.currentPos = { x: 0, y: 0 };
-        this._emfPlusDrawer = null;
-        if (this.ctx && typeof this.ctx === "object") {
-          this.ctx.strokeScaleProvider = () => this.coordinateTransformer.getStrokeScale();
-        }
-      }
-      draw(metafileData, options = {}) {
-        __wmfEmfRendererLog("Drawing EMF with header:", metafileData.header);
-        __wmfEmfRendererLog("Number of records:", metafileData.records.length);
-        const viewWidth = options.viewWidth || DEFAULT_VIEW_WIDTH;
-        const viewHeight = options.viewHeight || DEFAULT_VIEW_HEIGHT;
-        let canvasWidth, canvasHeight;
-        if (metafileData.header.bounds) {
-          const bounds = metafileData.header.bounds;
-          const bW = Math.abs(bounds.right - bounds.left);
-          const bH = Math.abs(bounds.bottom - bounds.top);
-          canvasWidth = Math.max(1, Math.round(bW));
-          canvasHeight = Math.max(1, Math.round(bH));
-          this.coordinateTransformer.setDeviceOrg(bounds.left, bounds.top);
-          this.coordinateTransformer.setWindowOrg(0, 0);
-          this.coordinateTransformer.setWindowExt(canvasWidth, canvasHeight);
-          this.coordinateTransformer.setViewportOrg(0, 0);
-          this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
-          this._fileWindowExtX = canvasWidth;
-          this._fileWindowExtY = canvasHeight;
-          this._fileViewportExtX = canvasWidth;
-          this._fileViewportExtY = canvasHeight;
-          __wmfEmfRendererLog("Canvas(device):", canvasWidth, "x", canvasHeight);
-        } else {
-          canvasWidth = viewWidth;
-          canvasHeight = viewHeight;
-        }
-        const dpr = typeof window !== "undefined" && window.devicePixelRatio || 1;
-        this.devicePixelRatio = dpr;
-        this.ctx.canvas.width = Math.round(canvasWidth * dpr);
-        this.ctx.canvas.height = Math.round(canvasHeight * dpr);
-        this._canvasW = canvasWidth;
-        this._canvasH = canvasHeight;
-        const _initW = metafileData.header.bounds && metafileData.header.bounds.right - metafileData.header.bounds.left || canvasWidth;
-        const _initH = metafileData.header.bounds && metafileData.header.bounds.bottom - metafileData.header.bounds.top || canvasHeight;
-        this._fileWindowExtX = _initW;
-        this._fileWindowExtY = _initH;
-        this._fileViewportExtX = _initW;
-        this._fileViewportExtY = _initH;
-        if (metafileData.header.szlDevice && metafileData.header.szlMillimeters) {
-          const mmX = metafileData.header.szlMillimeters.cx || metafileData.header.szlMillimeters.cy || 1;
-          const pxX = metafileData.header.szlDevice.cx || metafileData.header.szlDevice.cy || 1;
-          this.coordinateTransformer.setPxPerMm(pxX / mmX);
-        }
-        this.ctx.canvas.style.width = canvasWidth + "px";
-        this.ctx.canvas.style.height = canvasHeight + "px";
-        this.ctx.scale(dpr, dpr);
-        __wmfEmfRendererLog("Canvas size set to:", canvasWidth, "x", canvasHeight, "(DPR:", dpr, ", actual:", this.ctx.canvas.width, "x", this.ctx.canvas.height + ")");
-        this.ctx.fillStyle = "#ffffff";
-        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-        __wmfEmfRendererLog("Canvas cleared");
-        this.ctx.strokeStyle = "#000000";
-        this.ctx.fillStyle = "#ffffff";
-        this.ctx.lineWidth = 1;
-        this.ctx.lineCap = "round";
-        this.ctx.lineJoin = "round";
-        this.fillColor = "#ffffff";
-        this.strokeColor = "#000000";
-        __wmfEmfRendererLog("Drawing styles set");
-        this.currentPath = [];
-        this.pathState = "idle";
-        this.currentPos = { x: 0, y: 0 };
-        this.currentPalette = null;
-        this._skipEmfPlusPlayback = this._detectDualMode(metafileData.records);
-        const debugLogs = globalThis.__WMF_DEBUG__;
-        for (let i = 0; i < metafileData.records.length; i++) {
-          const record = metafileData.records[i];
-          this._recSinceGdiC = (this._recSinceGdiC == null ? 999 : this._recSinceGdiC) + 1;
-          if (record.type === 70) this._recSinceGdiC = 0;
-          if (debugLogs) {
-            __wmfEmfRendererLog("Processing EMF record", i, ":", record.type, "(0x" + record.type.toString(16).padStart(8, "0") + ")");
-          }
-          this.processEmfRecordType(record.type, record.data);
-        }
-        this.finishPath();
-        __wmfEmfRendererLog("EMF drawing completed");
-      }
-      processEmfRecordType(recordType, data) {
-        const handlerName = EMF_RECORD_HANDLERS[recordType];
-        if (handlerName !== void 0) {
-          if (handlerName !== null) {
-            this[handlerName](data);
-          }
-          return;
-        }
-        __wmfEmfRendererLog("Unknown EMF record type:", recordType, "(0x" + recordType.toString(16).padStart(8, "0") + ")");
-        this.tryProcessAsCoordinates(data);
-      }
-      // 辅助方法：从数据中读取DWORD（4字节无符号整数）
-      readDwordFromData(data, offset) {
-        if (offset + 4 > data.length) return 0;
-        return data[offset] | data[offset + 1] << 8 | data[offset + 2] << 16 | data[offset + 3] << 24;
-      }
-      // 辅助方法：从数据中读取有符号LONG（4字节有符号整数）
-      readLongFromData(data, offset) {
-        if (offset + 4 > data.length) return 0;
-        const value = data[offset] | data[offset + 1] << 8 | data[offset + 2] << 16 | data[offset + 3] << 24;
-        return value > 2147483647 ? value - 4294967296 : value;
-      }
-      // 辅助方法：将RGB颜色值转换为十六进制字符串
-      rgbToHex(rgb) {
-        const r = (rgb & 255).toString(16).padStart(2, "0");
-        const g = (rgb >> 8 & 255).toString(16).padStart(2, "0");
-        const b = (rgb >> 16 & 255).toString(16).padStart(2, "0");
-        return `#${r}${g}${b}`;
-      }
-      // 应用GDI对象样式
-      applyGdiObject(obj) {
-        if (obj.type === "pen") {
-          const isNullPen = obj.style === 5 || obj.color === "transparent";
-          this._penNull = isNullPen;
-          this._penIsBlack = isNullPen || /^(#000000|#000|black)$/i.test(obj.color || "");
-          if (!obj._isStockPen) this._penStockBlack = false;
-          this.ctx.strokeStyle = isNullPen ? "transparent" : obj.color;
-          this.ctx.lineCap = null;
-          this.ctx.lineJoin = null;
-          if (!isNullPen) {
-            switch (obj.style & 3840) {
-              case 0:
-                this.ctx.lineCap = "round";
-                break;
-              case 256:
-                this.ctx.lineCap = "square";
-                break;
-              case 512:
-                this.ctx.lineCap = "butt";
-                break;
-              default:
-                break;
-            }
-            switch (obj.style & 61440) {
-              case 0:
-                this.ctx.lineJoin = "round";
-                break;
-              case 4096:
-                this.ctx.lineJoin = "bevel";
-                break;
-              case 8192:
-                this.ctx.lineJoin = "miter";
-                break;
-              default:
-                break;
-            }
-          }
-          if (!isNullPen) {
-            const PS_GEOMETRIC = 65536;
-            const w = (obj.style & 983040) === PS_GEOMETRIC ? obj.width || 1 : 1;
-            const scale = this.coordinateTransformer.getScale();
-            const wMap = w * Math.abs(scale.x || 1);
-            this.ctx.lineWidth = wMap < 1 ? 1 : wMap;
-            const u = obj.width || 1;
-            const ps = obj.style & 15;
-            let dash = [];
-            if (ps >= 1 && ps <= 4) {
-              const D = 5 * u, T = 1 * u;
-              if (ps === 1) dash = [D, D];
-              else if (ps === 2) dash = [T, T];
-              else if (ps === 3) dash = [D, D, T, D];
-              else dash = [D, D, T, T, T, D];
-            }
-            if (typeof this.ctx.setLineDash === "function") this.ctx.setLineDash(dash);
-          } else {
-            if (typeof this.ctx.setLineDash === "function") this.ctx.setLineDash([]);
-          }
-        } else if (obj.type === "brush") {
-          this.ctx.fillStyle = obj.url || (obj.color === "transparent" ? "transparent" : obj.color);
-        } else if (obj.type === "font" && obj.faceName) {
-          const scale = this.coordinateTransformer.getScale();
-          const size = Math.max(1, Math.round(Math.abs(obj.height || 12) * Math.abs(scale.y || 1)));
-          const weight = (obj.weight || 400) >= 700 ? "bold " : "";
-          const italic = obj.italic ? "italic " : "";
-          this.ctx.font = `${italic}${weight}${size}px "${obj.faceName || "sans-serif"}"`;
-        }
-      }
-      // 填充形状收尾：fill 后描边。默认黑色 1px pen 或 NULL_PEN 时改为「按填充色 1px 描边」
-      // （每个填充形状输出为 fill+stroke 同色 1px 的 path，
-      //  即使当前 pen 是 PS_NULL；彩色 fill 边缘因此无黑框）；
-      // 显式彩色/宽笔保持原样描边。
-      _afterFillShape() {
-        if (this._penNull || this._penStockBlack) {
-          const f = this.ctx.fillStyle;
-          if (!f || f === "none" || f === "transparent") return;
-          const s = this.ctx.strokeStyle;
-          const w = this.ctx.lineWidth;
-          this.ctx.strokeStyle = f;
-          this.ctx.lineWidth = 1;
-          this.ctx.stroke();
-          this.ctx.strokeStyle = s;
-          this.ctx.lineWidth = w;
-        } else {
-          this.ctx.stroke();
-        }
-      }
-      // 应用Stock对象（Windows预定义对象，GetStockObject 枚举 + ENHMETA_STOCK_OBJECT(0x80000000)）
-      applyStockObject(handle) {
-        const stockObjects = {
-          2147483648: { type: "brush", color: "#ffffff" },
-          // WHITE_BRUSH
-          2147483649: { type: "brush", color: "#c0c0c0" },
-          // LTGRAY_BRUSH
-          2147483650: { type: "brush", color: "#808080" },
-          // GRAY_BRUSH
-          2147483651: { type: "brush", color: "#404040" },
-          // DKGRAY_BRUSH
-          2147483652: { type: "brush", color: "#000000" },
-          // BLACK_BRUSH
-          2147483653: { type: "brush", color: "transparent" },
-          // NULL_BRUSH (HOLLOW)
-          2147483654: { type: "pen", color: "#ffffff", width: 1 },
-          // WHITE_PEN
-          2147483655: { type: "pen", color: "#000000", width: 1 },
-          // BLACK_PEN
-          2147483656: { type: "pen", color: "transparent", width: 0 },
-          // NULL_PEN
-          2147483661: { type: "font", height: -12, weight: 700, faceName: "System" },
-          // SYSTEM_FONT
-          2147483665: { type: "font", height: -12, weight: 400, faceName: "MS Shell Dlg" }
-          // DEFAULT_GUI_FONT
-        };
-        const obj = stockObjects[handle];
-        if (obj) {
-          if (obj.type === "pen") this._penStockBlack = obj.width === 1 && /^(#000000|black)$/i.test(obj.color || "");
-          obj._isStockPen = true;
-          this.applyGdiObject(obj);
-        }
-      }
-      // 以下是具体的EMF处理方法
-      processEmfHeader(data) {
-        __wmfEmfRendererLog("Processing EMF header");
-      }
-      processEmfPolyBezier(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        __wmfEmfRendererLog("Processing EMF PolyBezier, count:", count);
-        if (data.length < 20 + count * 8) return;
-        if (count >= 4 && count % 3 === 1) {
-          const points = [];
-          for (let i = 0; i < count; i++) {
-            const x = this.readLongFromData(data, 20 + i * 8);
-            const y = this.readLongFromData(data, 24 + i * 8);
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-            points.push(transformed);
-          }
-          this.ctx.beginPath();
-          this.ctx.moveTo(points[0].x, points[0].y);
-          for (let i = 1; i < points.length; i += 3) {
-            if (i + 2 < points.length) {
-              this.ctx.bezierCurveTo(
-                points[i].x,
-                points[i].y,
-                points[i + 1].x,
-                points[i + 1].y,
-                points[i + 2].x,
-                points[i + 2].y
-              );
-            }
-          }
-          this.ctx.stroke();
-        }
-      }
-      processEmfPolygon(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        __wmfEmfRendererLog("Processing EMF Polygon, count:", count);
-        if (data.length < 20 + count * 8) return;
-        this.ctx.beginPath();
-        for (let i = 0; i < count; i++) {
-          const x = this.readLongFromData(data, 20 + i * 8);
-          const y = this.readLongFromData(data, 24 + i * 8);
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-          if (i === 0) {
-            this.ctx.moveTo(transformed.x, transformed.y);
-          } else {
-            this.ctx.lineTo(transformed.x, transformed.y);
-          }
-        }
-        this.ctx.closePath();
-        this.ctx.fill();
-        this._afterFillShape();
-      }
-      processEmfPolyline(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        __wmfEmfRendererLog("Processing EMF Polyline, count:", count);
-        if (data.length < 20 + count * 8) return;
-        this.ctx.beginPath();
-        for (let i = 0; i < count; i++) {
-          const x = this.readLongFromData(data, 20 + i * 8);
-          const y = this.readLongFromData(data, 24 + i * 8);
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-          if (i === 0) {
-            this.ctx.moveTo(transformed.x, transformed.y);
-          } else {
-            this.ctx.lineTo(transformed.x, transformed.y);
-          }
-        }
-        this.ctx.stroke();
-      }
-      processEmfPolyBezierTo(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        __wmfEmfRendererLog("Processing EMF PolyBezierTo, count:", count);
-        if (data.length < 20 + count * 8 || count % 3 !== 0) return;
-        const points = [];
-        for (let i = 0; i < count; i++) {
-          const x = this.readLongFromData(data, 20 + i * 8);
-          const y = this.readLongFromData(data, 24 + i * 8);
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-          points.push(transformed);
-        }
-        if (this._pathActive()) {
-          this._ensurePathStart();
-          for (let i = 0; i < points.length; i += 3) {
-            if (i + 2 < points.length) {
-              this.ctx.bezierCurveTo(
-                points[i].x,
-                points[i].y,
-                points[i + 1].x,
-                points[i + 1].y,
-                points[i + 2].x,
-                points[i + 2].y
-              );
-            }
-          }
-        } else {
-          this.ctx.beginPath();
-          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
-          this.ctx.moveTo(start.x, start.y);
-          for (let i = 0; i < points.length; i += 3) {
-            if (i + 2 < points.length) {
-              this.ctx.bezierCurveTo(
-                points[i].x,
-                points[i].y,
-                points[i + 1].x,
-                points[i + 1].y,
-                points[i + 2].x,
-                points[i + 2].y
-              );
-            }
-          }
-          this.ctx.stroke();
-        }
-        const last = points[points.length - 1];
-        if (last) {
-          this.currentPos = {
-            x: this.readLongFromData(data, 20 + (count - 1) * 8),
-            y: this.readLongFromData(data, 24 + (count - 1) * 8)
-          };
-        }
-      }
-      processEmfPolylineTo(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        __wmfEmfRendererLog("Processing EMF PolylineTo, count:", count);
-        if (data.length < 20 + count * 8) return;
-        if (this._pathActive()) {
-          this._ensurePathStart();
-          for (let i = 0; i < count; i++) {
-            const x = this.readLongFromData(data, 20 + i * 8);
-            const y = this.readLongFromData(data, 24 + i * 8);
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-            this.ctx.lineTo(transformed.x, transformed.y);
-          }
-        } else {
-          this.ctx.beginPath();
-          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
-          this.ctx.moveTo(start.x, start.y);
-          for (let i = 0; i < count; i++) {
-            const x = this.readLongFromData(data, 20 + i * 8);
-            const y = this.readLongFromData(data, 24 + i * 8);
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-            this.ctx.lineTo(transformed.x, transformed.y);
-          }
-          this.ctx.stroke();
-        }
-        this.currentPos = {
-          x: this.readLongFromData(data, 20 + (count - 1) * 8),
-          y: this.readLongFromData(data, 24 + (count - 1) * 8)
-        };
-      }
-      processEmfPolyPolyline(data) {
-        if (data.length < 24) return;
-        const numberOfPolylines = this.readDwordFromData(data, 16);
-        const totalCount = this.readDwordFromData(data, 20);
-        __wmfEmfRendererLog("Processing EMF PolyPolyline, polylines:", numberOfPolylines, "total points:", totalCount);
-        if (data.length < 24 + numberOfPolylines * 4 + totalCount * 8) return;
-        const counts = [];
-        for (let i = 0; i < numberOfPolylines; i++) {
-          counts.push(this.readDwordFromData(data, 24 + i * 4));
-        }
-        let pointOffset = 24 + numberOfPolylines * 4;
-        for (let i = 0; i < numberOfPolylines; i++) {
-          const count = counts[i];
-          this.ctx.beginPath();
-          for (let j = 0; j < count; j++) {
-            const x = this.readLongFromData(data, pointOffset);
-            const y = this.readLongFromData(data, pointOffset + 4);
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-            if (j === 0) {
-              this.ctx.moveTo(transformed.x, transformed.y);
-            } else {
-              this.ctx.lineTo(transformed.x, transformed.y);
-            }
-            pointOffset += 8;
-          }
-          this.ctx.stroke();
-        }
-      }
-      processEmfPolyPolygon(data) {
-        if (data.length < 24) return;
-        const numberOfPolygons = this.readDwordFromData(data, 16);
-        const totalCount = this.readDwordFromData(data, 20);
-        __wmfEmfRendererLog("Processing EMF PolyPolygon, polygons:", numberOfPolygons, "total points:", totalCount);
-        if (data.length < 24 + numberOfPolygons * 4 + totalCount * 8) return;
-        const counts = [];
-        for (let i = 0; i < numberOfPolygons; i++) {
-          counts.push(this.readDwordFromData(data, 24 + i * 4));
-        }
-        let pointOffset = 24 + numberOfPolygons * 4;
-        this.ctx.beginPath();
-        for (let i = 0; i < numberOfPolygons; i++) {
-          const count = counts[i];
-          for (let j = 0; j < count; j++) {
-            const x = this.readLongFromData(data, pointOffset);
-            const y = this.readLongFromData(data, pointOffset + 4);
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-            if (j === 0) {
-              this.ctx.moveTo(transformed.x, transformed.y);
-            } else {
-              this.ctx.lineTo(transformed.x, transformed.y);
-            }
-            pointOffset += 8;
-          }
-          this.ctx.closePath();
-        }
-        this.ctx.fill();
-        this._afterFillShape();
-      }
-      // ============ EMR_*16 系列（16 位坐标变体，MS-EMF 2.3.5）============
-      // 与 32 位版本结构相同，区别仅在于 aPoints 每点 4 字节（x/y 为 16 位有符号整数）
-      readInt16FromData(data, offset) {
-        if (offset + 2 > data.length) return 0;
-        const value = data[offset] | data[offset + 1] << 8;
-        return value > 32767 ? value - 65536 : value;
-      }
-      readPoints16(data, offset, count) {
-        const points = [];
-        for (let i = 0; i < count; i++) {
-          const x = this.readInt16FromData(data, offset + i * 4);
-          const y = this.readInt16FromData(data, offset + i * 4 + 2);
-          points.push(this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height));
-        }
-        return points;
-      }
-      processEmfPolyBezier16(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        if (count < 4 || count % 3 !== 1 || data.length < 20 + count * 4) return;
-        const points = this.readPoints16(data, 20, count);
-        if (this._pathActive()) {
-          this.ctx.moveTo(points[0].x, points[0].y);
-          for (let i = 1; i < points.length; i += 3) {
-            if (i + 2 < points.length) {
-              this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
-            }
-          }
-          return;
-        }
-        this.ctx.beginPath();
-        this.ctx.moveTo(points[0].x, points[0].y);
-        for (let i = 1; i < points.length; i += 3) {
-          if (i + 2 < points.length) {
-            this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
-          }
-        }
-        this.ctx.stroke();
-      }
-      processEmfPolygon16(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        if (count < 3 || data.length < 20 + count * 4) return;
-        const points = this.readPoints16(data, 20, count);
-        if (this._pathActive()) {
-          points.forEach((p, i) => i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
-          this.ctx.closePath();
-          return;
-        }
-        this.ctx.beginPath();
-        points.forEach((p, i) => i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
-        this.ctx.closePath();
-        this.ctx.fill();
-        this._afterFillShape();
-      }
-      processEmfPolyline16(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        if (count < 2 || data.length < 20 + count * 4) return;
-        const points = this.readPoints16(data, 20, count);
-        if (this._pathActive()) {
-          points.forEach((p, i) => i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
-          return;
-        }
-        this.ctx.beginPath();
-        points.forEach((p, i) => i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
-        this.ctx.stroke();
-      }
-      processEmfPolyBezierTo16(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        if (count < 3 || count % 3 !== 0 || data.length < 20 + count * 4) return;
-        const points = this.readPoints16(data, 20, count);
-        if (this._pathActive()) {
-          this._ensurePathStart();
-          for (let i = 0; i + 2 < points.length; i += 3) {
-            this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
-          }
-        } else {
-          this.ctx.beginPath();
-          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
-          this.ctx.moveTo(start.x, start.y);
-          for (let i = 0; i + 2 < points.length; i += 3) {
-            this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
-          }
-          this.ctx.stroke();
-        }
-        this.currentPos = {
-          x: this.readInt16FromData(data, 20 + (count - 1) * 4),
-          y: this.readInt16FromData(data, 20 + (count - 1) * 4 + 2)
-        };
-      }
-      processEmfPolyLineTo16(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        if (count < 1 || data.length < 20 + count * 4) return;
-        const points = this.readPoints16(data, 20, count);
-        if (this._pathActive()) {
-          this._ensurePathStart();
-          points.forEach((p) => this.ctx.lineTo(p.x, p.y));
-        } else {
-          this.ctx.beginPath();
-          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
-          this.ctx.moveTo(start.x, start.y);
-          points.forEach((p) => this.ctx.lineTo(p.x, p.y));
-          this.ctx.stroke();
-        }
-        this.currentPos = {
-          x: this.readInt16FromData(data, 20 + (count - 1) * 4),
-          y: this.readInt16FromData(data, 20 + (count - 1) * 4 + 2)
-        };
-      }
-      processEmfPolyPolyline16(data) {
-        if (data.length < 24) return;
-        const nPolys = this.readDwordFromData(data, 16);
-        const cTotal = this.readDwordFromData(data, 20);
-        if (data.length < 24 + nPolys * 4 + cTotal * 4) return;
-        let pointOffset = 24 + nPolys * 4;
-        for (let i = 0; i < nPolys; i++) {
-          const count = this.readDwordFromData(data, 24 + i * 4);
-          const points = this.readPoints16(data, pointOffset, count);
-          pointOffset += count * 4;
-          this.ctx.beginPath();
-          points.forEach((p, j) => j === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
-          this.ctx.stroke();
-        }
-      }
-      processEmfPolyPolygon16(data) {
-        if (data.length < 24) return;
-        const nPolys = this.readDwordFromData(data, 16);
-        const cTotal = this.readDwordFromData(data, 20);
-        if (data.length < 24 + nPolys * 4 + cTotal * 4) return;
-        let pointOffset = 24 + nPolys * 4;
-        const inPath = this._pathActive();
-        if (!inPath) this.ctx.beginPath();
-        for (let i = 0; i < nPolys; i++) {
-          const count = this.readDwordFromData(data, 24 + i * 4);
-          const points = this.readPoints16(data, pointOffset, count);
-          pointOffset += count * 4;
-          points.forEach((p, j) => j === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
-          this.ctx.closePath();
-        }
-        if (inPath) return;
-        this.ctx.fill();
-        this._afterFillShape();
-      }
-      processEmfPolyDraw16(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        if (data.length < 20 + count * 5) return;
-        for (let i = 0; i < count; i++) {
-          const p = this.readPoints16(data, 20 + i * 4, 1)[0];
-          const type = data[20 + count * 4 + i];
-          if (type & 1) {
-            this.ctx.moveTo(p.x, p.y);
-          } else if (type & 6) {
-            this.ctx.lineTo(p.x, p.y);
-          }
-          if (type & 128) {
-            this.ctx.closePath();
-          }
-        }
-        this.ctx.stroke();
-      }
-      processEmfExtCreatePen(data) {
-        if (data.length < 40) return;
-        const ihPen = this.readDwordFromData(data, 0);
-        if ((ihPen & 2147483648) !== 0) return;
-        const style = this.readDwordFromData(data, 20);
-        const width = this.readDwordFromData(data, 24);
-        const brushStyle = this.readDwordFromData(data, 28);
-        const color = this.readDwordFromData(data, 32);
-        const elpHatch = this.readLongFromData(data, 36);
-        let penColor;
-        if (brushStyle === 2 && (elpHatch === 8 || elpHatch === 9)) penColor = this.textColor;
-        else if (brushStyle === 2 && (elpHatch === 10 || elpHatch === 11)) penColor = this.fillColor;
-        else penColor = this.rgbToHex(color);
-        this.gdiObjectManager.createObjectAt(ihPen, { type: "pen", style, width, color: penColor });
-        __wmfEmfRendererLog("EMR_EXTCREATEPEN: ih=", ihPen, "style:", style, "width:", width, "color:", penColor);
-      }
-      processEmfSmallTextOut(data) {
-        if (data.length < 28) return;
-        const x = this.readLongFromData(data, 0);
-        const y = this.readLongFromData(data, 4);
-        const cChars = this.readDwordFromData(data, 8);
-        const options = this.readDwordFromData(data, 12);
-        const ETO_NO_RECT = 256;
-        const ETO_SMALL_CHARS = 512;
-        const charWidth = options & ETO_SMALL_CHARS ? 2 : 1;
-        let stringOffset = options & ETO_NO_RECT ? 28 : 44;
-        if (!(options & ETO_NO_RECT)) this._fillOpaqueTextRect(options, data, 28);
-        if (cChars === 0 || stringOffset + cChars * charWidth > data.length) return;
-        let text = "";
-        for (let i = 0; i < cChars; i++) {
-          if (charWidth === 2) {
-            text += String.fromCharCode(data[stringOffset + i * 2] | data[stringOffset + i * 2 + 1] << 8);
-          } else {
-            text += String.fromCharCode(data[stringOffset + i]);
-          }
-        }
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-        const savedFillStyle = this.ctx.fillStyle;
-        this.ctx.fillStyle = this.textColor;
-        this.ctx.fillText(text, transformed.x, transformed.y);
-        this.ctx.fillStyle = savedFillStyle;
-        __wmfEmfRendererLog("EMR_SMALLTEXTOUT:", x, y, "text:", text.substring(0, 50));
-      }
-      // 处理 EMR_GDICOMMENT：EMF+ 数据经此内嵌于标准 EMF 记录流（Windows 按记录序交织播放）。
-      // data（record.data，已剥离 8 字节 EMR 头）布局：[DataSize(4)] [CommentIdentifier(4)] [EMF+ 记录...]
-      // 判定是否为 EMF+/GDI 双模式文件：存在 EMF+ 注释块 && 存在 GDI 绘图记录。
-      _detectDualMode(records) {
-        let hasEmfPlus = false;
-        let hasGdiDraw = false;
-        for (const r of records) {
-          const t = r.type >>> 0;
-          if (t === RECORD_TYPES.EMR_GDICOMMENT) {
-            if (r.data && r.data.length >= 8 && r.data[4] === 69 && r.data[5] === 77 && r.data[6] === 70 && r.data[7] === 43) {
-              hasEmfPlus = true;
-              if (hasGdiDraw) return true;
-            }
-            continue;
-          }
-          const handler = EMF_RECORD_HANDLERS[t];
-          if (typeof handler === "string" && EMF_DRAW_HANDLER_RE.test(handler)) hasGdiDraw = true;
-          if (hasEmfPlus && hasGdiDraw) return true;
-        }
-        return false;
-      }
-      processEmfGdiComment(data) {
-        if (!data || data.length < 8) return;
-        if (this.readDwordFromData(data, 4) !== SIGNATURES.EMF_PLUS_COMMENT_ID) return;
-        try {
-          if (this._skipEmfPlusPlayback) return;
-          const parser = new EmfPlusParser2(data);
-          const emfPlusRecords = parser.parseEmfPlusRecords(data);
-          if (emfPlusRecords.length === 0) return;
-          if (!this._emfPlusDrawer) {
-            this._emfPlusDrawer = new EmfPlusDrawer2(this.ctx);
-            this._emfPlusDrawer.coordinateTransformer = this.coordinateTransformer;
-          }
-          for (const rec of emfPlusRecords) {
-            this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
-          }
-        } catch (e) {
-          __wmfEmfRendererLog(
-            "EMF+ GDIComment playback failed:",
-            /** @type {Error} */
-            e.message
-          );
-        }
-      }
-      processEmfSetWindowExtEx(data) {
-        if (data.length < 8) return;
-        const x = this.readLongFromData(data, 0);
-        const y = this.readLongFromData(data, 4);
-        __wmfEmfRendererLog("EMF SetWindowExtEx:", x, y);
-        this._fileWindowExtX = x || 1;
-        this._fileWindowExtY = y || 1;
-        this.coordinateTransformer.setWindowExt(this._fileWindowExtX, this._fileWindowExtY);
-      }
-      processEmfSetWindowOrgEx(data) {
-        if (data.length < 8) return;
-        const x = this.readLongFromData(data, 0);
-        const y = this.readLongFromData(data, 4);
-        __wmfEmfRendererLog("EMF SetWindowOrgEx:", x, y);
-        this.coordinateTransformer.setWindowOrg(x, y);
-      }
-      processEmfSetViewportExtEx(data) {
-        if (data.length < 8) return;
-        const x = this.readLongFromData(data, 0);
-        const y = this.readLongFromData(data, 4);
-        __wmfEmfRendererLog("EMF SetViewportExtEx:", x, y);
-        this._fileViewportExtX = x || 1;
-        this._fileViewportExtY = y || 1;
-        this.coordinateTransformer.setViewportExt(x, y);
-      }
-      processEmfSetViewportOrgEx(data) {
-        if (data.length < 8) return;
-        const x = this.readLongFromData(data, 0);
-        const y = this.readLongFromData(data, 4);
-        __wmfEmfRendererLog("EMF SetViewportOrgEx:", x, y);
-        this.coordinateTransformer.setViewportOrg(x, y);
-      }
-      processEmfSetBrushOrgEx(data) {
-        if (data.length < 8) return;
-        const x = this.readDwordFromData(data, 0);
-        const y = this.readDwordFromData(data, 4);
-        __wmfEmfRendererLog("EMF SetBrushOrgEx:", x, y);
-      }
-      processEmfSetMapMode(data) {
-        if (data.length < 4) return;
-        const mode = this.readDwordFromData(data, 0);
-        this.coordinateTransformer.setMapMode(mode);
-        __wmfEmfRendererLog("EMF SetMapMode:", mode);
-      }
-      processEmfSetTextColor(data) {
-        if (data.length < 4) return;
-        const color = this.readDwordFromData(data, 0);
-        this.textColor = this.rgbToHex(color);
-        __wmfEmfRendererLog("EMF SetTextColor:", color, "->", this.textColor);
-      }
-      processEmfSetBkColor(data) {
-        if (data.length < 4) return;
-        const color = this.readDwordFromData(data, 0);
-        this.fillColor = this.rgbToHex(color);
-        this.ctx.fillStyle = this.fillColor;
-        __wmfEmfRendererLog("EMF SetBkColor:", color, "->", this.fillColor);
-      }
-      processEmfMoveToEx(data) {
-        if (data.length < 8) return;
-        const x = this.readLongFromData(data, 0);
-        const y = this.readLongFromData(data, 4);
-        if (this._pathActive()) {
-          const t = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-          this.ctx.moveTo(t.x, t.y);
-        }
-        this.currentPos = { x, y };
-        __wmfEmfRendererLog("EMF MoveToEx:", x, y);
-      }
-      processEmfRestoreDC(data) {
-        if (data.length < 4) return;
-        const savedDC = this.readDwordFromData(data, 0) | 0;
-        const count = Math.min(savedDC === 0 ? 1 : Math.abs(savedDC), this.dcStateStack.length);
-        let restored = null;
-        for (let i = 0; i < count; i++) {
-          if (this.dcStateStack.length > 0) {
-            restored = this.dcStateStack.pop();
-          }
-          this.ctx.restore();
-        }
-        if (restored) {
-          this._restoreDcState(restored);
-        }
-        __wmfEmfRendererLog("EMF RestoreDC:", savedDC, "count:", count);
-      }
-      processEmfSelectObject(data) {
-        if (data.length < 4) return;
-        const objectHandle = this.readDwordFromData(data, 0);
-        __wmfEmfRendererLog("EMF SelectObject:", objectHandle);
-        const obj = this.gdiObjectManager.selectObject(objectHandle);
-        if (obj) {
-          this.applyGdiObject(obj);
-        } else if (objectHandle >>> 0 >= 2147483648) {
-          this.applyStockObject(objectHandle >>> 0);
-        }
-      }
-      processEmfCreatePen(data) {
-        if (data.length < 20) return;
-        const ihPen = this.readDwordFromData(data, 0);
-        if ((ihPen & 2147483648) !== 0) return;
-        const penStyle = this.readDwordFromData(data, 4);
-        const width = this.readLongFromData(data, 8);
-        const color = this.readDwordFromData(data, 16);
-        __wmfEmfRendererLog("EMF CreatePen: ih=", ihPen, "style:", penStyle, "width:", width, "color:", color.toString(16));
-        const penColor = this.rgbToHex(color);
-        this.gdiObjectManager.createObjectAt(ihPen, { type: "pen", style: penStyle, width, color: penColor });
-      }
-      processEmfCreateBrushIndirect(data) {
-        if (data.length < 16) return;
-        const ihBrush = this.readDwordFromData(data, 0);
-        if ((ihBrush & 2147483648) !== 0) return;
-        const brushStyle = this.readDwordFromData(data, 4);
-        const color = this.readDwordFromData(data, 8);
-        const hatch = this.readLongFromData(data, 12);
-        __wmfEmfRendererLog("EMF CreateBrushIndirect: ih=", ihBrush, "style:", brushStyle, "color:", color.toString(16), "hatch:", hatch);
-        let brushColor = this.rgbToHex(color);
-        if (brushStyle === 2) {
-          if (hatch === 8 || hatch === 9) brushColor = this.textColor;
-          else if (hatch === 10 || hatch === 11) brushColor = this.fillColor;
-        }
-        this.gdiObjectManager.createObjectAt(ihBrush, {
-          type: "brush",
-          style: brushStyle,
-          color: brushStyle === 1 ? "transparent" : brushColor
-        });
-      }
-      processEmfEllipse(data) {
-        if (data.length < 16) return;
-        const left = this.readDwordFromData(data, 0);
-        const top = this.readDwordFromData(data, 4);
-        const right = this.readDwordFromData(data, 8);
-        const bottom = this.readDwordFromData(data, 12);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-        const { cx, cy, rx, ry } = GeometryUtils.ellipseFromCorners(transformedLeftTop, transformedRightBottom);
-        this.ctx.beginPath();
-        this.ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-        this.ctx.fill();
-        this.ctx.stroke();
-      }
-      processEmfRectangle(data) {
-        if (data.length < 16) return;
-        const left = this.readLongFromData(data, 0);
-        const top = this.readLongFromData(data, 4);
-        const right = this.readLongFromData(data, 8);
-        const bottom = this.readLongFromData(data, 12);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-        const width = Math.abs(transformedRightBottom.x - transformedLeftTop.x);
-        const height = Math.abs(transformedRightBottom.y - transformedLeftTop.y);
-        const x = Math.min(transformedLeftTop.x, transformedRightBottom.x);
-        const y = Math.min(transformedLeftTop.y, transformedRightBottom.y);
-        __wmfEmfRendererLog("EMF Rectangle:", x, y, width, height);
-        this.ctx.beginPath();
-        this.ctx.rect(x, y, width, height);
-        this.ctx.fill();
-        this.ctx.stroke();
-      }
-      processEmfLineTo(data) {
-        if (data.length < 8) return;
-        const x = this.readLongFromData(data, 0);
-        const y = this.readLongFromData(data, 4);
-        const to = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-        if (this._pathActive()) {
-          this._ensurePathStart();
-          this.ctx.lineTo(to.x, to.y);
-        } else {
-          const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
-          this.ctx.beginPath();
-          this.ctx.moveTo(from.x, from.y);
-          this.ctx.lineTo(to.x, to.y);
-          this.ctx.stroke();
-        }
-        this.currentPos = { x, y };
-        __wmfEmfRendererLog("EMF LineTo:", x, y);
-      }
-      processEmfBeginPath(data) {
-        __wmfEmfRendererLog("EMF BeginPath");
-        this.ctx.beginPath();
-        this.pathState = "active";
-      }
-      processEmfEndPath(data) {
-        __wmfEmfRendererLog("EMF EndPath");
-        this.pathState = "completed";
-      }
-      // ===== GDI 路径记录语义（BeginPath/EndPath 之间）=====
-      // 路径记录期间，To 类记录（PolylineTo/PolyBezierTo/LINETo 等）只向当前路径
-      // 追加线段，不产生绘制动作；渲染统一由 FILLPATH/STROKEPATH/STROKEANDFILLPATH
-      // 触发。若在此期间 beginPath()/stroke() 会清空/截断已累积的子路径
-      //（test-182：槽位圆角矩形被截成退化碎片段）。
-      _pathActive() {
-        return this.pathState === "active";
-      }
-      // 路径记录中确保子路径起点在"当前位置"（首记录无 MoveToEx 时）
-      _ensurePathStart() {
-        if (!this.ctx._hasSubpath) {
-          const s = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
-          this.ctx.moveTo(s.x, s.y);
-        }
-      }
-      processEmfStrokeAndFillPath(data) {
-        __wmfEmfRendererLog("EMF StrokeAndFillPath");
-        const skipFill = (this._recSinceGdiC || 999) < 30 && this._isGrayFillStyle();
-        if (skipFill) {
-          __wmfEmfRendererLog("  skip fill (GDI+ \u540E\u7ED8\u56FE\u533A\u80CC\u666F)");
-        } else {
-          this.ctx.fill();
-        }
-        this.ctx.stroke();
-        this.pathState = "idle";
-      }
-      // 当前 ctx.fillStyle 是否为纯灰色（R===G===B），用于识别绘图区背景 fill
-      _isGrayFillStyle() {
-        const s = this.ctx && this.ctx.fillStyle;
-        if (!s || typeof s !== "string") return false;
-        if (s.startsWith("#") && s.length === 7) {
-          const r = parseInt(s.slice(1, 3), 16);
-          const g = parseInt(s.slice(3, 5), 16);
-          const b = parseInt(s.slice(5, 7), 16);
-          return r === g && g === b;
-        }
-        return false;
-      }
-      processEmfStrokePath(data) {
-        __wmfEmfRendererLog("EMF StrokePath");
-        this.ctx.stroke();
-        this.pathState = "idle";
-      }
-      processEmfAbortPath(data) {
-        __wmfEmfRendererLog("EMF AbortPath");
-        this.pathState = "idle";
-      }
-      processEmfSetBkMode(data) {
-        if (data.length < 4) return;
-        const mode = this.readDwordFromData(data, 0);
-        __wmfEmfRendererLog("EMF SetBkMode:", mode);
-      }
-      processEmfSetRop2(data) {
-        if (data.length < 4) return;
-        const rop2 = this.readDwordFromData(data, 0);
-        __wmfEmfRendererLog("EMF SetRop2:", rop2);
-      }
-      processEmfSetStretchBltMode(data) {
-        if (data.length < 4) return;
-        const mode = this.readDwordFromData(data, 0);
-        __wmfEmfRendererLog("EMF SetStretchBltMode:", mode);
-      }
-      processEmfSetTextAlign(data) {
-        if (data.length < 4) return;
-        const align = this.readDwordFromData(data, 0);
-        __wmfEmfRendererLog("EMF SetTextAlign:", align);
-        const horiz = align & 6;
-        if (horiz === 2) {
-          this.ctx.textAlign = "right";
-        } else if (horiz === 6) {
-          this.ctx.textAlign = "center";
-        } else {
-          this.ctx.textAlign = "left";
-        }
-        const vert = align & 24;
-        if (vert === 8) {
-          this.ctx.textBaseline = "bottom";
-        } else if (vert === 24) {
-          this.ctx.textBaseline = "alphabetic";
-        } else {
-          this.ctx.textBaseline = "top";
-        }
-      }
-      processEmfDeleteObject(data) {
-        if (data.length < 4) return;
-        const objectHandle = this.readDwordFromData(data, 0);
-        __wmfEmfRendererLog("EMF DeleteObject:", objectHandle);
-        this.gdiObjectManager.deleteObject(objectHandle);
-      }
-      processEmfExtCreateFontIndirectW(data) {
-        if (data.length < 12) return;
-        const ihFont = this.readDwordFromData(data, 0);
-        if ((ihFont & 2147483648) !== 0) return;
-        const lfOff = 4;
-        if (lfOff + 92 > data.length) return;
-        const height = this.readLongFromData(data, lfOff);
-        const width = this.readLongFromData(data, lfOff + 4);
-        const escapement = this.readLongFromData(data, lfOff + 8);
-        const orientation = this.readLongFromData(data, lfOff + 12);
-        const weight = this.readLongFromData(data, lfOff + 16);
-        const italic = data[lfOff + 20];
-        const underline = data[lfOff + 21];
-        const strikeOut = data[lfOff + 22];
-        const charset = data[lfOff + 23];
-        let faceName = "";
-        for (let i = 0; i < 32; i++) {
-          const ch = data[lfOff + 28 + i * 2] | data[lfOff + 28 + i * 2 + 1] << 8;
-          if (ch === 0) break;
-          faceName += String.fromCharCode(ch);
-        }
-        __wmfEmfRendererLog("EMF ExtCreateFontIndirectW: ih=", ihFont, "height:", height, "width:", width, "weight:", weight, "face:", faceName, "escapement:", escapement);
-        this.gdiObjectManager.createObjectAt(ihFont, {
-          type: "font",
-          height,
-          width,
-          weight,
-          italic,
-          underline,
-          strikeOut,
-          faceName,
-          charset,
-          escapement,
-          orientation
-        });
-      }
-      processEmfExtTextOutA(data) {
-        this.processEmfTextOut(data, false);
-      }
-      processEmfExtTextOutW(data) {
-        this.processEmfTextOut(data, true);
-      }
-      // ETO_OPAQUE (0x0002)：以当前背景色（SETBKCOLOR → this.fillColor）填充 EmrText.rcl。
-      // 该动作**与文本内容无关**，nChars=0 时同样是合法且常用的「填充矩形」调用。
-      // data 布局见 processEmfTextOut；SMALLTEXTOUT 的 rcl 从 28 起（此处由调用方剔除该分支）。
-      _fillOpaqueTextRect(options, data, rclOff = 48) {
-        if ((options & 2) === 0) return;
-        if (rclOff + 16 > data.length) return;
-        const bg1 = this.coordinateTransformer.transform(
-          this.readLongFromData(data, rclOff),
-          this.readLongFromData(data, rclOff + 4),
-          this.ctx.canvas.width,
-          this.ctx.canvas.height
-        );
-        const bg2 = this.coordinateTransformer.transform(
-          this.readLongFromData(data, rclOff + 8),
-          this.readLongFromData(data, rclOff + 12),
-          this.ctx.canvas.width,
-          this.ctx.canvas.height
-        );
-        const bgW = Math.abs(bg2.x - bg1.x);
-        const bgH = Math.abs(bg2.y - bg1.y);
-        if (bgW > 0 && bgH > 0) {
-          const savedFillStyle = this.ctx.fillStyle;
-          this.ctx.fillStyle = this.fillColor;
-          this.ctx.fillRect(Math.min(bg1.x, bg2.x), Math.min(bg1.y, bg2.y), bgW, bgH);
-          this.ctx.fillStyle = savedFillStyle;
-        }
-      }
-      processEmfTextOut(data, isUnicode) {
-        if (data.length < 64) return;
-        const x = this.readLongFromData(data, 28);
-        const y = this.readLongFromData(data, 32);
-        const stringLength = this.readDwordFromData(data, 36);
-        const offString = this.readDwordFromData(data, 40);
-        const options = this.readDwordFromData(data, 44);
-        const stringOffset = offString - 8;
-        __wmfEmfRendererLog(`EMF ExtTextOut${isUnicode ? "W" : "A"}:`, x, y, "length:", stringLength, "offString:", offString, "options:", options);
-        this._fillOpaqueTextRect(options, data);
-        if (stringLength > 0 && stringOffset >= 0 && stringOffset < data.length) {
-          let text = "";
-          try {
-            if (isUnicode && stringOffset + stringLength * 2 <= data.length) {
-              for (let i = 0; i < stringLength; i++) {
-                const charCode = data[stringOffset + i * 2] | data[stringOffset + i * 2 + 1] << 8;
-                if (charCode > 0) {
-                  text += String.fromCharCode(charCode);
-                }
-              }
-            } else if (!isUnicode && stringOffset + stringLength <= data.length) {
-              for (let i = 0; i < stringLength; i++) {
-                const b = data[stringOffset + i];
-                text += b >= 128 ? " " : String.fromCharCode(b);
-              }
-            }
-            if (text.length > 0) {
-              const savedFillStyle = this.ctx.fillStyle;
-              this.ctx.fillStyle = this.textColor;
-              const curFont = this.gdiObjectManager && this.gdiObjectManager.currentFont;
-              const rawHeight = curFont && curFont.height ? Math.abs(curFont.height) : 12;
-              const escapement = curFont && curFont.escapement ? curFont.escapement : 0;
-              const weight = curFont && curFont.weight >= 700 ? "bold " : "";
-              const italic = curFont && curFont.italic ? "italic " : "";
-              const face = curFont && curFont.faceName ? curFont.faceName : "sans-serif";
-              const savedFont = this.ctx.font;
-              let matrix = this.coordinateTransformer.getSvgMatrix();
-              if (escapement !== 0) {
-                const deg = -Math.trunc(escapement / 10);
-                const rad = deg * Math.PI / 180;
-                const cos = Math.cos(rad), sin = Math.sin(rad);
-                const px = x, py = y;
-                const r = { a: cos, b: sin, c: -sin, d: cos, e: px - px * cos + py * sin, f: py - px * sin - py * cos };
-                matrix = {
-                  a: matrix.a * r.a + matrix.c * r.b,
-                  b: matrix.b * r.a + matrix.d * r.b,
-                  c: matrix.a * r.c + matrix.c * r.d,
-                  d: matrix.b * r.c + matrix.d * r.d,
-                  e: matrix.a * r.e + matrix.c * r.f + matrix.e,
-                  f: matrix.b * r.e + matrix.d * r.f + matrix.f
-                };
-              }
-              const gscale = Math.hypot(matrix.a, matrix.b) || 1;
-              const dev = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-              let rotDeg = 0;
-              if (Math.abs(matrix.b) > 1e-9 || Math.abs(matrix.c) > 1e-9) {
-                rotDeg = Math.atan2(matrix.b, matrix.a) * 180 / Math.PI;
-              }
-              this.ctx.font = `${italic}${weight}${rawHeight * gscale}px "${face}"`;
-              const escNorm = escapement % 3600;
-              const rotated = escNorm !== 0 || rotDeg !== 0;
-              this.ctx.fillText(text, dev.x, dev.y, rotated ? { rotate: rotDeg, escapement: escNorm } : void 0);
-              this.ctx.font = savedFont;
-              this.ctx.fillStyle = savedFillStyle;
-              __wmfEmfRendererLog("  Rendered text:", text.substring(0, 50));
-            }
-          } catch (error) {
-            __wmfEmfRendererLog(
-              "  Error reading text:",
-              /** @type {Error} */
-              error.message
-            );
-          }
-        }
-      }
-      // ---- 位图记录公共工具 ----
-      // 五种 BLT 记录的位图数据按 offBmiSrc/offBitsSrc 精确定位。
-      // 注意：这些偏移相对记录起始（含 8 字节 EMR 头），而 record.data 已剥离头部，
-      // 因此 data 内偏移 = 文件声明值 - 8。
-      // 解码 DIB（BITMAPINFOHEADER + 调色板 + 像素位）为 RGBA。
-      // 支持 1/4/8/16/24/32bpp、BI_RGB 未压缩、BI_RLE8/BI_RLE4、top-down（biHeight<0）。
-      _decodeDib(data, offBmi, cbBmi, offBits, cbBits, opts = {}) {
-        try {
-          const bmi = offBmi - 8;
-          const bits = offBits - 8;
-          if (bmi < 0 || bmi + 40 > data.length) return null;
-          const biSize = this.readDwordFromData(data, bmi);
-          const biWidth = this.readLongFromData(data, bmi + 4);
-          const biHeightRaw = this.readLongFromData(data, bmi + 8);
-          const biPlanes = data[bmi + 12] | data[bmi + 13] << 8;
-          const biBitCount = data[bmi + 14] | data[bmi + 15] << 8;
-          const biCompression = this.readDwordFromData(data, bmi + 16);
-          const biClrUsed = this.readDwordFromData(data, bmi + 32);
-          if (biPlanes !== 1 || biWidth <= 0 || biWidth > 2e4 || Math.abs(biHeightRaw) > 2e4) return null;
-          const width = biWidth;
-          const height = Math.abs(biHeightRaw);
-          const topDown = biHeightRaw < 0;
-          if (width * height > 4194304) return null;
-          const palCount = biBitCount <= 8 ? biClrUsed || 1 << biBitCount : 0;
-          const palette = [];
-          let anyPaletteAlpha = false;
-          if (opts.iUsage === 1 && this.currentPalette && this.currentPalette.entries && this.currentPalette.entries.length) {
-            for (let i = 0; i < palCount; i++) {
-              const o = bmi + biSize + i * 2;
-              if (o + 2 > data.length) break;
-              const idx = data[o] | data[o + 1] << 8;
-              const e = this.currentPalette.entries[idx];
-              palette.push(e ? [e.r, e.g, e.b, 255] : [0, 0, 0, 255]);
-            }
-          } else {
-            for (let i = 0; i < palCount; i++) {
-              const o = bmi + biSize + i * 4;
-              if (o + 4 > data.length) break;
-              const a = data[o + 3];
-              if (a !== 0) anyPaletteAlpha = true;
-              palette.push([data[o + 2], data[o + 1], data[o], a]);
-            }
-          }
-          const out = new Uint8ClampedArray(width * height * 4);
-          const end = Math.min(data.length, bits + cbBits);
-          const transparent = opts.transparentColor;
-          const tr = transparent !== void 0 ? transparent & 255 : -1;
-          const tg = transparent !== void 0 ? transparent >> 8 & 255 : -1;
-          const tb = transparent !== void 0 ? transparent >> 16 & 255 : -1;
-          const useAlpha = !!opts.alphaFromPixels;
-          const constantAlpha = opts.constantAlpha !== void 0 ? opts.constantAlpha : 255;
-          const putPx = (x, y, r, g, b, a) => {
-            if (x < 0 || x >= width || y < 0 || y >= height) return;
-            if (r === tr && g === tg && b === tb) a = 0;
-            if (constantAlpha < 255) a = a * constantAlpha / 255;
-            const o = (y * width + x) * 4;
-            out[o] = r;
-            out[o + 1] = g;
-            out[o + 2] = b;
-            out[o + 3] = a;
-          };
-          const rawAlpha = biBitCount === 32 ? new Uint8Array(width * height) : null;
-          let anyAlpha32 = false;
-          if (biCompression === 0 || biCompression === 3) {
-            const rowSize = Math.ceil(width * biBitCount / 32) * 4;
-            for (let y = 0; y < height; y++) {
-              const srcY = topDown ? y : height - 1 - y;
-              const rowOff = bits + srcY * rowSize;
-              for (let x = 0; x < width; x++) {
-                let r = 0, g = 0, b = 0, a = 255;
-                if (biBitCount === 1) {
-                  const o = rowOff + (x >> 3);
-                  if (o >= end) continue;
-                  const idx = data[o] >> 7 - (x & 7) & 1;
-                  const c = palette[idx] || [0, 0, 0, 255];
-                  r = c[0];
-                  g = c[1];
-                  b = c[2];
-                  a = c[3];
-                } else if (biBitCount === 4) {
-                  const o = rowOff + (x >> 1);
-                  if (o >= end) continue;
-                  const idx = (x & 1) === 0 ? data[o] >> 4 : data[o] & 15;
-                  const c = palette[idx] || [0, 0, 0, 255];
-                  r = c[0];
-                  g = c[1];
-                  b = c[2];
-                  a = c[3];
-                } else if (biBitCount === 8) {
-                  const o = rowOff + x;
-                  if (o >= end) continue;
-                  const c = palette[data[o]] || [0, 0, 0, 255];
-                  r = c[0];
-                  g = c[1];
-                  b = c[2];
-                  a = c[3];
-                } else if (biBitCount === 16) {
-                  const o = rowOff + x * 2;
-                  if (o + 2 > end) continue;
-                  const v = data[o] | data[o + 1] << 8;
-                  r = (v >> 10 & 31) * 255 / 31;
-                  g = (v >> 5 & 31) * 255 / 31;
-                  b = (v & 31) * 255 / 31;
-                } else if (biBitCount === 24) {
-                  const o = rowOff + x * 3;
-                  if (o + 3 > end) continue;
-                  b = data[o];
-                  g = data[o + 1];
-                  r = data[o + 2];
-                } else if (biBitCount === 32) {
-                  const o = rowOff + x * 4;
-                  if (o + 4 > end) continue;
-                  b = data[o];
-                  g = data[o + 1];
-                  r = data[o + 2];
-                  if (rawAlpha) rawAlpha[y * width + x] = data[o + 3];
-                  if (data[o + 3] !== 0) anyAlpha32 = true;
-                  a = useAlpha ? data[o + 3] : 255;
-                }
-                putPx(x, y, r, g, b, a);
-              }
-            }
-          } else if (biCompression === 1 || biCompression === 2) {
-            let pos = bits;
-            let x = 0, y = height - 1;
-            const horiz = biCompression === 2 ? 2 : 1;
-            while (pos + 2 <= end && y >= 0) {
-              const b0 = data[pos], b1 = data[pos + 1];
-              pos += 2;
-              if (b0 > 0) {
-                for (let i = 0; i < b0; i++) {
-                  let r, g, b;
-                  if (biCompression === 1) {
-                    const c = palette[b1] || [0, 0, 0, 255];
-                    r = c[0];
-                    g = c[1];
-                    b = c[2];
-                  } else {
-                    const idx = (i & 1) === 0 ? b1 >> 4 : b1 & 15;
-                    const c = palette[idx] || [0, 0, 0, 255];
-                    r = c[0];
-                    g = c[1];
-                    b = c[2];
-                  }
-                  putPx(x + i, y, r, g, b, 255);
-                }
-                x += b0;
-              } else if (b1 === 0) {
-                x = 0;
-                y--;
-              } else if (b1 === 1) {
-                break;
-              } else if (b1 === 2) {
-                if (pos + 2 > end) break;
-                x += data[pos];
-                y -= data[pos + 1];
-                pos += 2;
-              } else {
-                const nbytes = biCompression === 1 ? b1 : Math.ceil(b1 / 2);
-                if (pos + nbytes > end) break;
-                for (let i = 0; i < b1; i++) {
-                  let idx;
-                  if (biCompression === 1) idx = data[pos + i];
-                  else idx = (i & 1) === 0 ? data[pos + (i >> 1)] >> 4 : data[pos + (i >> 1)] & 15;
-                  const c = palette[idx] || [0, 0, 0, 255];
-                  putPx(x + i, y, c[0], c[1], c[2], 255);
-                }
-                x += b1;
-                pos += nbytes + (nbytes & 1 ? 1 : 0);
-              }
-            }
-          } else {
-            return null;
-          }
-          if (rawAlpha && anyAlpha32 && !useAlpha && constantAlpha >= 255 && transparent === void 0) {
-            for (let i = 0; i < rawAlpha.length; i++) {
-              out[i * 4 + 3] = rawAlpha[i];
-            }
-          }
-          if (!useAlpha && constantAlpha >= 255 && transparent === void 0 && biBitCount <= 8 && biCompression !== 1 && biCompression !== 2) {
-            let allZero = true;
-            for (let i = 0; i < out.length; i += 4) {
-              if (out[i + 3] !== 0) {
-                allZero = false;
-                break;
-              }
-            }
-            if (allZero) {
-              for (let i = 3; i < out.length; i += 4) out[i] = 255;
-            }
-          }
-          return { width, height, data: out };
-        } catch (e) {
-          __wmfEmfRendererLog(
-            "DIB decode failed:",
-            /** @type {Error} */
-            e.message
-          );
-          return null;
-        }
-      }
-      // 将解码后的 DIB 绘制到目标矩形（支持缩放）
-      // 语义：
-      //   position = map(Dest)，size = 映射的线性缩放作用于**带符号** (cxDest, cyDest)。
-      // 不做「min/max 归一化矩形」：负 cyDest 经 y 翻转映射（sy<0，如 winExt.y<0）自然
-      // 转为正高度、矩形从 map(yDest) 向下延伸；旧实现在此会少画恰好一个图高
-      // （test-041~049 簇 RMSE 0.12 的主因之一）。
-      _drawDecodedDib(dib, destX, destY, destW, destH) {
-        if (!dib || destW === 0 || destH === 0) return;
-        const t1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const size = dib.__pointCalSize ? this.coordinateTransformer.mapSizeAsPoint(destW, destH) : this.coordinateTransformer.mapSize(destW, destH);
-        let x = t1.x;
-        let y = t1.y;
-        let w = size.x;
-        let h = size.y;
-        if (w <= 0 || h <= 0) {
-          if (w < 0 || h < 0) {
-            const flipped = this.ctx.createImageData(dib.width, dib.height);
-            for (let sy = 0; sy < dib.height; sy++) {
-              for (let sx = 0; sx < dib.width; sx++) {
-                const dx2 = w < 0 ? dib.width - 1 - sx : sx;
-                const dy2 = h < 0 ? dib.height - 1 - sy : sy;
-                for (let k = 0; k < 4; k++) {
-                  flipped.data[(dy2 * dib.width + dx2) * 4 + k] = dib.data[(sy * dib.width + sx) * 4 + k];
-                }
-              }
-            }
-            dib = flipped;
-          }
-          w = Math.abs(w);
-          h = Math.abs(h);
-        }
-        if (w <= 0 || h <= 0) return;
-        const canvasCtor = typeof document === "undefined" && this.ctx.canvas ? this.ctx.canvas.constructor : null;
-        const isRealCanvasCtor = typeof canvasCtor === "function" && canvasCtor.name !== "Object";
-        const tempCanvas = typeof document !== "undefined" ? document.createElement("canvas") : isRealCanvasCtor ? new canvasCtor(dib.width, dib.height) : null;
-        if (tempCanvas) {
-          tempCanvas.width = dib.width;
-          tempCanvas.height = dib.height;
-          const tempCtx = tempCanvas.getContext("2d");
-          tempCtx.putImageData(this._wrapImageData(dib), 0, 0);
-          this.ctx.drawImage(tempCanvas, x, y, w, h);
-        } else {
-          this.ctx.putImageData(
-            this._wrapImageData(dib),
-            x,
-            y,
-            w,
-            h,
-            { stretch: this.coordinateTransformer.isWorldAnisotropic() }
-          );
-        }
-        __wmfEmfRendererLog("  DIB drawn at:", x, y, w, h, "(source", dib.width, "x", dib.height + ")");
-      }
-      _wrapImageData(dib) {
-        if (typeof ImageData !== "undefined") {
-          try {
-            return new ImageData(dib.data, dib.width, dib.height);
-          } catch (e) {
-          }
-        }
-        return { width: dib.width, height: dib.height, data: dib.data };
-      }
-      processEmfBitBlt(data) {
-        if (data.length < 92) return;
-        const xDest = this.readLongFromData(data, 16);
-        const yDest = this.readLongFromData(data, 20);
-        const cxDest = this.readLongFromData(data, 24);
-        const cyDest = this.readLongFromData(data, 28);
-        const dwRop = this.readDwordFromData(data, 32);
-        const offBmi = this.readDwordFromData(data, 76);
-        const cbBmi = this.readDwordFromData(data, 80);
-        const offBits = this.readDwordFromData(data, 84);
-        const cbBits = this.readDwordFromData(data, 88);
-        __wmfEmfRendererLog("EMF BitBlt: dest=(", xDest, yDest, ")", cxDest, "x", cyDest, "rop=0x" + dwRop.toString(16));
-        if (this._bltSolidRop(dwRop, xDest, yDest, cxDest, cyDest)) return;
-        const iUsage = this.readDwordFromData(data, 72);
-        const dib = offBmi && cbBmi ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
-        if (dib) {
-          this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
-        }
-      }
-      processEmfStretchBlt(data) {
-        if (data.length < 100) return;
-        const xDest = this.readLongFromData(data, 16);
-        const yDest = this.readLongFromData(data, 20);
-        const cxDest = this.readLongFromData(data, 24);
-        const cyDest = this.readLongFromData(data, 28);
-        const dwRop = this.readDwordFromData(data, 32);
-        const xSrc = this.readLongFromData(data, 36);
-        const ySrc = this.readLongFromData(data, 40);
-        const offBmi = this.readDwordFromData(data, 76);
-        const cbBmi = this.readDwordFromData(data, 80);
-        const offBits = this.readDwordFromData(data, 84);
-        const cbBits = this.readDwordFromData(data, 88);
-        const cxSrc = this.readLongFromData(data, 92);
-        const cySrc = this.readLongFromData(data, 96);
-        __wmfEmfRendererLog("EMF StretchBlt: dest=(", xDest, yDest, ")", cxDest, "x", cyDest, "src=(", xSrc, ySrc, ")", cxSrc, "x", cySrc);
-        const iUsage = this.readDwordFromData(data, 72);
-        if (this._bltSolidRop(dwRop, xDest, yDest, cxDest, cyDest)) return;
-        const dib = offBmi && cbBmi ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
-        if (dib) {
-          dib.__pointCalSize = true;
-          this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
-        }
-      }
-      processEmfStretchDibBits(data) {
-        if (data.length < 72) return;
-        const xDest = this.readLongFromData(data, 16);
-        const yDest = this.readLongFromData(data, 20);
-        const xSrc = this.readLongFromData(data, 24);
-        const ySrc = this.readLongFromData(data, 28);
-        const cxSrc = this.readDwordFromData(data, 32);
-        const cySrc = this.readDwordFromData(data, 36);
-        const offBmi = this.readDwordFromData(data, 40);
-        const cbBmi = this.readDwordFromData(data, 44);
-        const offBits = this.readDwordFromData(data, 48);
-        const cbBits = this.readDwordFromData(data, 52);
-        const dwRop = this.readDwordFromData(data, 60);
-        let cxDest = this.readLongFromData(data, 64);
-        let cyDest = this.readLongFromData(data, 68);
-        if (cxDest === 0 && cxSrc) cxDest = cxSrc;
-        if (cyDest === 0 && cySrc) cyDest = cySrc;
-        __wmfEmfRendererLog("EMF StretchDIBits: dest=(", xDest, yDest, ")", cxDest, "x", cyDest, "src=(", xSrc, ySrc, ")", cxSrc, "x", cySrc);
-        const iUsage = this.readDwordFromData(data, 56);
-        if (this._bltSolidRop(dwRop, xDest, yDest, cxDest, cyDest)) return;
-        const dib = offBmi && cbBmi ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
-        if (dib) {
-          let use = dib;
-          if (cxSrc > 0 && cxSrc < dib.width || cySrc > 0 && cySrc < dib.height) {
-            const sw = cxSrc > 0 ? cxSrc : dib.width;
-            const sh = cySrc > 0 ? cySrc : dib.height;
-            const sub = this.ctx.createImageData(sw, sh);
-            for (let yy = 0; yy < sh; yy++) {
-              for (let xx = 0; xx < sw; xx++) {
-                const sx = xSrc + xx, sy = ySrc + yy;
-                if (sx < 0 || sx >= dib.width || sy < 0 || sy >= dib.height) continue;
-                for (let k = 0; k < 4; k++) {
-                  sub.data[(yy * sw + xx) * 4 + k] = dib.data[(sy * dib.width + sx) * 4 + k];
-                }
-              }
-            }
-            use = { width: sw, height: sh, data: sub.data };
-          }
-          use.__pointCalSize = true;
-          this._drawDecodedDib(use, xDest, yDest, cxDest, cyDest);
-        }
-      }
-      processEmfAlphaBlend(data) {
-        if (data.length < 92) return;
-        const xDest = this.readLongFromData(data, 16);
-        const yDest = this.readLongFromData(data, 20);
-        const cxDest = this.readLongFromData(data, 24);
-        const cyDest = this.readLongFromData(data, 28);
-        const blendFn = this.readDwordFromData(data, 32);
-        const offBmi = this.readDwordFromData(data, 76);
-        const cbBmi = this.readDwordFromData(data, 80);
-        const offBits = this.readDwordFromData(data, 84);
-        const cbBits = this.readDwordFromData(data, 88);
-        const alphaFormat = blendFn & 255;
-        const constantAlpha = blendFn >>> 16 & 255;
-        __wmfEmfRendererLog("EMF AlphaBlend: dest=(", xDest, yDest, ")", cxDest, "x", cyDest, "alphaFmt=", alphaFormat, "constA=", constantAlpha);
-        const dib = offBmi && cbBmi ? this._decodeDib(
-          data,
-          offBmi,
-          cbBmi,
-          offBits,
-          cbBits,
-          { alphaFromPixels: alphaFormat === 1, constantAlpha, iUsage: this.readDwordFromData(data, 72) }
-        ) : null;
-        if (dib) {
-          this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
-        }
-      }
-      processEmfTransparentBlt(data) {
-        if (data.length < 100) return;
-        const xDest = this.readLongFromData(data, 16);
-        const yDest = this.readLongFromData(data, 20);
-        const cxDest = this.readLongFromData(data, 24);
-        const cyDest = this.readLongFromData(data, 28);
-        const transparentColor = this.readDwordFromData(data, 32);
-        const offBmi = this.readDwordFromData(data, 76);
-        const cbBmi = this.readDwordFromData(data, 80);
-        const offBits = this.readDwordFromData(data, 84);
-        const cbBits = this.readDwordFromData(data, 88);
-        __wmfEmfRendererLog("EMF TransparentBlt: dest=(", xDest, yDest, ")", cxDest, "x", cyDest, "colorKey=0x" + transparentColor.toString(16));
-        const dib = offBmi && cbBmi ? this._decodeDib(
-          data,
-          offBmi,
-          cbBmi,
-          offBits,
-          cbBits,
-          { transparentColor, iUsage: this.readDwordFromData(data, 72) }
-        ) : null;
-        if (dib) {
-          this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
-        }
-      }
-      // BLT 类记录中「不需要源位图」的 ROP 快捷分支：
-      //   BLACKNESS(0x00000042) → 目标矩形全黑
-      //   WHITENESS(0x00FF0062) → 目标矩形全白
-      //   PATCOPY  (0x00F00021) → 目标矩形填当前画刷颜色（GDI 语义：把画刷图案拷到目标）
-      // PATCOPY 在 Office/Excel 生成的图表里是纯色矩形的主要画法：
-      //   先 CREATEBRUSHINDIRECT 建彩色刷（如 0xA9A9A9），再发一条
-      //   「offBmiSrc=cbBmiSrc=0」的 EMR_BITBLT(rop=PATCOPY) 填柱子。
-      // 旧实现只认 BLACKNESS/WHITENESS，PATCOPY 落到「无 DIB → 不绘制」分支，
-      // 导致整块柱形/色块缺失（test-013 直方图灰柱、test-068 表格底色）。
-      // @returns {boolean} 是否已处理（true 则调用方应直接返回）
-      _bltSolidRop(dwRop, x, y, w, h) {
-        const rop = dwRop >>> 0;
-        if (rop === 66) {
-          this._fillBltRect(x, y, w, h, "#000000");
-          return true;
-        }
-        if (rop === 16711778) {
-          this._fillBltRect(x, y, w, h, "#ffffff");
-          return true;
-        }
-        if (rop === 15728673) {
-          this._fillBltRect(x, y, w, h, this.ctx.fillStyle);
-          return true;
-        }
-        return false;
-      }
-      // BLT 无位图时的纯色填充（BLACKNESS/WHITENESS 或占位）
-      _fillBltRect(x, y, w, h, color) {
-        if (!color || color === "transparent" || color === "none") return;
-        const t1 = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-        const t2 = this.coordinateTransformer.transform(x + Math.abs(w), y + Math.abs(h), this.ctx.canvas.width, this.ctx.canvas.height);
-        const rx = Math.min(t1.x, t2.x), ry = Math.min(t1.y, t2.y);
-        const rw = Math.abs(t2.x - t1.x), rh = Math.abs(t2.y - t1.y);
-        if (rw <= 0 || rh <= 0) return;
-        const saved = this.ctx.fillStyle;
-        this.ctx.fillStyle = color;
-        this.ctx.fillRect(rx, ry, rw, rh);
-        this.ctx.fillStyle = saved;
-      }
-      processEmfCreateMonoBrush(data) {
-        __wmfEmfRendererLog("EMF CreateMonoBrush");
-        this.gdiObjectManager.createBrush(0, "#000000");
-      }
-      processEmfCreateColorSpaceW(data) {
-        __wmfEmfRendererLog("EMF CreateColorSpaceW");
-      }
-      processEmfText(data) {
-        this.processEmfTextOut(data, true);
-      }
-      // === 新增的EMF记录处理方法 ===
-      processEmfSetPixelV(data) {
-        if (data.length < 12) return;
-        const x = this.readLongFromData(data, 0);
-        const y = this.readLongFromData(data, 4);
-        const color = this.readDwordFromData(data, 8);
-        const hexColor = this.rgbToHex(color);
-        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-        this.ctx.fillStyle = hexColor;
-        this.ctx.fillRect(transformed.x, transformed.y, 1, 1);
-        __wmfEmfRendererLog("EMF SetPixelV:", x, y, hexColor);
-      }
-      processEmfSetMapperFlags(data) {
-        if (data.length < 4) return;
-        const flags = this.readDwordFromData(data, 0);
-        __wmfEmfRendererLog("EMF SetMapperFlags:", flags);
-      }
-      processEmfSetPolyFillMode(data) {
-        if (data.length < 4) return;
-        const mode = this.readDwordFromData(data, 0);
-        __wmfEmfRendererLog("EMF SetPolyFillMode:", mode);
-        if (mode === 1) {
-          this.ctx.fillRule = "evenodd";
-        } else if (mode === 2) {
-          this.ctx.fillRule = "nonzero";
-        }
-      }
-      processEmfSetColorAdjustment(data) {
-        __wmfEmfRendererLog("EMF SetColorAdjustment");
-      }
-      processEmfOffsetClipRgn(data) {
-        if (data.length < 8) return;
-        const x = this.readLongFromData(data, 0);
-        const y = this.readLongFromData(data, 4);
-        __wmfEmfRendererLog("EMF OffsetClipRgn:", x, y);
-      }
-      processEmfSetMetaRgn(data) {
-        __wmfEmfRendererLog("EMF SetMetaRgn");
-      }
-      processEmfExcludeClipRect(data) {
-        if (data.length < 16) return;
-        const left = this.readLongFromData(data, 0);
-        const top = this.readLongFromData(data, 4);
-        const right = this.readLongFromData(data, 8);
-        const bottom = this.readLongFromData(data, 12);
-        __wmfEmfRendererLog("EMF ExcludeClipRect:", left, top, right, bottom);
-      }
-      processEmfIntersectClipRect(data) {
-        if (data.length < 16) return;
-        const left = this.readLongFromData(data, 0);
-        const top = this.readLongFromData(data, 4);
-        const right = this.readLongFromData(data, 8);
-        const bottom = this.readLongFromData(data, 12);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-        this.ctx.beginPath();
-        this.ctx.rect(
-          transformedLeftTop.x,
-          transformedLeftTop.y,
-          transformedRightBottom.x - transformedLeftTop.x,
-          transformedRightBottom.y - transformedLeftTop.y
-        );
-        this.ctx.clip();
-        __wmfEmfRendererLog("EMF IntersectClipRect:", left, top, right, bottom);
-      }
-      // ===== Region 支持 =====
-      // 解析 RegionData（MS-EMF 2.2.44）：iType(4)+nRgnSize(4)+nCount(4)+nRgnBytes(4)
-      // +rclBounds(16)+aRects[nCount](16 字节 RectL/个)。返回逻辑坐标矩形数组。
-      _readRgnData(data, off) {
-        if (!data || off + 32 > data.length) return null;
-        const count = this.readDwordFromData(data, off + 8);
-        if (count > 65536) return null;
-        const rects = [];
-        for (let i = 0; i < count; i++) {
-          const o = off + 32 + i * 16;
-          if (o + 16 > data.length) break;
-          rects.push({
-            l: this.readLongFromData(data, o),
-            t: this.readLongFromData(data, o + 4),
-            r: this.readLongFromData(data, o + 8),
-            b: this.readLongFromData(data, o + 12)
-          });
-        }
-        return rects;
-      }
-      // 将 region 矩形集合转为设备坐标路径（并集近似：nonzero 填充下重叠同向矩形无孔洞，等效 Area.add）
-      _buildRgnPath(rects) {
-        this.ctx.beginPath();
-        for (const rc of rects) {
-          const lt = this.coordinateTransformer.transform(rc.l, rc.t, this.ctx.canvas.width, this.ctx.canvas.height);
-          const rb = this.coordinateTransformer.transform(rc.r, rc.b, this.ctx.canvas.width, this.ctx.canvas.height);
-          this.ctx.rect(lt.x, lt.y, rb.x - lt.x, rb.y - lt.y);
-        }
-      }
-      // 按句柄应用画刷（含 stock 0x80000000 回落），返回原 fillStyle 供恢复
-      _applyBrushForRegion(ihBrush) {
-        const savedFill = this.ctx.fillStyle;
-        const obj = this.gdiObjectManager.selectObject(ihBrush | 0);
-        if (obj) {
-          this.applyGdiObject(obj);
-        } else if (ihBrush >>> 0 >= 2147483648) {
-          this.applyStockObject(ihBrush >>> 0);
-        }
-        return savedFill;
-      }
-      // EMR_FILLRGN (0x47, MS-EMF 2.3.2.19)：rclBounds(16)+cbRgnData(4)+ihBrush(4)+RgnData
-      processEmfFillRgn(data) {
-        if (data.length < 24) return;
-        const cbRgnData = this.readDwordFromData(data, 16);
-        const ihBrush = this.readDwordFromData(data, 20);
-        const rects = this._readRgnData(data, 24);
-        if (!rects || !rects.length) return;
-        const savedFill = this._applyBrushForRegion(ihBrush);
-        this._buildRgnPath(rects);
-        this.ctx.fill();
-        this.ctx.fillStyle = savedFill;
-        __wmfEmfRendererLog("EMF FillRgn: rects=", rects.length, "brush=", (ihBrush >>> 0).toString(16));
-      }
-      // EMR_FRAMERGN (0x48, MS-EMF 2.3.2.18)：rclBounds(16)+cbRgnData(4)+ihBrush(4)
-      // +Width(4)+Height(4)+RgnData。框线宽：垂直边 Width、水平边 Height。
-      processEmfFrameRgn(data) {
-        if (data.length < 32) return;
-        const cbRgnData = this.readDwordFromData(data, 16);
-        const ihBrush = this.readDwordFromData(data, 20);
-        const frameW = this.readLongFromData(data, 24);
-        const frameH = this.readLongFromData(data, 28);
-        const rects = this._readRgnData(data, 32);
-        if (!rects || !rects.length) return;
-        const savedFill = this._applyBrushForRegion(ihBrush);
-        const scale = this.coordinateTransformer.getScale();
-        const lw = Math.max(1, Math.min(Math.abs(frameW), Math.abs(frameH)) * Math.abs(scale.x || 1));
-        const savedStroke = this.ctx.strokeStyle;
-        const savedLw = this.ctx.lineWidth;
-        this.ctx.strokeStyle = this.ctx.fillStyle;
-        this.ctx.lineWidth = lw;
-        this._buildRgnPath(rects);
-        this.ctx.stroke();
-        this.ctx.strokeStyle = savedStroke;
-        this.ctx.lineWidth = savedLw;
-        this.ctx.fillStyle = savedFill;
-        __wmfEmfRendererLog("EMF FrameRgn: rects=", rects.length, "frame=", frameW, frameH);
-      }
-      // EMR_PAINTRGN (0x4A, MS-EMF 2.3.2.21)：rclBounds(16)+cbRgnData(4)+RgnData
-      // 用当前画刷填充 region。
-      processEmfPaintRgn(data) {
-        if (data.length < 20) return;
-        const rects = this._readRgnData(data, 20);
-        if (!rects || !rects.length) return;
-        this._buildRgnPath(rects);
-        this.ctx.fill();
-        __wmfEmfRendererLog("EMF PaintRgn: rects=", rects.length);
-      }
-      // EMR_EXTSELECTCLIPRGN (0x4B, MS-EMF 2.3.1.5)：cbRgnData(4)+iMode(4)+[RgnData]
-      // iMode：1=RGN_AND 2=RGN_OR 3=RGN_XOR 4=RGN_DIFF 5=RGN_COPY（COPY 时 RgnData 可省略）
-      processEmfExtSelectClipRgn(data) {
-        if (data.length < 8) return;
-        const cbRgnData = this.readDwordFromData(data, 0);
-        const mode = this.readDwordFromData(data, 4);
-        let rects = null;
-        if (mode !== 5 && cbRgnData > 0) {
-          rects = this._readRgnData(data, 8);
-        }
-        if (rects && rects.length) {
-          this._buildRgnPath(rects);
-          this.ctx.clip();
-        } else if (mode === 5) {
-          if (this.ctx._state) this.ctx._state.clip = null;
-        }
-        __wmfEmfRendererLog("EMF ExtSelectClipRgn: mode=", mode, "rects=", rects ? rects.length : 0);
-      }
-      processEmfScaleViewportExtEx(data) {
-        if (data.length < 16) return;
-        const xNum = this.readLongFromData(data, 0);
-        const xDenom = this.readLongFromData(data, 4);
-        const yNum = this.readLongFromData(data, 8);
-        const yDenom = this.readLongFromData(data, 12);
-        if (xDenom !== 0) this.coordinateTransformer.viewportExtX *= xNum / xDenom;
-        if (yDenom !== 0) this.coordinateTransformer.viewportExtY *= yNum / yDenom;
-        __wmfEmfRendererLog("EMF ScaleViewportExtEx:", xNum, xDenom, yNum, yDenom);
-      }
-      processEmfScaleWindowExtEx(data) {
-        if (data.length < 16) return;
-        const xNum = this.readLongFromData(data, 0);
-        const xDenom = this.readLongFromData(data, 4);
-        const yNum = this.readLongFromData(data, 8);
-        const yDenom = this.readLongFromData(data, 12);
-        if (xDenom !== 0) this.coordinateTransformer.windowExtX *= xNum / xDenom;
-        if (yDenom !== 0) this.coordinateTransformer.windowExtY *= yNum / yDenom;
-        __wmfEmfRendererLog("EMF ScaleWindowExtEx:", xNum, xDenom, yNum, yDenom);
-      }
-      processEmfSaveDC(data) {
-        this.ctx.save();
-        this.dcStateStack.push(this._captureDcState());
-        __wmfEmfRendererLog("EMF SaveDC");
-      }
-      // 快照当前设备上下文状态（GDI 对象 + 坐标变换 + 绘制样式）
-      _captureDcState() {
-        const ct = this.coordinateTransformer;
-        return {
-          fillColor: this.fillColor,
-          strokeColor: this.strokeColor,
-          lineWidth: this.lineWidth,
-          arcDirection: this.arcDirection,
-          textColor: this.textColor,
-          currentPalette: this.currentPalette,
-          // GDI 语义：裁剪区属于 DC 状态，SaveDC 快照 / RestoreDC 恢复
-          // （test-156：INTERSECTCLIPRECT 后若 RESTOREDC 不撤裁剪，96 个 PIE 风玫瑰
-          //  花瓣全部被裁剪带吞掉，整图近乎空白）。
-          clip: this.ctx._state ? this.ctx._state.clip || null : null,
-          // 注意：不得快照 gdiObjectManager.objectTable。GDI 的 SaveDC/RestoreDC 只
-          // 保存/恢复 DC 状态（选中对象、映射模式等），不保存"已创建对象集合"——
-          // 块内新建的对象在 RestoreDC 后依然有效（只有 DeleteObject 能销毁）。
-          // 旧实现把对象表一并快照，导致 Office clipart 的典型模式
-          //    DELETEOBJECT 1 / SAVEDC / CREATEBRUSHINDIRECT 1 / SELECTOBJECT 1 / ... / RESTOREDC
-          // 在 RestoreDC 后丢掉了刚创建的画笔，随后的 SELECTOBJECT 1 找不到对象而
-          // 沿用上一次样式（画笔颜色丢失 → 黑色轮廓被画成白色）。
-          //
-          // ⚠️ 映射模式 / window 范围 / window 原点属于 DC 状态，SaveDC 必须快照、
-          // RestoreDC 必须恢复（Win32 SaveDC 文档：DC 状态含 mapping mode、window 与
-          // viewport 的 org/ext、world transform、clip region…）。若把这些放在顶层
-          // 状态里、不随 RestoreDC 回滚，则会出现缺陷：
-          // test-171 的 40 个 SAVEDC 块各自 SETMAPMODE(MM_TEXT)+SETWORLDTRANSFORM 后
-          // 画椭圆，RESTOREDC 出来再 LINETO——此时映射模式应回到块外的
-          // MM_ANISOTROPIC（winExt=2231x-2255）。不恢复的话 LINETO 按 MM_TEXT 的 1:1
-          // 画到 (928,1802)，整批折线全部落在画布外（RMSE 0.951，全语料最差）；
-          // 恢复后残差降到 0.29 量级（余量仅来自线宽策略）。
-          mapMode: ct.mapMode,
-          windowExtX: ct.windowExtX,
-          windowExtY: ct.windowExtY,
-          windowOrgX: ct.windowOrgX,
-          windowOrgY: ct.windowOrgY,
-          viewportExtX: ct.viewportExtX,
-          viewportExtY: ct.viewportExtY,
-          viewportOrgX: ct.viewportOrgX,
-          viewportOrgY: ct.viewportOrgY,
-          worldM11: ct.worldM11,
-          worldM12: ct.worldM12,
-          worldM21: ct.worldM21,
-          worldM22: ct.worldM22,
-          worldDx: ct.worldDx,
-          worldDy: ct.worldDy
-        };
-      }
-      // 恢复设备上下文状态
-      _restoreDcState(state) {
-        if (!state) return;
-        this.fillColor = state.fillColor;
-        this.strokeColor = state.strokeColor;
-        this.lineWidth = state.lineWidth;
-        this.arcDirection = state.arcDirection;
-        if (state.textColor) this.textColor = state.textColor;
-        if (state.currentPalette !== void 0) this.currentPalette = state.currentPalette;
-        if (this.ctx._state) this.ctx._state.clip = state.clip || null;
-        const ct = this.coordinateTransformer;
-        if (state.mapMode !== void 0) ct.mapMode = state.mapMode;
-        if (state.windowExtX !== void 0) {
-          ct.windowExtX = state.windowExtX;
-          ct.windowExtY = state.windowExtY;
-          ct.windowOrgX = state.windowOrgX;
-          ct.windowOrgY = state.windowOrgY;
-          ct.viewportExtX = state.viewportExtX;
-          ct.viewportExtY = state.viewportExtY;
-          ct.viewportOrgX = state.viewportOrgX;
-          ct.viewportOrgY = state.viewportOrgY;
-        }
-        ct.worldM11 = state.worldM11;
-        ct.worldM12 = state.worldM12;
-        ct.worldM21 = state.worldM21;
-        ct.worldM22 = state.worldM22;
-        ct.worldDx = state.worldDx;
-        ct.worldDy = state.worldDy;
-      }
-      // 读取 XFORM（MS-EMF 2.2.13，6 个 4 字节浮点：eM11 eM12 eM21 eM22 eDx eDy）
-      _readXForm(data, off) {
-        if (!data || off + 24 > data.length) return null;
-        return {
-          eM11: this.readFloatFromData(data, off),
-          eM12: this.readFloatFromData(data, off + 4),
-          eM21: this.readFloatFromData(data, off + 8),
-          eM22: this.readFloatFromData(data, off + 12),
-          eDx: this.readFloatFromData(data, off + 16),
-          eDy: this.readFloatFromData(data, off + 20)
-        };
-      }
-      readFloatFromData(data, offset) {
-        if (offset + 4 > data.length) return 0;
-        const b = data;
-        const v = (b[offset] | b[offset + 1] << 8 | b[offset + 2] << 16 | b[offset + 3] << 24) >>> 0;
-        const sign = v & 2147483648 ? -1 : 1;
-        const exp = v >>> 23 & 255;
-        const frac = v & 8388607;
-        if (exp === 255) return frac ? NaN : sign * Infinity;
-        if (exp === 0) return frac === 0 ? sign * 0 : sign * frac * Math.pow(2, -149);
-        return sign * (1 + frac / 8388608) * Math.pow(2, exp - 127);
-      }
-      processEmfSetWorldTransform(data) {
-        if (data.length < 24) return;
-        const xf = this._readXForm(data, 0);
-        if (!xf) return;
-        __wmfEmfRendererLog("EMF SetWorldTransform:", xf);
-        this.coordinateTransformer.setWorldTransform(xf);
-      }
-      processEmfModifyWorldTransform(data) {
-        if (data.length < 28) return;
-        const xf = this._readXForm(data, 0);
-        if (!xf) return;
-        const mode = this.readDwordFromData(data, 24);
-        __wmfEmfRendererLog("EMF ModifyWorldTransform mode:", mode, xf);
-        this.coordinateTransformer.modifyWorldTransform(xf, mode);
-      }
-      processEmfAngleArc(data) {
-        if (data.length < 20) return;
-        const centerX = this.readLongFromData(data, 0);
-        const centerY = this.readLongFromData(data, 4);
-        const radius = this.readDwordFromData(data, 8);
-        const startAngle = this.readDwordFromData(data, 12);
-        const sweepAngle = this.readDwordFromData(data, 16);
-        const transformed = this.coordinateTransformer.transform(centerX, centerY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const startRad = startAngle * Math.PI / 180;
-        const endRad = (startAngle + sweepAngle) * Math.PI / 180;
-        this.ctx.beginPath();
-        this.ctx.arc(transformed.x, transformed.y, radius, startRad, endRad, sweepAngle < 0);
-        this.ctx.stroke();
-        __wmfEmfRendererLog("EMF AngleArc:", centerX, centerY, radius, startAngle, sweepAngle);
-      }
-      processEmfRoundRect(data) {
-        if (data.length < 24) return;
-        const left = this.readLongFromData(data, 0);
-        const top = this.readLongFromData(data, 4);
-        const right = this.readLongFromData(data, 8);
-        const bottom = this.readLongFromData(data, 12);
-        const cornerWidth = this.readLongFromData(data, 16);
-        const cornerHeight = this.readLongFromData(data, 20);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-        const width = transformedRightBottom.x - transformedLeftTop.x;
-        const height = transformedRightBottom.y - transformedLeftTop.y;
-        const rx = cornerWidth / 2;
-        const ry = cornerHeight / 2;
-        this.ctx.beginPath();
-        this.ctx.roundRect(transformedLeftTop.x, transformedLeftTop.y, width, height, [rx]);
-        this.ctx.fill();
-        this.ctx.stroke();
-        __wmfEmfRendererLog("EMF RoundRect:", left, top, right, bottom);
-      }
-      // 计算部分椭圆弧的起止角（画布角度）。
-      // GDI 坐标 Y 轴向下，"逆时针"（AD_COUNTERCLOCKWISE，
-      // 默认）在屏幕上即逆时针 = 画布 anticlockwise=true（沿角度递减方向）；
-      // GDI 顺时针（AD_CLOCKWISE）= 画布 anticlockwise=false。
-      // 几何计算见 utils/geometryUtils（与 WmfDrawer 共用同一实现）。
-      _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {
-        const st = this.coordinateTransformer.transform(startX, startY, this.ctx.canvas.width, this.ctx.canvas.height);
-        const en = this.coordinateTransformer.transform(endX, endY, this.ctx.canvas.width, this.ctx.canvas.height);
-        return GeometryUtils.arcAngles(cx, cy, rx, ry, st, en, this.arcDirection !== 2);
-      }
-      // EMR_ARC / EMR_CHORD / EMR_PIE 的记录结构完全相同
-      // （Bounds(16) + Start(8) + End(8)），差异只在收尾方式，
-      // 与 WmfDrawer._drawArcRecord 共用同一套几何实现。
-      _drawArcLikeRecord(data, kind) {
-        if (data.length < 32) return;
-        const left = this.readLongFromData(data, 0);
-        const top = this.readLongFromData(data, 4);
-        const right = this.readLongFromData(data, 8);
-        const bottom = this.readLongFromData(data, 12);
-        const startX = this.readLongFromData(data, 16);
-        const startY = this.readLongFromData(data, 20);
-        const endX = this.readLongFromData(data, 24);
-        const endY = this.readLongFromData(data, 28);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-        const ellipse = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
-        if (ellipse.rx === 0 || ellipse.ry === 0) return;
-        const angles = this._calcArcAngles(ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry, startX, startY, endX, endY);
-        GeometryUtils.drawArcLike(this.ctx, kind, ellipse, angles);
-        __wmfEmfRendererLog("EMF " + kind + ":", left, top, right, bottom);
-      }
-      processEmfArc(data) {
-        this._drawArcLikeRecord(data, "Arc");
-      }
-      processEmfChord(data) {
-        this._drawArcLikeRecord(data, "Chord");
-      }
-      processEmfPie(data) {
-        this._drawArcLikeRecord(data, "Pie");
-      }
-      // ===== 调色板链路 =====
-      // PaletteEntry 4 字节：flags(1)+blue(1)+green(1)+red(1)
-      processEmfSelectPalette(data) {
-        if (data.length < 4) return;
-        const paletteHandle = this.readDwordFromData(data, 0);
-        const obj = this.gdiObjectManager.selectObject(paletteHandle | 0);
-        if (obj && obj.type === "palette") {
-          this.currentPalette = obj;
-        } else if (paletteHandle >>> 0 >= 2147483648) {
-          this.currentPalette = null;
-        }
-        __wmfEmfRendererLog("EMF SelectPalette:", (paletteHandle >>> 0).toString(16), !!this.currentPalette);
-      }
-      // EMR_CREATEPALETTE：ihPal(4) + LGPAL（Version(2)+NumberOfEntries(2)+aPalEntries[4字节/个]）
-      processEmfCreatePalette(data) {
-        if (data.length < 8) return;
-        const ihPal = this.readDwordFromData(data, 0);
-        if ((ihPal & 2147483648) !== 0) return;
-        const numEntries = data[6] | data[7] << 8;
-        const entries = [];
-        for (let i = 0; i < numEntries; i++) {
-          const o = 8 + i * 4;
-          if (o + 4 > data.length) break;
-          entries.push({ r: data[o + 3], g: data[o + 2], b: data[o + 1] });
-        }
-        this.gdiObjectManager.createObjectAt(ihPal, { type: "palette", entries });
-        __wmfEmfRendererLog("EMF CreatePalette: ih=", (ihPal >>> 0).toString(16), "entries=", entries.length);
-      }
-      // EMR_SETPALETTEENTRIES：ihPal(4)+Start(4)+NumEntries(4)+aPalEntries
-      processEmfSetPaletteEntries(data) {
-        if (data.length < 12) return;
-        const ihPal = this.readDwordFromData(data, 0);
-        const start = this.readDwordFromData(data, 4);
-        const num = this.readDwordFromData(data, 8);
-        const obj = this.gdiObjectManager.selectObject(ihPal | 0);
-        if (obj && obj.type === "palette") {
-          for (let i = 0; i < num; i++) {
-            const o = 12 + i * 4;
-            if (o + 4 > data.length) break;
-            obj.entries[start + i] = { r: data[o + 3], g: data[o + 2], b: data[o + 1] };
-          }
-        }
-      }
-      processEmfResizePalette(data) {
-      }
-      processEmfRealizePalette(data) {
-      }
-      processEmfExtFloodFill(data) {
-        if (data.length < 16) return;
-        const x = this.readLongFromData(data, 0);
-        const y = this.readLongFromData(data, 4);
-        const color = this.readDwordFromData(data, 8);
-        const fillType = this.readDwordFromData(data, 12);
-        __wmfEmfRendererLog("EMF ExtFloodFill:", x, y, color, fillType);
-      }
-      processEmfArcTo(data) {
-        if (data.length < 32) return;
-        const left = this.readLongFromData(data, 0);
-        const top = this.readLongFromData(data, 4);
-        const right = this.readLongFromData(data, 8);
-        const bottom = this.readLongFromData(data, 12);
-        const startX = this.readLongFromData(data, 16);
-        const startY = this.readLongFromData(data, 20);
-        const endX = this.readLongFromData(data, 24);
-        const endY = this.readLongFromData(data, 28);
-        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
-        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
-        const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
-        const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
-        const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
-        const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
-        if (radiusX === 0 || radiusY === 0) return;
-        const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
-        const full = Math.abs(endAngle - startAngle) < 1e-6;
-        const arcStart = { x: centerX + radiusX * Math.cos(startAngle), y: centerY + radiusY * Math.sin(startAngle) };
-        const arcEnd = { x: centerX + radiusX * Math.cos(endAngle), y: centerY + radiusY * Math.sin(endAngle) };
-        const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
-        this.ctx.beginPath();
-        this.ctx.moveTo(from.x, from.y);
-        this.ctx.lineTo(arcStart.x, arcStart.y);
-        if (full) {
-          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
-        } else {
-          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
-        }
-        this.ctx.stroke();
-        const cxL = (left + right) / 2;
-        const cyL = (top + bottom) / 2;
-        const rxL = Math.abs(right - left) / 2;
-        const ryL = Math.abs(bottom - top) / 2;
-        this.currentPos = {
-          x: cxL + rxL * Math.cos(endAngle),
-          y: cyL + ryL * Math.sin(endAngle)
-        };
-      }
-      processEmfPolyDraw(data) {
-        if (data.length < 20) return;
-        const count = this.readDwordFromData(data, 16);
-        if (data.length < 20 + count * 8 + count) return;
-        this.ctx.beginPath();
-        for (let i = 0; i < count; i++) {
-          const x = this.readLongFromData(data, 20 + i * 8);
-          const y = this.readLongFromData(data, 24 + i * 8);
-          const type = data[20 + count * 8 + i];
-          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-          let closeFlag = (type & 1) !== 0;
-          switch (type & 6) {
-            case 2:
-              this.ctx.lineTo(transformed.x, transformed.y);
-              break;
-            case 4: {
-              if (i + 2 >= count) break;
-              const pts = [transformed];
-              for (let k = 1; k <= 2; k++) {
-                const bx = this.readLongFromData(data, 20 + (i + k) * 8);
-                const by = this.readLongFromData(data, 24 + (i + k) * 8);
-                pts.push(this.coordinateTransformer.transform(bx, by, this.ctx.canvas.width, this.ctx.canvas.height));
-              }
-              this.ctx.bezierCurveTo(pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
-              closeFlag = (data[20 + count * 8 + i + 2] & 1) !== 0;
-              i += 2;
-              break;
-            }
-            case 6:
-              this.ctx.moveTo(transformed.x, transformed.y);
-              break;
-          }
-          if (closeFlag) {
-            this.ctx.closePath();
-          }
-        }
-        this.ctx.stroke();
-      }
-      // EMR_CREATEDIBPATTERNBRUSHPT (0x5E, MS-EMF 2.3.5.4)：
-      //   EMR(8) | ihBrush(4) | iUsage(4) | offBmi(4) | cbBmi(4) | offBits(4) | cbBits(4) | <DIB>
-      // 解析 DIB 为 RGBA 位图并注册为 SVG <pattern>，使 poly fill 走 pattern 填充（对齐参考）。
-      processEmfCreateDibPatternBrushPT(data) {
-        if (data.length < 24) return;
-        const ihBrush = this.readDwordFromData(data, 0);
-        if ((ihBrush & 2147483648) !== 0) return;
-        const iUsage = this.readDwordFromData(data, 4);
-        const offBmi = this.readDwordFromData(data, 8);
-        const cbBmi = this.readDwordFromData(data, 12);
-        const offBits = this.readDwordFromData(data, 16);
-        const cbBits = this.readDwordFromData(data, 20);
-        if (!offBmi || !cbBmi || !offBits || !cbBits) return;
-        const dib = this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage });
-        if (!dib) {
-          __wmfEmfRendererLog("EMF CreateDibPatternBrushPT: DIB decode failed");
-          return;
-        }
-        const url = this.ctx.addPattern(dib, { orgX: 0, orgY: 0 });
-        if (!url) return;
-        this.gdiObjectManager.createObjectAt(ihBrush, { type: "pattern", url, width: dib.width, height: Math.abs(dib.height) });
-        __wmfEmfRendererLog("EMF CreateDibPatternBrushPT: ih=", ihBrush, "size=", dib.width, "x", dib.height);
-      }
-      processEmfSetArcDirection(data) {
-        if (data.length < 4) return;
-        const direction = this.readDwordFromData(data, 0);
-        this.arcDirection = direction;
-        __wmfEmfRendererLog("EMF SetArcDirection:", direction);
-      }
-      processEmfSetMiterLimit(data) {
-        if (data.length < 4) return;
-        const miterLimit = this.readDwordFromData(data, 0);
-        this.ctx.miterLimit = miterLimit;
-        __wmfEmfRendererLog("EMF SetMiterLimit:", miterLimit);
-      }
-      processEmfCloseFigure(data) {
-        this.ctx.closePath();
-        __wmfEmfRendererLog("EMF CloseFigure");
-      }
-      processEmfFillPath(data) {
-        this.ctx.fill();
-        this.pathState = "idle";
-        __wmfEmfRendererLog("EMF FillPath");
-      }
-      processEmfFlattenPath(data) {
-        __wmfEmfRendererLog("EMF FlattenPath");
-      }
-      processEmfWidenPath(data) {
-        __wmfEmfRendererLog("EMF WidenPath");
-      }
-      processEmfSelectClipPath(data) {
-        if (data.length < 4) return;
-        const mode = this.readDwordFromData(data, 0);
-        __wmfEmfRendererLog("EMF SelectClipPath, mode:", mode);
-        if (mode >= 1 && mode <= 5) {
-          this.ctx.clip();
-        }
-      }
-      tryProcessAsCoordinates(data) {
-        if (data.length < 16) return;
-        const points = [];
-        for (let i = 0; i < data.length - 8; i += 8) {
-          const x = this.readDwordFromData(data, i);
-          const y = this.readDwordFromData(data, i + 4);
-          if (Math.abs(x) < 5e4 && Math.abs(y) < 5e4) {
-            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
-            points.push(transformed);
-          }
-        }
-        if (points.length >= 3) {
-          this.ctx.beginPath();
-          this.ctx.moveTo(points[0].x, points[0].y);
-          for (let i = 1; i < points.length; i++) {
-            this.ctx.lineTo(points[i].x, points[i].y);
-          }
-          this.ctx.stroke();
-          __wmfEmfRendererLog("Drew polyline with", points.length, "points from unknown record");
-        }
-      }
-      finishPath() {
-        if (this.pathState === "active" || this.pathState === "completed") {
-          this.ctx.stroke();
-          this.pathState = "idle";
-        }
-      }
-    };
-    module2.exports = EmfDrawer2;
   }
 });
 
@@ -5082,6 +2877,9 @@ var require_emfPlusDrawer = __commonJS({
     var CoordinateTransformer2 = require_coordinateTransformer();
     var GdiObjectManager2 = require_gdiObjectManager();
     var GeometryUtils = require_geometryUtils();
+    var { readFloat32, readDword, readShort } = require_binaryReader();
+    var { argbToCss, readArgb } = require_colorUtils();
+    var { decodeUtf16Le, readUtf16Name } = require_textCodec();
     var { DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
     var EMF_PLUS_RECORD_HANDLERS = {
       // ========== 全局/控制记录 ==========
@@ -5089,9 +2887,9 @@ var require_emfPlusDrawer = __commonJS({
       // EmfPlusHeader
       16386: null,
       // EmfPlusEndOfFile
-      16387: "processEmfPlusComment",
+      16387: null,
       // EmfPlusComment
-      16388: "processEmfPlusGetDC",
+      16388: null,
       // EmfPlusGetDC
       // ========== 对象管理 ==========
       16392: "processEmfPlusObject",
@@ -5113,23 +2911,23 @@ var require_emfPlusDrawer = __commonJS({
       // EmfPlusDrawEllipse
       16400: "processEmfPlusFillPie",
       // EmfPlusFillPie
-      16401: "processEmfPlusDrawPie",
+      16401: null,
       // EmfPlusDrawPie
-      16402: "processEmfPlusDrawArc",
+      16402: null,
       // EmfPlusDrawArc
-      16403: "processEmfPlusFillRegion",
+      16403: null,
       // EmfPlusFillRegion
       16404: "processEmfPlusFillPath",
       // EmfPlusFillPath
       16405: "processEmfPlusDrawPath",
       // EmfPlusDrawPath
-      16406: "processEmfPlusFillClosedCurve",
+      16406: null,
       // EmfPlusFillClosedCurve
-      16407: "processEmfPlusDrawClosedCurve",
+      16407: null,
       // EmfPlusDrawClosedCurve
-      16408: "processEmfPlusDrawCurve",
+      16408: null,
       // EmfPlusDrawCurve
-      16409: "processEmfPlusDrawBeziers",
+      16409: null,
       // EmfPlusDrawBeziers
       // ========== 图像/文本绘制 ==========
       16410: "processEmfPlusDrawImage",
@@ -5138,69 +2936,69 @@ var require_emfPlusDrawer = __commonJS({
       // EmfPlusDrawImagePoints
       16412: "processEmfPlusDrawString",
       // EmfPlusDrawString
-      16438: "processEmfPlusDrawDriverString",
+      16438: null,
       // EmfPlusDrawDriverString
       // ========== 状态/渲染参数记录 ==========
-      16413: "processEmfPlusSetRenderingOrigin",
+      16413: null,
       // EmfPlusSetRenderingOrigin
-      16414: "processEmfPlusSetAntiAliasMode",
+      16414: null,
       // EmfPlusSetAntiAliasMode
-      16415: "processEmfPlusSetTextRenderingHint",
+      16415: null,
       // EmfPlusSetTextRenderingHint
-      16416: "processEmfPlusSetTextContrast",
+      16416: null,
       // EmfPlusSetTextContrast
-      16417: "processEmfPlusSetInterpolationMode",
+      16417: null,
       // EmfPlusSetInterpolationMode
-      16418: "processEmfPlusSetPixelOffsetMode",
+      16418: null,
       // EmfPlusSetPixelOffsetMode
-      16419: "processEmfPlusSetCompositingMode",
+      16419: null,
       // EmfPlusSetCompositingMode
-      16420: "processEmfPlusSetCompositingQuality",
+      16420: null,
       // EmfPlusSetCompositingQuality
       // ========== 图形状态容器/变换 ==========
-      16421: "processEmfPlusSave",
+      16421: null,
       // EmfPlusSave
-      16422: "processEmfPlusRestore",
+      16422: null,
       // EmfPlusRestore
-      16423: "processEmfPlusBeginContainer",
+      16423: null,
       // EmfPlusBeginContainer
-      16424: "processEmfPlusBeginContainerNoParams",
+      16424: null,
       // EmfPlusBeginContainerNoParams
-      16425: "processEmfPlusEndContainer",
+      16425: null,
       // EmfPlusEndContainer
-      16426: "processEmfPlusSetWorldTransform",
+      16426: null,
       // EmfPlusSetWorldTransform
-      16427: "processEmfPlusResetWorldTransform",
+      16427: null,
       // EmfPlusResetWorldTransform
-      16428: "processEmfPlusMultiplyWorldTransform",
+      16428: null,
       // EmfPlusMultiplyWorldTransform
-      16429: "processEmfPlusTranslateWorldTransform",
+      16429: null,
       // EmfPlusTranslateWorldTransform
-      16430: "processEmfPlusScaleWorldTransform",
+      16430: null,
       // EmfPlusScaleWorldTransform
-      16431: "processEmfPlusRotateWorldTransform",
+      16431: null,
       // EmfPlusRotateWorldTransform
-      16432: "processEmfPlusSetPageTransform",
+      16432: null,
       // EmfPlusSetPageTransform
       // ========== 裁剪 ==========
-      16433: "processEmfPlusResetClip",
+      16433: null,
       // EmfPlusResetClip
-      16434: "processEmfPlusSetClipRect",
+      16434: null,
       // EmfPlusSetClipRect
-      16435: "processEmfPlusSetClipPath",
+      16435: null,
       // EmfPlusSetClipPath
-      16436: "processEmfPlusSetClipRegion",
+      16436: null,
       // EmfPlusSetClipRegion
-      16437: "processEmfPlusOffsetClip",
+      16437: null,
       // EmfPlusOffsetClip
       // ========== 其他 ==========
-      16439: "processEmfPlusStrokeFillPath",
+      16439: null,
       // EmfPlusStrokeFillPath (非标准)
-      16440: "processEmfPlusSerializableObject",
+      16440: null,
       // EmfPlusSerializableObject
-      16441: "processEmfPlusSetTSGraphics",
+      16441: null,
       // EmfPlusSetTSGraphics
-      16442: "processEmfPlusSetTSClip"
+      16442: null
       // EmfPlusSetTSClip
     };
     var EmfPlusDrawer2 = class {
@@ -5217,42 +3015,21 @@ var require_emfPlusDrawer = __commonJS({
         this.emfPlusObjects = {};
       }
       // ---- EMF+ 辅助方法 ----
-      // 读取小端 float32
-      _emfPlusReadFloat(data, offset) {
-        if (offset + 4 > data.length) return 0;
-        const buf = new DataView(data.buffer, data.byteOffset + offset, 4);
-        return buf.getFloat32(0, true);
-      }
-      // 32 位 ARGB -> CSS 颜色（支持透明度）
-      _emfPlusArgbToColor(argb) {
-        const a = argb >>> 24 & 255;
-        const r = argb >>> 16 & 255;
-        const g = argb >>> 8 & 255;
-        const b = argb & 255;
-        if (a === 255) {
-          return "#" + [r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("");
-        }
-        return `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(3)})`;
-      }
-      // 读取 32 位 ARGB（无符号）
-      _emfPlusReadArgb(data, offset) {
-        if (offset + 4 > data.length) return 4294967295;
-        return data[offset] & 255 | (data[offset + 1] & 255) << 8 | (data[offset + 2] & 255) << 16 | (data[offset + 3] & 255) << 24;
-      }
+      // float32 reading and ARGB color conversion now live in utils/binaryReader and utils/colorUtils
       // 启发式：提取渐变刷（Linear/PathGradient/Hatch）的主色。
       // GDI+ 写出的这类刷子里 StartColor/EndColor（或 ForeColor/BackColor）总是相邻的两个
       // alpha=0xFF 的 dword（实测 Excel/Office 产出均如此），故优先找相邻对，取前者作主色；
       // 找不到相邻对时退化为首个 alpha=0xFF 的 dword。
       _emfPlusFirstOpaqueArgb(data, offset) {
-        const argb = (o) => o + 4 <= data.length ? this._emfPlusReadArgb(data, o) >>> 0 : 0;
+        const argb = (o) => o + 4 <= data.length ? readArgb(data, o) >>> 0 : 0;
         const opaque = (v) => (v >>> 24 & 255) === 255 && (v & 16777215) !== 0;
         for (let o = offset; o + 8 <= data.length; o += 4) {
           const v1 = argb(o), v2 = argb(o + 4);
-          if (opaque(v1) && opaque(v2)) return this._emfPlusArgbToColor(v1);
+          if (opaque(v1) && opaque(v2)) return argbToCss(v1);
         }
         for (let o = offset; o + 4 <= data.length; o += 4) {
           const v = argb(o);
-          if (opaque(v)) return this._emfPlusArgbToColor(v);
+          if (opaque(v)) return argbToCss(v);
         }
         return null;
       }
@@ -5262,14 +3039,14 @@ var require_emfPlusDrawer = __commonJS({
       //   非 solid 模式下 BrushId > 63 时按 ARGB 颜色处理（对象表索引只有 0-63）。
       _emfPlusResolveBrush(flags, brushId, data, offset) {
         if (flags & 32768) {
-          return this._emfPlusArgbToColor(brushId);
+          return argbToCss(brushId);
         }
         const obj = this.emfPlusObjects[brushId >>> 0];
         if (obj && obj.type === "solidBrush") {
           return obj.color;
         }
         if (brushId > 63 || brushId >= 16777216) {
-          return this._emfPlusArgbToColor(brushId);
+          return argbToCss(brushId);
         }
         return "#000000";
       }
@@ -5313,8 +3090,8 @@ var require_emfPlusDrawer = __commonJS({
             y = data[offset + 2] & 255 | (data[offset + 3] & 255) << 8;
             if (y & 32768) y |= 4294901760;
           } else {
-            x = this._emfPlusReadFloat(data, offset);
-            y = this._emfPlusReadFloat(data, offset + 4);
+            x = readFloat32(data, offset);
+            y = readFloat32(data, offset + 4);
           }
           points.push({ x, y });
           offset += stride;
@@ -5469,16 +3246,12 @@ var require_emfPlusDrawer = __commonJS({
           nPlayCount: 0
         };
       }
-      // 处理EMF+绘制线记录
-      processEmfPlusDrawLine(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusDrawLine");
-      }
       // 处理EMF+填充多边形记录：data = BrushId(4) + Count(4) + PointF[Count](8 each)
       // （BrushId 在 data 首字段）
       processEmfPlusFillPolygon(flags, data) {
         if (data.length < 8) return;
-        const brushId = this._emfPlusReadInt32(data, 0);
-        const count = this._emfPlusReadInt32(data, 4);
+        const brushId = readDword(data, 0);
+        const count = readDword(data, 4);
         if (count < 1 || count > 65536) return;
         const color = this._emfPlusResolveBrush(flags, brushId);
         if (!color) return;
@@ -5487,8 +3260,8 @@ var require_emfPlusDrawer = __commonJS({
         for (let i = 0; i < count; i++) {
           const o = 8 + i * 8;
           if (o + 8 > data.length) break;
-          const x = this._emfPlusReadFloat(data, o);
-          const y = this._emfPlusReadFloat(data, o + 4);
+          const x = readFloat32(data, o);
+          const y = readFloat32(data, o + 4);
           const p = this._emfPlusMapPoint(x, y);
           if (i === 0) {
             this.ctx.moveTo(p.x, p.y);
@@ -5500,18 +3273,6 @@ var require_emfPlusDrawer = __commonJS({
         this.ctx.fill();
         __wmfEmfRendererLog("EMF+ FillPolygon:", count, "\u4E2A\u70B9");
       }
-      // 处理EMF+绘制曲线记录
-      processEmfPlusDrawCurve(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusDrawCurve");
-      }
-      // 处理EMF+填充闭合曲线记录
-      processEmfPlusFillClosedCurve(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusFillClosedCurve");
-      }
-      // 处理EMF+绘制闭合曲线记录
-      processEmfPlusDrawClosedCurve(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusDrawClosedCurve");
-      }
       // EmfPlusFillPath (0x4014, MS-EMFPLUS 2.3.4.17)：flags[7..0]=pathId, flags[15]=S(ARGB 直传), data[0..3]=brushId/ARGB
       processEmfPlusFillPath(flags, data) {
         if (data.length < 4) return;
@@ -5520,7 +3281,7 @@ var require_emfPlusDrawer = __commonJS({
         const brushId = data[0] & 255 | (data[1] & 255) << 8 | (data[2] & 255) << 16 | (data[3] & 255) << 24;
         const path = this.emfPlusObjects[pathId];
         if (!path || path.type !== "path") return;
-        const color = solid ? this._emfPlusArgbToColor(brushId) : this._emfPlusResolveBrush(0, brushId);
+        const color = solid ? argbToCss(brushId) : this._emfPlusResolveBrush(0, brushId);
         if (!color) return;
         this.ctx.fillStyle = color;
         this._emfPlusTracePath(path);
@@ -5536,7 +3297,7 @@ var require_emfPlusDrawer = __commonJS({
         if (!path || path.type !== "path") return;
         let color = "#000000", width = 1;
         if (solid) {
-          color = this._emfPlusArgbToColor(penId);
+          color = argbToCss(penId);
         } else {
           const pen = this.emfPlusObjects[penId];
           if (pen && pen.type === "pen") {
@@ -5556,23 +3317,23 @@ var require_emfPlusDrawer = __commonJS({
       processEmfPlusDrawImage(flags, data) {
         const img = this.emfPlusObjects[flags & 255];
         if (!img || data.length < 24) return;
-        const sx = this._emfPlusReadFloat(data, 8);
-        const sy = this._emfPlusReadFloat(data, 12);
-        const sw = this._emfPlusReadFloat(data, 16);
-        const sh = this._emfPlusReadFloat(data, 20);
+        const sx = readFloat32(data, 8);
+        const sy = readFloat32(data, 12);
+        const sw = readFloat32(data, 16);
+        const sh = readFloat32(data, 20);
         const compressed = (flags & 16384) !== 0;
         if (24 + (compressed ? 8 : 16) > data.length) return;
         let dx, dy, dw, dh;
         if (compressed) {
-          dx = this._emfPlusReadInt16(data, 24);
-          dy = this._emfPlusReadInt16(data, 26);
-          dw = this._emfPlusReadInt16(data, 28);
-          dh = this._emfPlusReadInt16(data, 30);
+          dx = readShort(data, 24);
+          dy = readShort(data, 26);
+          dw = readShort(data, 28);
+          dh = readShort(data, 30);
         } else {
-          dx = this._emfPlusReadFloat(data, 24);
-          dy = this._emfPlusReadFloat(data, 28);
-          dw = this._emfPlusReadFloat(data, 32);
-          dh = this._emfPlusReadFloat(data, 36);
+          dx = readFloat32(data, 24);
+          dy = readFloat32(data, 28);
+          dw = readFloat32(data, 32);
+          dh = readFloat32(data, 36);
         }
         const ul = this._emfPlusMapPoint(dx, dy);
         const ur = this._emfPlusMapPoint(dx + dw, dy);
@@ -5583,7 +3344,7 @@ var require_emfPlusDrawer = __commonJS({
       processEmfPlusDrawImagePoints(flags, data) {
         const img = this.emfPlusObjects[flags & 255];
         if (!img || data.length < 28) return;
-        const count = this._emfPlusReadInt32(data, 24);
+        const count = readDword(data, 24);
         if (count !== 3) return;
         const pts = [];
         for (let i = 0; i < 3; i++) {
@@ -5593,16 +3354,7 @@ var require_emfPlusDrawer = __commonJS({
         }
         this._drawImageObj(img, pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
       }
-      _emfPlusReadInt32(data, offset) {
-        if (offset + 4 > data.length) return 0;
-        const b = data[offset] | data[offset + 1] << 8 | data[offset + 2] << 16 | data[offset + 3] << 24;
-        return b | 0;
-      }
-      // 有符号 int16 小端（U_PPF_C 压缩矩形/点坐标用）
-      _emfPlusReadInt16(data, offset) {
-        if (offset + 2 > data.length) return 0;
-        return (data[offset] | data[offset + 1] << 8) << 16 >> 16;
-      }
+      // int32/int16 reading now lives in utils/binaryReader (readDword/readShort)
       // EMF+ 页面单位 -> 画布像素的比例（用当前坐标变换实测 100 单位的水平跨度）
       _emfPlusUnitsToPx() {
         try {
@@ -5627,14 +3379,14 @@ var require_emfPlusDrawer = __commonJS({
           const v = (data[o] | data[o + 1] << 8) << 16 >> 16;
           return v / 4096;
         }
-        return this._emfPlusReadFloat(data, o);
+        return readFloat32(data, o);
       }
       _emfPlusReadPointY(flags, data, o) {
         if (flags & 16384) {
           const v = (data[o + 2] | data[o + 3] << 8) << 16 >> 16;
           return v / 4096;
         }
-        return this._emfPlusReadFloat(data, o + 4);
+        return readFloat32(data, o + 4);
       }
       // 渲染嵌套 EMF / 位图对象到指定平行四边形（3 点：左上 / 右上 / 左下）
       // srcRect（可选）：源裁剪矩形 {x,y,w,h}，嵌套 EMF 按其子区域映射到目标平行四边形。
@@ -5710,20 +3462,14 @@ var require_emfPlusDrawer = __commonJS({
       processEmfPlusDrawString(flags, data) {
         if (data.length < 28) return;
         const fontId = flags & 255;
-        const brushId = this._emfPlusReadInt32(data, 0);
-        const len = this._emfPlusReadInt32(data, 8);
+        const brushId = readDword(data, 0);
+        const len = readDword(data, 8);
         if (len < 1 || len > 65536) return;
-        const layoutX = this._emfPlusReadFloat(data, 12);
-        const layoutY = this._emfPlusReadFloat(data, 16);
+        const layoutX = readFloat32(data, 12);
+        const layoutY = readFloat32(data, 16);
         const strOff = 28;
         if (strOff + len * 2 > data.length) return;
-        const slice = data.slice(strOff, strOff + len * 2);
-        let text = "";
-        for (let i = 0; i + 1 < slice.length; i += 2) {
-          const code = slice[i] | slice[i + 1] << 8;
-          if (code === 0) break;
-          text += String.fromCharCode(code);
-        }
+        const text = decodeUtf16Le(data, strOff, len, { breakAtNul: true });
         if (!text) return;
         const color = this._emfPlusResolveBrush(flags, brushId);
         if (color) this.ctx.fillStyle = color;
@@ -5752,8 +3498,8 @@ var require_emfPlusDrawer = __commonJS({
         for (let i = 0; i < count; i++) {
           const o = 4 + i * 8;
           if (o + 8 > data.length) break;
-          const x = this._emfPlusReadFloat(data, o);
-          const y = this._emfPlusReadFloat(data, o + 4);
+          const x = readFloat32(data, o);
+          const y = readFloat32(data, o + 4);
           const p = this._emfPlusMapPoint(x, y);
           if (i === 0) {
             this.ctx.moveTo(p.x, p.y);
@@ -5764,18 +3510,14 @@ var require_emfPlusDrawer = __commonJS({
         this.ctx.stroke();
         __wmfEmfRendererLog("EMF+ DrawLines:", count, "\u4E2A\u70B9");
       }
-      // 处理EMF+绘制贝塞尔曲线记录
-      processEmfPlusDrawBeziers(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusDrawBeziers");
-      }
       // 处理EMF+绘制椭圆记录：PenId(4) + RectF(16)
       processEmfPlusDrawEllipse(flags, data) {
         if (data.length < 16) return;
         const pen = this._emfPlusResolvePen(flags & 255);
-        const x = this._emfPlusReadFloat(data, 0);
-        const y = this._emfPlusReadFloat(data, 4);
-        const w = this._emfPlusReadFloat(data, 8);
-        const h = this._emfPlusReadFloat(data, 12);
+        const x = readFloat32(data, 0);
+        const y = readFloat32(data, 4);
+        const w = readFloat32(data, 8);
+        const h = readFloat32(data, 12);
         const tl = this._emfPlusMapPoint(x, y);
         const br = this._emfPlusMapPoint(x + w, y + h);
         const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(tl, br);
@@ -5791,13 +3533,13 @@ var require_emfPlusDrawer = __commonJS({
       // （BrushId 在 data 首字段）
       processEmfPlusFillEllipse(flags, data) {
         if (data.length < 20) return;
-        const brushId = this._emfPlusReadInt32(data, 0);
+        const brushId = readDword(data, 0);
         const color = this._emfPlusResolveBrush(flags, brushId);
         if (!color) return;
-        const x = this._emfPlusReadFloat(data, 4);
-        const y = this._emfPlusReadFloat(data, 8);
-        const w = this._emfPlusReadFloat(data, 12);
-        const h = this._emfPlusReadFloat(data, 16);
+        const x = readFloat32(data, 4);
+        const y = readFloat32(data, 8);
+        const w = readFloat32(data, 12);
+        const h = readFloat32(data, 16);
         const tl = this._emfPlusMapPoint(x, y);
         const br = this._emfPlusMapPoint(x + w, y + h);
         const { cx, cy, rx, ry } = GeometryUtils.absEllipseFromCorners(tl, br);
@@ -5809,23 +3551,19 @@ var require_emfPlusDrawer = __commonJS({
         this.ctx.fill();
         __wmfEmfRendererLog("EMF+ FillEllipse");
       }
-      // 处理EMF+绘制弧线记录
-      processEmfPlusDrawArc(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusDrawArc");
-      }
       // 处理EMF+填充饼图记录：data = BrushId(4) + StartAngle(float) + SweepAngle(float) + RectF(16)
       // （角度为度，顺时针自 3 点方向）
       processEmfPlusFillPie(flags, data) {
         if (data.length < 28) return;
-        const brushId = this._emfPlusReadInt32(data, 0);
+        const brushId = readDword(data, 0);
         const color = this._emfPlusResolveBrush(flags, brushId);
         if (!color) return;
-        const start = this._emfPlusReadFloat(data, 4);
-        const sweep = this._emfPlusReadFloat(data, 8);
-        const x = this._emfPlusReadFloat(data, 12);
-        const y = this._emfPlusReadFloat(data, 16);
-        const w = this._emfPlusReadFloat(data, 20);
-        const h = this._emfPlusReadFloat(data, 24);
+        const start = readFloat32(data, 4);
+        const sweep = readFloat32(data, 8);
+        const x = readFloat32(data, 12);
+        const y = readFloat32(data, 16);
+        const w = readFloat32(data, 20);
+        const h = readFloat32(data, 24);
         if (w === 0 || h === 0 || sweep === 0) return;
         const tl = this._emfPlusMapPoint(x, y);
         const br = this._emfPlusMapPoint(x + w, y + h);
@@ -5841,122 +3579,12 @@ var require_emfPlusDrawer = __commonJS({
         this.ctx.fill();
         __wmfEmfRendererLog("EMF+ FillPie");
       }
-      // 处理EMF+绘制饼图记录
-      processEmfPlusDrawPie(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusDrawPie");
-      }
-      // 处理EMF+绘制驱动字符串记录
-      processEmfPlusDrawDriverString(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusDrawDriverString");
-      }
-      // 处理EMF+设置渲染原点记录
-      processEmfPlusSetRenderingOrigin(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetRenderingOrigin");
-      }
-      // 处理EMF+设置抗锯齿模式记录
-      processEmfPlusSetAntiAliasMode(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetAntiAliasMode");
-      }
-      // 处理EMF+设置文本渲染提示记录
-      processEmfPlusSetTextRenderingHint(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetTextRenderingHint");
-      }
-      // 处理EMF+设置插值模式记录
-      processEmfPlusSetInterpolationMode(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetInterpolationMode");
-      }
-      // 处理EMF+设置像素偏移模式记录
-      processEmfPlusSetPixelOffsetMode(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetPixelOffsetMode");
-      }
-      // 处理EMF+设置合成模式记录
-      processEmfPlusSetCompositingMode(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetCompositingMode");
-      }
-      // 处理EMF+设置合成质量记录
-      processEmfPlusSetCompositingQuality(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetCompositingQuality");
-      }
-      // 处理EMF+保存记录
-      processEmfPlusSave(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSave");
-      }
-      // 处理EMF+恢复记录
-      processEmfPlusRestore(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusRestore");
-      }
-      // 处理EMF+开始容器记录
-      processEmfPlusBeginContainer(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusBeginContainer");
-      }
-      // 处理EMF+开始无参数容器记录
-      processEmfPlusBeginContainerNoParams(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusBeginContainerNoParams");
-      }
-      // 处理EMF+结束容器记录
-      processEmfPlusEndContainer(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusEndContainer");
-      }
-      // 处理EMF+设置世界变换记录
-      processEmfPlusSetWorldTransform(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetWorldTransform");
-      }
-      // 处理EMF+重置世界变换记录
-      processEmfPlusResetWorldTransform(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusResetWorldTransform");
-      }
-      // 处理EMF+乘以世界变换记录
-      processEmfPlusMultiplyWorldTransform(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusMultiplyWorldTransform");
-      }
-      // 处理EMF+平移世界变换记录
-      processEmfPlusTranslateWorldTransform(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusTranslateWorldTransform");
-      }
-      // 处理EMF+缩放世界变换记录
-      processEmfPlusScaleWorldTransform(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusScaleWorldTransform");
-      }
-      // 处理EMF+旋转世界变换记录
-      processEmfPlusRotateWorldTransform(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusRotateWorldTransform");
-      }
-      // 处理EMF+设置页面变换记录
-      processEmfPlusSetPageTransform(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetPageTransform");
-      }
-      // 处理EMF+重置裁剪记录
-      processEmfPlusResetClip(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusResetClip");
-      }
-      // 处理EMF+设置裁剪矩形记录
-      processEmfPlusSetClipRect(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetClipRect");
-      }
-      // 处理EMF+设置裁剪路径记录
-      processEmfPlusSetClipPath(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetClipPath");
-      }
-      // 处理EMF+设置裁剪区域记录
-      processEmfPlusSetClipRegion(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetClipRegion");
-      }
-      // 处理EMF+偏移裁剪记录
-      processEmfPlusOffsetClip(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusOffsetClip");
-      }
       // 补充缺失的处理方法
       processEmfPlusHeader(flags, data) {
         if (data.length >= 4) {
           const version = data[0] & 255 | (data[1] & 255) << 8 | (data[2] & 255) << 16 | (data[3] & 255) << 24;
           __wmfEmfRendererLog("EMF+ Header, version: 0x" + version.toString(16));
         }
-      }
-      processEmfPlusComment(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusComment");
-      }
-      processEmfPlusGetDC(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusGetDC");
       }
       // EmfPlusObject：ObjectId = flags & 0xFF；ObjectType 位于 flags 位 8..14（0x7f00）
       //  0x0100=Brush 0x0200=Pen 0x0300=Path 0x0500=Image ...
@@ -5969,19 +3597,19 @@ var require_emfPlusDrawer = __commonJS({
         this._objTypeStats["0x" + objectType.toString(16)] = (this._objTypeStats["0x" + objectType.toString(16)] || 0) + 1;
         if (objectType === 256) {
           if (data.length < 8) return;
-          const brushType = this._emfPlusReadInt32(data, 0);
+          const brushType = readDword(data, 0);
           if (brushType === 0) {
-            const argb = this._emfPlusReadArgb(data, 4);
-            this.emfPlusObjects[objectId] = { type: "solidBrush", color: this._emfPlusArgbToColor(argb) };
+            const argb = readArgb(data, 4);
+            this.emfPlusObjects[objectId] = { type: "solidBrush", color: argbToCss(argb) };
           } else if (brushType === 1 || brushType === 3 || brushType === 4) {
             const color = this._emfPlusFirstOpaqueArgb(data, 4);
             if (color) this.emfPlusObjects[objectId] = { type: "solidBrush", color };
           }
         } else if (objectType === 512) {
           if (data.length < 16) return;
-          const penDataFlags = this._emfPlusReadInt32(data, 4);
-          const unitType = this._emfPlusReadInt32(data, 8);
-          let width = this._emfPlusReadFloat(data, 12) || 1;
+          const penDataFlags = readDword(data, 4);
+          const unitType = readDword(data, 8);
+          let width = readFloat32(data, 12) || 1;
           let o = 16;
           if (penDataFlags & 1) o += 24;
           if (penDataFlags & 2) o += 4;
@@ -5992,27 +3620,27 @@ var require_emfPlusDrawer = __commonJS({
           if (penDataFlags & 64) o += 4;
           if (penDataFlags & 128) o += 4;
           if (penDataFlags & 256) {
-            const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+            const n = o + 4 <= data.length ? readDword(data, o) : 0;
             o += 4 + Math.max(0, Math.min(n, 1e3)) * 4;
           }
           if (penDataFlags & 512) o += 4;
           if (penDataFlags & 1024) {
-            const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+            const n = o + 4 <= data.length ? readDword(data, o) : 0;
             o += 4 + Math.max(0, Math.min(n, 1e3)) * 4;
           }
           if (penDataFlags & 2048) {
-            const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+            const n = o + 4 <= data.length ? readDword(data, o) : 0;
             o += 4 + Math.max(0, n);
           }
           if (penDataFlags & 4096) {
-            const n = o + 4 <= data.length ? this._emfPlusReadInt32(data, o) : 0;
+            const n = o + 4 <= data.length ? readDword(data, o) : 0;
             o += 4 + Math.max(0, n);
           }
           let color = "#000000";
           if (o + 4 <= data.length) {
-            const brushType = this._emfPlusReadInt32(data, o);
+            const brushType = readDword(data, o);
             if (brushType === 0 && o + 8 <= data.length) {
-              color = this._emfPlusArgbToColor(this._emfPlusReadArgb(data, o + 4));
+              color = argbToCss(readArgb(data, o + 4));
             } else if (brushType !== 0) {
               const c = this._emfPlusFirstOpaqueArgb(data, o + 4);
               if (c) color = c;
@@ -6025,17 +3653,12 @@ var require_emfPlusDrawer = __commonJS({
           let styleFlags = 0;
           let face = "sans-serif";
           if (data.length >= 12) {
-            emSize = this._emfPlusReadFloat(data, 0) || 12;
-            styleFlags = this._emfPlusReadInt32(data, 8);
+            emSize = readFloat32(data, 0) || 12;
+            styleFlags = readDword(data, 8);
             if (data.length >= 20) {
-              const nameLen = this._emfPlusReadInt32(data, 16);
+              const nameLen = readDword(data, 16);
               if (nameLen > 0 && nameLen < 64 && 20 + nameLen * 2 <= data.length) {
-                let name = "";
-                for (let i = 0; i < nameLen; i++) {
-                  const c = data[20 + i * 2] | data[21 + i * 2] << 8;
-                  if (!c) break;
-                  name += String.fromCharCode(c);
-                }
+                const name = readUtf16Name(data, 20, nameLen);
                 face = this._emfPlusFontFamilyFromName(name);
               }
             }
@@ -6053,9 +3676,9 @@ var require_emfPlusDrawer = __commonJS({
           }
         } else if (objectType === 1280) {
           if (data.length < 8) return;
-          const type = this._emfPlusReadInt32(data, 4);
+          const type = readDword(data, 4);
           if (type === 1) {
-            const bitmapType = data.length >= 28 ? this._emfPlusReadInt32(data, 24) : 0;
+            const bitmapType = data.length >= 28 ? readDword(data, 24) : 0;
             if ((bitmapType === 1 || bitmapType === 2) && data.length > 28) {
               const mime = bitmapType === 1 ? "image/png" : "image/jpeg";
               const b64 = Buffer.from(data.slice(28)).toString("base64");
@@ -6063,8 +3686,8 @@ var require_emfPlusDrawer = __commonJS({
             } else {
             }
           } else if (type === 2) {
-            const mfType = data.length >= 16 ? this._emfPlusReadInt32(data, 8) : 0;
-            const mfSize = data.length >= 16 ? this._emfPlusReadInt32(data, 12) : 0;
+            const mfType = data.length >= 16 ? readDword(data, 8) : 0;
+            const mfSize = data.length >= 16 ? readDword(data, 12) : 0;
             if (mfType === 3 && mfSize > 0 && 16 + mfSize <= data.length) {
               this.emfPlusObjects[objectId] = { type: "imageEmf", data: data.slice(16, 16 + mfSize) };
             }
@@ -6076,8 +3699,8 @@ var require_emfPlusDrawer = __commonJS({
       // EmfPlusClear：data = ARGB(4)，用指定颜色填充整个画布
       processEmfPlusClear(flags, data) {
         if (data.length < 4) return;
-        const argb = this._emfPlusReadArgb(data, 0);
-        const color = this._emfPlusArgbToColor(argb);
+        const argb = readArgb(data, 0);
+        const color = argbToCss(argb);
         this.ctx.fillStyle = color;
         this.ctx.fillRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
         __wmfEmfRendererLog("EMF+ Clear:", color);
@@ -6087,8 +3710,8 @@ var require_emfPlusDrawer = __commonJS({
       // flags&0x4000（U_PPF_C）为 1 时矩形是 4×int16（8 字节），否则 4×float32（16 字节）。
       processEmfPlusFillRectangles(flags, data) {
         if (data.length < 8) return;
-        const brushId = this._emfPlusReadInt32(data, 0);
-        const count = this._emfPlusReadInt32(data, 4);
+        const brushId = readDword(data, 0);
+        const count = readDword(data, 4);
         if (count < 1 || count > 4096) return;
         const color = this._emfPlusResolveBrush(flags, brushId);
         if (!color) return;
@@ -6098,10 +3721,10 @@ var require_emfPlusDrawer = __commonJS({
         for (let i = 0; i < count; i++) {
           const o = 8 + i * step;
           if (o + step > data.length) break;
-          const x = int16 ? this._emfPlusReadInt16(data, o) : this._emfPlusReadFloat(data, o);
-          const y = int16 ? this._emfPlusReadInt16(data, o + 2) : this._emfPlusReadFloat(data, o + 4);
-          const w = int16 ? this._emfPlusReadInt16(data, o + 4) : this._emfPlusReadFloat(data, o + 8);
-          const h = int16 ? this._emfPlusReadInt16(data, o + 6) : this._emfPlusReadFloat(data, o + 12);
+          const x = int16 ? readShort(data, o) : readFloat32(data, o);
+          const y = int16 ? readShort(data, o + 2) : readFloat32(data, o + 4);
+          const w = int16 ? readShort(data, o + 4) : readFloat32(data, o + 8);
+          const h = int16 ? readShort(data, o + 6) : readFloat32(data, o + 12);
           const tl = this._emfPlusMapPoint(x, y);
           const br = this._emfPlusMapPoint(x + w, y + h);
           this.ctx.fillRect(tl.x, tl.y, Math.abs(br.x - tl.x), Math.abs(br.y - tl.y));
@@ -6121,36 +3744,2372 @@ var require_emfPlusDrawer = __commonJS({
         for (let i = 0; i < count; i++) {
           const o = 4 + i * 16;
           if (o + 16 > data.length) break;
-          const x = this._emfPlusReadFloat(data, o);
-          const y = this._emfPlusReadFloat(data, o + 4);
-          const w = this._emfPlusReadFloat(data, o + 8);
-          const h = this._emfPlusReadFloat(data, o + 12);
+          const x = readFloat32(data, o);
+          const y = readFloat32(data, o + 4);
+          const w = readFloat32(data, o + 8);
+          const h = readFloat32(data, o + 12);
           const tl = this._emfPlusMapPoint(x, y);
           const br = this._emfPlusMapPoint(x + w, y + h);
           this.ctx.strokeRect(tl.x, tl.y, Math.abs(br.x - tl.x), Math.abs(br.y - tl.y));
         }
         __wmfEmfRendererLog("EMF+ DrawRects:", count, "\u4E2A\u77E9\u5F62");
       }
-      processEmfPlusFillRegion(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusFillRegion");
-      }
-      processEmfPlusSetTextContrast(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetTextContrast");
-      }
-      processEmfPlusStrokeFillPath(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusStrokeFillPath");
-      }
-      processEmfPlusSerializableObject(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSerializableObject");
-      }
-      processEmfPlusSetTSGraphics(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetTSGraphics");
-      }
-      processEmfPlusSetTSClip(flags, data) {
-        __wmfEmfRendererLog("Processing EmfPlusSetTSClip");
-      }
     };
     module2.exports = EmfPlusDrawer2;
+  }
+});
+
+// src/modules/drawers/emfDrawer.js
+var require_emfDrawer = __commonJS({
+  "src/modules/drawers/emfDrawer.js"(exports2, module2) {
+    "use strict";
+    var CoordinateTransformer2 = require_coordinateTransformer();
+    var GdiObjectManager2 = require_gdiObjectManager();
+    var EmfPlusParser2 = require_emfPlusParser();
+    var EmfPlusDrawer2 = require_emfPlusDrawer();
+    var GeometryUtils = require_geometryUtils();
+    var { readDword, readLong, readFloat32 } = require_binaryReader();
+    var { colorRefToHex } = require_colorUtils();
+    var { readUtf16Name, decodeUtf16Le, decodeSingleBytes, decodeAnsiBytes } = require_textCodec();
+    var { resolveTempCanvas, wrapImageData } = require_bitmapSurface();
+    var { SIGNATURES, RECORD_TYPES, DEFAULT_VIEW_WIDTH, DEFAULT_VIEW_HEIGHT } = require_constants();
+    var EMF_RECORD_HANDLERS = {
+      // ========== 基础记录 ==========
+      1: null,
+      // EMR_HEADER（已由解析层消费）
+      14: null,
+      // EMR_EOF
+      // ========== 绘图记录 (Drawing Records) ==========
+      2: "processEmfPolyBezier",
+      // EMR_POLYBEZIER
+      3: "processEmfPolygon",
+      // EMR_POLYGON
+      4: "processEmfPolyline",
+      // EMR_POLYLINE
+      5: "processEmfPolyBezierTo",
+      // EMR_POLYBEZIERTO
+      6: "processEmfPolylineTo",
+      // EMR_POLYLINETO
+      7: "processEmfPolyPolyline",
+      // EMR_POLYPOLYLINE
+      8: "processEmfPolyPolygon",
+      // EMR_POLYPOLYGON
+      27: "processEmfMoveToEx",
+      // EMR_MOVETOEX
+      54: "processEmfLineTo",
+      // EMR_LINETO
+      41: "processEmfAngleArc",
+      // EMR_ANGLEARC
+      42: "processEmfEllipse",
+      // EMR_ELLIPSE
+      43: "processEmfRectangle",
+      // EMR_RECTANGLE
+      44: "processEmfRoundRect",
+      // EMR_ROUNDRECT
+      45: "processEmfArc",
+      // EMR_ARC
+      55: "processEmfArcTo",
+      // EMR_ARCTO
+      46: "processEmfChord",
+      // EMR_CHORD
+      47: "processEmfPie",
+      // EMR_PIE
+      56: "processEmfPolyDraw",
+      // EMR_POLYDRAW
+      // ========== 路径记录 (Path Records) ==========
+      59: "processEmfBeginPath",
+      // EMR_BEGINPATH
+      60: "processEmfEndPath",
+      // EMR_ENDPATH
+      61: "processEmfCloseFigure",
+      // EMR_CLOSEFIGURE
+      62: "processEmfFillPath",
+      // EMR_FILLPATH
+      94: "processEmfCreateDibPatternBrushPT",
+      // EMR_CREATEDIBPATTERNBRUSHPT
+      63: "processEmfStrokeAndFillPath",
+      // EMR_STROKEANDFILLPATH
+      64: "processEmfStrokePath",
+      // EMR_STROKEPATH
+      65: "processEmfFlattenPath",
+      // EMR_FLATTENPATH
+      66: "processEmfWidenPath",
+      // EMR_WIDENPATH
+      68: "processEmfAbortPath",
+      // EMR_ABORTPATH
+      // ========== 状态记录 (State Records) ==========
+      9: "processEmfSetWindowExtEx",
+      // EMR_SETWINDOWEXTEX
+      10: "processEmfSetWindowOrgEx",
+      // EMR_SETWINDOWORGEX
+      11: "processEmfSetViewportExtEx",
+      // EMR_SETVIEWPORTEXTEX
+      12: "processEmfSetViewportOrgEx",
+      // EMR_SETVIEWPORTORGEX
+      13: "processEmfSetBrushOrgEx",
+      // EMR_SETBRUSHORGEX
+      15: "processEmfSetPixelV",
+      // EMR_SETPIXELV
+      16: "processEmfSetMapperFlags",
+      // EMR_SETMAPPERFLAGS
+      17: "processEmfSetMapMode",
+      // EMR_SETMAPMODE
+      18: "processEmfSetBkMode",
+      // EMR_SETBKMODE
+      19: "processEmfSetPolyFillMode",
+      // EMR_SETPOLYFILLMODE
+      20: "processEmfSetRop2",
+      // EMR_SETROP2
+      21: "processEmfSetStretchBltMode",
+      // EMR_SETSTRETCHBLTMODE
+      22: "processEmfSetTextAlign",
+      // EMR_SETTEXTALIGN
+      23: "processEmfSetColorAdjustment",
+      // EMR_SETCOLORADJUSTMENT
+      24: "processEmfSetTextColor",
+      // EMR_SETTEXTCOLOR
+      25: "processEmfSetBkColor",
+      // EMR_SETBKCOLOR
+      26: "processEmfOffsetClipRgn",
+      // EMR_OFFSETCLIPRGN
+      28: "processEmfSetMetaRgn",
+      // EMR_SETMETARGN
+      29: "processEmfExcludeClipRect",
+      // EMR_EXCLUDECLIPRECT
+      30: "processEmfIntersectClipRect",
+      // EMR_INTERSECTCLIPRECT
+      31: "processEmfScaleViewportExtEx",
+      // EMR_SCALEVIEWPORTEXTEX
+      32: "processEmfScaleWindowExtEx",
+      // EMR_SCALEWINDOWEXTEX
+      33: "processEmfSaveDC",
+      // EMR_SAVEDC
+      34: "processEmfRestoreDC",
+      // EMR_RESTOREDC
+      35: "processEmfSetWorldTransform",
+      // EMR_SETWORLDTRANSFORM
+      36: "processEmfModifyWorldTransform",
+      // EMR_MODIFYWORLDTRANSFORM
+      57: "processEmfSetArcDirection",
+      // EMR_SETARCDIRECTION
+      58: "processEmfSetMiterLimit",
+      // EMR_SETMITERLIMIT
+      // ========== 对象记录 (Object Records) ==========
+      37: "processEmfSelectObject",
+      // EMR_SELECTOBJECT
+      38: "processEmfCreatePen",
+      // EMR_CREATEPEN
+      39: "processEmfCreateBrushIndirect",
+      // EMR_CREATEBRUSHINDIRECT
+      40: "processEmfDeleteObject",
+      // EMR_DELETEOBJECT
+      93: "processEmfCreateMonoBrush",
+      // EMR_CREATEMONOBRUSH
+      95: "processEmfExtCreatePen",
+      // EMR_EXTCREATEPEN
+      82: "processEmfExtCreateFontIndirectW",
+      // EMR_EXTCREATEFONTINDIRECTW
+      99: "processEmfCreateColorSpaceW",
+      // EMR_CREATECOLORSPACE
+      // ========== 调色板记录 (Palette Records) ==========
+      48: "processEmfSelectPalette",
+      // EMR_SELECTPALETTE
+      49: "processEmfCreatePalette",
+      // EMR_CREATEPALETTE
+      50: "processEmfSetPaletteEntries",
+      // EMR_SETPALETTEENTRIES
+      51: "processEmfResizePalette",
+      // EMR_RESIZEPALETTE
+      52: "processEmfRealizePalette",
+      // EMR_REALIZEPALETTE
+      53: "processEmfExtFloodFill",
+      // EMR_EXTFLOODFILL
+      // ========== 位图记录 (Bitmap Records) ==========
+      // 五种记录字段布局各不相同（MS-EMF 2.3.1），必须分别解析，
+      // 位图数据一律按 offBmiSrc/offBitsSrc 精确定位（相对记录起始，含 8 字节 EMR 头）。
+      76: "processEmfBitBlt",
+      // EMR_BITBLT
+      77: "processEmfStretchBlt",
+      // EMR_STRETCHBLT
+      81: "processEmfStretchDibBits",
+      // EMR_STRETCHDIBITS
+      114: "processEmfAlphaBlend",
+      // EMR_ALPHABLEND
+      116: "processEmfTransparentBlt",
+      // EMR_TRANSPARENTBLT
+      // ========== 文本记录 (Text Records) ==========
+      83: "processEmfExtTextOutA",
+      // EMR_EXTTEXTOUTA
+      84: "processEmfExtTextOutW",
+      // EMR_EXTTEXTOUTW
+      108: "processEmfSmallTextOut",
+      // EMR_SMALLTEXTOUT
+      // ========== 16 位绘图记录 ==========
+      85: "processEmfPolyBezier16",
+      // EMR_POLYBEZIER16
+      86: "processEmfPolygon16",
+      // EMR_POLYGON16
+      87: "processEmfPolyline16",
+      // EMR_POLYLINE16
+      88: "processEmfPolyBezierTo16",
+      // EMR_POLYBEZIERTO16
+      89: "processEmfPolyLineTo16",
+      // EMR_POLYLINETO16
+      90: "processEmfPolyPolyline16",
+      // EMR_POLYPOLYLINE16
+      91: "processEmfPolyPolygon16",
+      // EMR_POLYPOLYGON16
+      92: "processEmfPolyDraw16",
+      // EMR_POLYDRAW16
+      // ========== 裁剪记录 ==========
+      67: "processEmfSelectClipPath",
+      // EMR_SELECTCLIPPATH
+      75: "processEmfExtSelectClipRgn",
+      // EMR_EXTSELECTCLIPRGN
+      // ========== 区域记录 (Region Records) ==========
+      71: "processEmfFillRgn",
+      // EMR_FILLRGN
+      72: "processEmfFrameRgn",
+      // EMR_FRAMERGN
+      74: "processEmfPaintRgn",
+      // EMR_PAINTRGN
+      // 0x49 EMR_INVERTRGN：像素取反需要读取背景，Canvas/SVG 无光栅反演（暂跳过）
+      // ========== 已识别但无需处理 ==========
+      70: "processEmfGdiComment",
+      // EMR_GDICOMMENT（含 EMF+ 内嵌数据时派发）
+      73: null,
+      // EMR_INVERTRGN（无光栅反演，未实现）
+      78: null,
+      // EMR_MASKBLT
+      79: null,
+      // EMR_PLGBLT
+      80: null,
+      // EMR_SETDIBITSTODEVICE
+      109: null,
+      // EMR_FORCEUFIMAPPING（仅影响字体匹配）
+      110: null,
+      // EMR_NAMEDESCAPE
+      118: null
+      // EMR_GRADIENTFILL
+    };
+    var EMF_DRAW_HANDLER_RE = /processEmf(Poly|Ellipse|Rectangle|RoundRect|Arc|Chord|Pie|LineTo|MoveToEx|ExtTextOut|SmallTextOut|BitBlt|StretchBlt|MaskBlt|PlgBlt|StretchDibBits|SetDibitsToDevice|AlphaBlend|TransparentBlt|GradientFill|FillRgn|FrameRgn|PaintRgn|ExtFloodFill|FillPath|StrokePath|StrokeAndFillPath|SetPixel)/;
+    var EmfDrawer2 = class {
+      constructor(ctx) {
+        this.ctx = ctx;
+        this.coordinateTransformer = new CoordinateTransformer2();
+        this.coordinateTransformer.setIgnoreWindowOrgs(true);
+        this.gdiObjectManager = new GdiObjectManager2();
+        this.currentPath = [];
+        this.pathState = "idle";
+        this.fillColor = "#000000";
+        this.strokeColor = "#000000";
+        this.lineWidth = 1;
+        this.arcDirection = 1;
+        this._penIsBlack = true;
+        this._penStockBlack = true;
+        this._penNull = false;
+        this.textColor = "#000000";
+        this.dcStateStack = [];
+        this.currentPos = { x: 0, y: 0 };
+        this._emfPlusDrawer = null;
+        if (this.ctx && typeof this.ctx === "object") {
+          this.ctx.strokeScaleProvider = () => this.coordinateTransformer.getStrokeScale();
+        }
+      }
+      draw(metafileData, options = {}) {
+        __wmfEmfRendererLog("Drawing EMF with header:", metafileData.header);
+        __wmfEmfRendererLog("Number of records:", metafileData.records.length);
+        const viewWidth = options.viewWidth || DEFAULT_VIEW_WIDTH;
+        const viewHeight = options.viewHeight || DEFAULT_VIEW_HEIGHT;
+        let canvasWidth, canvasHeight;
+        if (metafileData.header.bounds) {
+          const bounds = metafileData.header.bounds;
+          const bW = Math.abs(bounds.right - bounds.left);
+          const bH = Math.abs(bounds.bottom - bounds.top);
+          canvasWidth = Math.max(1, Math.round(bW));
+          canvasHeight = Math.max(1, Math.round(bH));
+          this.coordinateTransformer.setDeviceOrg(bounds.left, bounds.top);
+          this.coordinateTransformer.setWindowOrg(0, 0);
+          this.coordinateTransformer.setWindowExt(canvasWidth, canvasHeight);
+          this.coordinateTransformer.setViewportOrg(0, 0);
+          this.coordinateTransformer.setViewportExt(canvasWidth, canvasHeight);
+          this._fileWindowExtX = canvasWidth;
+          this._fileWindowExtY = canvasHeight;
+          this._fileViewportExtX = canvasWidth;
+          this._fileViewportExtY = canvasHeight;
+          __wmfEmfRendererLog("Canvas(device):", canvasWidth, "x", canvasHeight);
+        } else {
+          canvasWidth = viewWidth;
+          canvasHeight = viewHeight;
+        }
+        const dpr = typeof window !== "undefined" && window.devicePixelRatio || 1;
+        this.devicePixelRatio = dpr;
+        this.ctx.canvas.width = Math.round(canvasWidth * dpr);
+        this.ctx.canvas.height = Math.round(canvasHeight * dpr);
+        this._canvasW = canvasWidth;
+        this._canvasH = canvasHeight;
+        const _initW = metafileData.header.bounds && metafileData.header.bounds.right - metafileData.header.bounds.left || canvasWidth;
+        const _initH = metafileData.header.bounds && metafileData.header.bounds.bottom - metafileData.header.bounds.top || canvasHeight;
+        this._fileWindowExtX = _initW;
+        this._fileWindowExtY = _initH;
+        this._fileViewportExtX = _initW;
+        this._fileViewportExtY = _initH;
+        if (metafileData.header.szlDevice && metafileData.header.szlMillimeters) {
+          const mmX = metafileData.header.szlMillimeters.cx || metafileData.header.szlMillimeters.cy || 1;
+          const pxX = metafileData.header.szlDevice.cx || metafileData.header.szlDevice.cy || 1;
+          this.coordinateTransformer.setPxPerMm(pxX / mmX);
+        }
+        this.ctx.canvas.style.width = canvasWidth + "px";
+        this.ctx.canvas.style.height = canvasHeight + "px";
+        this.ctx.scale(dpr, dpr);
+        __wmfEmfRendererLog("Canvas size set to:", canvasWidth, "x", canvasHeight, "(DPR:", dpr, ", actual:", this.ctx.canvas.width, "x", this.ctx.canvas.height + ")");
+        this.ctx.fillStyle = "#ffffff";
+        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+        __wmfEmfRendererLog("Canvas cleared");
+        this.ctx.strokeStyle = "#000000";
+        this.ctx.fillStyle = "#ffffff";
+        this.ctx.lineWidth = 1;
+        this.ctx.lineCap = "round";
+        this.ctx.lineJoin = "round";
+        this.fillColor = "#ffffff";
+        this.strokeColor = "#000000";
+        __wmfEmfRendererLog("Drawing styles set");
+        this.currentPath = [];
+        this.pathState = "idle";
+        this.currentPos = { x: 0, y: 0 };
+        this.currentPalette = null;
+        this._skipEmfPlusPlayback = this._detectDualMode(metafileData.records);
+        const debugLogs = globalThis.__WMF_DEBUG__;
+        for (let i = 0; i < metafileData.records.length; i++) {
+          const record = metafileData.records[i];
+          this._recSinceGdiC = (this._recSinceGdiC == null ? 999 : this._recSinceGdiC) + 1;
+          if (record.type === 70) this._recSinceGdiC = 0;
+          if (debugLogs) {
+            __wmfEmfRendererLog("Processing EMF record", i, ":", record.type, "(0x" + record.type.toString(16).padStart(8, "0") + ")");
+          }
+          this.processEmfRecordType(record.type, record.data);
+        }
+        this.finishPath();
+        __wmfEmfRendererLog("EMF drawing completed");
+      }
+      processEmfRecordType(recordType, data) {
+        const handlerName = EMF_RECORD_HANDLERS[recordType];
+        if (handlerName !== void 0) {
+          if (handlerName !== null) {
+            this[handlerName](data);
+          }
+          return;
+        }
+        __wmfEmfRendererLog("Unknown EMF record type:", recordType, "(0x" + recordType.toString(16).padStart(8, "0") + ")");
+        this.tryProcessAsCoordinates(data);
+      }
+      // Byte readers and color conversion now live in utils/binaryReader and utils/colorUtils
+      // 应用GDI对象样式
+      applyGdiObject(obj) {
+        if (obj.type === "pen") {
+          const isNullPen = obj.style === 5 || obj.color === "transparent";
+          this._penNull = isNullPen;
+          this._penIsBlack = isNullPen || /^(#000000|#000|black)$/i.test(obj.color || "");
+          if (!obj._isStockPen) this._penStockBlack = false;
+          this.ctx.strokeStyle = isNullPen ? "transparent" : obj.color;
+          this.ctx.lineCap = null;
+          this.ctx.lineJoin = null;
+          if (!isNullPen) {
+            switch (obj.style & 3840) {
+              case 0:
+                this.ctx.lineCap = "round";
+                break;
+              case 256:
+                this.ctx.lineCap = "square";
+                break;
+              case 512:
+                this.ctx.lineCap = "butt";
+                break;
+              default:
+                break;
+            }
+            switch (obj.style & 61440) {
+              case 0:
+                this.ctx.lineJoin = "round";
+                break;
+              case 4096:
+                this.ctx.lineJoin = "bevel";
+                break;
+              case 8192:
+                this.ctx.lineJoin = "miter";
+                break;
+              default:
+                break;
+            }
+          }
+          if (!isNullPen) {
+            const PS_GEOMETRIC = 65536;
+            const w = (obj.style & 983040) === PS_GEOMETRIC ? obj.width || 1 : 1;
+            const scale = this.coordinateTransformer.getScale();
+            const wMap = w * Math.abs(scale.x || 1);
+            this.ctx.lineWidth = wMap < 1 ? 1 : wMap;
+            const u = obj.width || 1;
+            const ps = obj.style & 15;
+            let dash = [];
+            if (ps >= 1 && ps <= 4) {
+              const D = 5 * u, T = 1 * u;
+              if (ps === 1) dash = [D, D];
+              else if (ps === 2) dash = [T, T];
+              else if (ps === 3) dash = [D, D, T, D];
+              else dash = [D, D, T, T, T, D];
+            }
+            if (typeof this.ctx.setLineDash === "function") this.ctx.setLineDash(dash);
+          } else {
+            if (typeof this.ctx.setLineDash === "function") this.ctx.setLineDash([]);
+          }
+        } else if (obj.type === "brush") {
+          this.ctx.fillStyle = obj.url || (obj.color === "transparent" ? "transparent" : obj.color);
+        } else if (obj.type === "font" && obj.faceName) {
+          const scale = this.coordinateTransformer.getScale();
+          const size = Math.max(1, Math.round(Math.abs(obj.height || 12) * Math.abs(scale.y || 1)));
+          const weight = (obj.weight || 400) >= 700 ? "bold " : "";
+          const italic = obj.italic ? "italic " : "";
+          this.ctx.font = `${italic}${weight}${size}px "${obj.faceName || "sans-serif"}"`;
+        }
+      }
+      // 填充形状收尾：fill 后描边。默认黑色 1px pen 或 NULL_PEN 时改为「按填充色 1px 描边」
+      // （每个填充形状输出为 fill+stroke 同色 1px 的 path，
+      //  即使当前 pen 是 PS_NULL；彩色 fill 边缘因此无黑框）；
+      // 显式彩色/宽笔保持原样描边。
+      _afterFillShape() {
+        if (this._penNull || this._penStockBlack) {
+          const f = this.ctx.fillStyle;
+          if (!f || f === "none" || f === "transparent") return;
+          const s = this.ctx.strokeStyle;
+          const w = this.ctx.lineWidth;
+          this.ctx.strokeStyle = f;
+          this.ctx.lineWidth = 1;
+          this.ctx.stroke();
+          this.ctx.strokeStyle = s;
+          this.ctx.lineWidth = w;
+        } else {
+          this.ctx.stroke();
+        }
+      }
+      // 应用Stock对象（Windows预定义对象，GetStockObject 枚举 + ENHMETA_STOCK_OBJECT(0x80000000)）
+      applyStockObject(handle) {
+        const stockObjects = {
+          2147483648: { type: "brush", color: "#ffffff" },
+          // WHITE_BRUSH
+          2147483649: { type: "brush", color: "#c0c0c0" },
+          // LTGRAY_BRUSH
+          2147483650: { type: "brush", color: "#808080" },
+          // GRAY_BRUSH
+          2147483651: { type: "brush", color: "#404040" },
+          // DKGRAY_BRUSH
+          2147483652: { type: "brush", color: "#000000" },
+          // BLACK_BRUSH
+          2147483653: { type: "brush", color: "transparent" },
+          // NULL_BRUSH (HOLLOW)
+          2147483654: { type: "pen", color: "#ffffff", width: 1 },
+          // WHITE_PEN
+          2147483655: { type: "pen", color: "#000000", width: 1 },
+          // BLACK_PEN
+          2147483656: { type: "pen", color: "transparent", width: 0 },
+          // NULL_PEN
+          2147483661: { type: "font", height: -12, weight: 700, faceName: "System" },
+          // SYSTEM_FONT
+          2147483665: { type: "font", height: -12, weight: 400, faceName: "MS Shell Dlg" }
+          // DEFAULT_GUI_FONT
+        };
+        const obj = stockObjects[handle];
+        if (obj) {
+          if (obj.type === "pen") this._penStockBlack = obj.width === 1 && /^(#000000|black)$/i.test(obj.color || "");
+          obj._isStockPen = true;
+          this.applyGdiObject(obj);
+        }
+      }
+      // 以下是具体的EMF处理方法
+      processEmfPolyBezier(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        __wmfEmfRendererLog("Processing EMF PolyBezier, count:", count);
+        if (data.length < 20 + count * 8) return;
+        if (count >= 4 && count % 3 === 1) {
+          const points = [];
+          for (let i = 0; i < count; i++) {
+            const x = readLong(data, 20 + i * 8);
+            const y = readLong(data, 24 + i * 8);
+            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            points.push(transformed);
+          }
+          this.ctx.beginPath();
+          this.ctx.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length; i += 3) {
+            if (i + 2 < points.length) {
+              this.ctx.bezierCurveTo(
+                points[i].x,
+                points[i].y,
+                points[i + 1].x,
+                points[i + 1].y,
+                points[i + 2].x,
+                points[i + 2].y
+              );
+            }
+          }
+          this.ctx.stroke();
+        }
+      }
+      processEmfPolygon(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        __wmfEmfRendererLog("Processing EMF Polygon, count:", count);
+        if (data.length < 20 + count * 8) return;
+        this.ctx.beginPath();
+        for (let i = 0; i < count; i++) {
+          const x = readLong(data, 20 + i * 8);
+          const y = readLong(data, 24 + i * 8);
+          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          if (i === 0) {
+            this.ctx.moveTo(transformed.x, transformed.y);
+          } else {
+            this.ctx.lineTo(transformed.x, transformed.y);
+          }
+        }
+        this.ctx.closePath();
+        this.ctx.fill();
+        this._afterFillShape();
+      }
+      processEmfPolyline(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        __wmfEmfRendererLog("Processing EMF Polyline, count:", count);
+        if (data.length < 20 + count * 8) return;
+        this.ctx.beginPath();
+        for (let i = 0; i < count; i++) {
+          const x = readLong(data, 20 + i * 8);
+          const y = readLong(data, 24 + i * 8);
+          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          if (i === 0) {
+            this.ctx.moveTo(transformed.x, transformed.y);
+          } else {
+            this.ctx.lineTo(transformed.x, transformed.y);
+          }
+        }
+        this.ctx.stroke();
+      }
+      processEmfPolyBezierTo(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        __wmfEmfRendererLog("Processing EMF PolyBezierTo, count:", count);
+        if (data.length < 20 + count * 8 || count % 3 !== 0) return;
+        const points = [];
+        for (let i = 0; i < count; i++) {
+          const x = readLong(data, 20 + i * 8);
+          const y = readLong(data, 24 + i * 8);
+          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          points.push(transformed);
+        }
+        if (this._pathActive()) {
+          this._ensurePathStart();
+          for (let i = 0; i < points.length; i += 3) {
+            if (i + 2 < points.length) {
+              this.ctx.bezierCurveTo(
+                points[i].x,
+                points[i].y,
+                points[i + 1].x,
+                points[i + 1].y,
+                points[i + 2].x,
+                points[i + 2].y
+              );
+            }
+          }
+        } else {
+          this.ctx.beginPath();
+          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          this.ctx.moveTo(start.x, start.y);
+          for (let i = 0; i < points.length; i += 3) {
+            if (i + 2 < points.length) {
+              this.ctx.bezierCurveTo(
+                points[i].x,
+                points[i].y,
+                points[i + 1].x,
+                points[i + 1].y,
+                points[i + 2].x,
+                points[i + 2].y
+              );
+            }
+          }
+          this.ctx.stroke();
+        }
+        const last = points[points.length - 1];
+        if (last) {
+          this.currentPos = {
+            x: readLong(data, 20 + (count - 1) * 8),
+            y: readLong(data, 24 + (count - 1) * 8)
+          };
+        }
+      }
+      processEmfPolylineTo(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        __wmfEmfRendererLog("Processing EMF PolylineTo, count:", count);
+        if (data.length < 20 + count * 8) return;
+        if (this._pathActive()) {
+          this._ensurePathStart();
+          for (let i = 0; i < count; i++) {
+            const x = readLong(data, 20 + i * 8);
+            const y = readLong(data, 24 + i * 8);
+            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            this.ctx.lineTo(transformed.x, transformed.y);
+          }
+        } else {
+          this.ctx.beginPath();
+          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          this.ctx.moveTo(start.x, start.y);
+          for (let i = 0; i < count; i++) {
+            const x = readLong(data, 20 + i * 8);
+            const y = readLong(data, 24 + i * 8);
+            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            this.ctx.lineTo(transformed.x, transformed.y);
+          }
+          this.ctx.stroke();
+        }
+        this.currentPos = {
+          x: readLong(data, 20 + (count - 1) * 8),
+          y: readLong(data, 24 + (count - 1) * 8)
+        };
+      }
+      processEmfPolyPolyline(data) {
+        if (data.length < 24) return;
+        const numberOfPolylines = readDword(data, 16);
+        const totalCount = readDword(data, 20);
+        __wmfEmfRendererLog("Processing EMF PolyPolyline, polylines:", numberOfPolylines, "total points:", totalCount);
+        if (data.length < 24 + numberOfPolylines * 4 + totalCount * 8) return;
+        const counts = [];
+        for (let i = 0; i < numberOfPolylines; i++) {
+          counts.push(readDword(data, 24 + i * 4));
+        }
+        let pointOffset = 24 + numberOfPolylines * 4;
+        for (let i = 0; i < numberOfPolylines; i++) {
+          const count = counts[i];
+          this.ctx.beginPath();
+          for (let j = 0; j < count; j++) {
+            const x = readLong(data, pointOffset);
+            const y = readLong(data, pointOffset + 4);
+            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            if (j === 0) {
+              this.ctx.moveTo(transformed.x, transformed.y);
+            } else {
+              this.ctx.lineTo(transformed.x, transformed.y);
+            }
+            pointOffset += 8;
+          }
+          this.ctx.stroke();
+        }
+      }
+      processEmfPolyPolygon(data) {
+        if (data.length < 24) return;
+        const numberOfPolygons = readDword(data, 16);
+        const totalCount = readDword(data, 20);
+        __wmfEmfRendererLog("Processing EMF PolyPolygon, polygons:", numberOfPolygons, "total points:", totalCount);
+        if (data.length < 24 + numberOfPolygons * 4 + totalCount * 8) return;
+        const counts = [];
+        for (let i = 0; i < numberOfPolygons; i++) {
+          counts.push(readDword(data, 24 + i * 4));
+        }
+        let pointOffset = 24 + numberOfPolygons * 4;
+        this.ctx.beginPath();
+        for (let i = 0; i < numberOfPolygons; i++) {
+          const count = counts[i];
+          for (let j = 0; j < count; j++) {
+            const x = readLong(data, pointOffset);
+            const y = readLong(data, pointOffset + 4);
+            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            if (j === 0) {
+              this.ctx.moveTo(transformed.x, transformed.y);
+            } else {
+              this.ctx.lineTo(transformed.x, transformed.y);
+            }
+            pointOffset += 8;
+          }
+          this.ctx.closePath();
+        }
+        this.ctx.fill();
+        this._afterFillShape();
+      }
+      // ============ EMR_*16 系列（16 位坐标变体，MS-EMF 2.3.5）============
+      // 与 32 位版本结构相同，区别仅在于 aPoints 每点 4 字节（x/y 为 16 位有符号整数）
+      readInt16FromData(data, offset) {
+        if (offset + 2 > data.length) return 0;
+        const value = data[offset] | data[offset + 1] << 8;
+        return value > 32767 ? value - 65536 : value;
+      }
+      readPoints16(data, offset, count) {
+        const points = [];
+        for (let i = 0; i < count; i++) {
+          const x = this.readInt16FromData(data, offset + i * 4);
+          const y = this.readInt16FromData(data, offset + i * 4 + 2);
+          points.push(this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height));
+        }
+        return points;
+      }
+      processEmfPolyBezier16(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        if (count < 4 || count % 3 !== 1 || data.length < 20 + count * 4) return;
+        const points = this.readPoints16(data, 20, count);
+        if (this._pathActive()) {
+          this.ctx.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length; i += 3) {
+            if (i + 2 < points.length) {
+              this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
+            }
+          }
+          return;
+        }
+        this.ctx.beginPath();
+        this.ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i += 3) {
+          if (i + 2 < points.length) {
+            this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
+          }
+        }
+        this.ctx.stroke();
+      }
+      processEmfPolygon16(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        if (count < 3 || data.length < 20 + count * 4) return;
+        const points = this.readPoints16(data, 20, count);
+        if (this._pathActive()) {
+          points.forEach((p, i) => i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
+          this.ctx.closePath();
+          return;
+        }
+        this.ctx.beginPath();
+        points.forEach((p, i) => i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
+        this.ctx.closePath();
+        this.ctx.fill();
+        this._afterFillShape();
+      }
+      processEmfPolyline16(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        if (count < 2 || data.length < 20 + count * 4) return;
+        const points = this.readPoints16(data, 20, count);
+        if (this._pathActive()) {
+          points.forEach((p, i) => i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
+          return;
+        }
+        this.ctx.beginPath();
+        points.forEach((p, i) => i === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
+        this.ctx.stroke();
+      }
+      processEmfPolyBezierTo16(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        if (count < 3 || count % 3 !== 0 || data.length < 20 + count * 4) return;
+        const points = this.readPoints16(data, 20, count);
+        if (this._pathActive()) {
+          this._ensurePathStart();
+          for (let i = 0; i + 2 < points.length; i += 3) {
+            this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
+          }
+        } else {
+          this.ctx.beginPath();
+          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          this.ctx.moveTo(start.x, start.y);
+          for (let i = 0; i + 2 < points.length; i += 3) {
+            this.ctx.bezierCurveTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
+          }
+          this.ctx.stroke();
+        }
+        this.currentPos = {
+          x: this.readInt16FromData(data, 20 + (count - 1) * 4),
+          y: this.readInt16FromData(data, 20 + (count - 1) * 4 + 2)
+        };
+      }
+      processEmfPolyLineTo16(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        if (count < 1 || data.length < 20 + count * 4) return;
+        const points = this.readPoints16(data, 20, count);
+        if (this._pathActive()) {
+          this._ensurePathStart();
+          points.forEach((p) => this.ctx.lineTo(p.x, p.y));
+        } else {
+          this.ctx.beginPath();
+          const start = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          this.ctx.moveTo(start.x, start.y);
+          points.forEach((p) => this.ctx.lineTo(p.x, p.y));
+          this.ctx.stroke();
+        }
+        this.currentPos = {
+          x: this.readInt16FromData(data, 20 + (count - 1) * 4),
+          y: this.readInt16FromData(data, 20 + (count - 1) * 4 + 2)
+        };
+      }
+      processEmfPolyPolyline16(data) {
+        if (data.length < 24) return;
+        const nPolys = readDword(data, 16);
+        const cTotal = readDword(data, 20);
+        if (data.length < 24 + nPolys * 4 + cTotal * 4) return;
+        let pointOffset = 24 + nPolys * 4;
+        for (let i = 0; i < nPolys; i++) {
+          const count = readDword(data, 24 + i * 4);
+          const points = this.readPoints16(data, pointOffset, count);
+          pointOffset += count * 4;
+          this.ctx.beginPath();
+          points.forEach((p, j) => j === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
+          this.ctx.stroke();
+        }
+      }
+      processEmfPolyPolygon16(data) {
+        if (data.length < 24) return;
+        const nPolys = readDword(data, 16);
+        const cTotal = readDword(data, 20);
+        if (data.length < 24 + nPolys * 4 + cTotal * 4) return;
+        let pointOffset = 24 + nPolys * 4;
+        const inPath = this._pathActive();
+        if (!inPath) this.ctx.beginPath();
+        for (let i = 0; i < nPolys; i++) {
+          const count = readDword(data, 24 + i * 4);
+          const points = this.readPoints16(data, pointOffset, count);
+          pointOffset += count * 4;
+          points.forEach((p, j) => j === 0 ? this.ctx.moveTo(p.x, p.y) : this.ctx.lineTo(p.x, p.y));
+          this.ctx.closePath();
+        }
+        if (inPath) return;
+        this.ctx.fill();
+        this._afterFillShape();
+      }
+      processEmfPolyDraw16(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        if (data.length < 20 + count * 5) return;
+        for (let i = 0; i < count; i++) {
+          const p = this.readPoints16(data, 20 + i * 4, 1)[0];
+          const type = data[20 + count * 4 + i];
+          if (type & 1) {
+            this.ctx.moveTo(p.x, p.y);
+          } else if (type & 6) {
+            this.ctx.lineTo(p.x, p.y);
+          }
+          if (type & 128) {
+            this.ctx.closePath();
+          }
+        }
+        this.ctx.stroke();
+      }
+      processEmfExtCreatePen(data) {
+        if (data.length < 40) return;
+        const ihPen = readDword(data, 0);
+        if ((ihPen & 2147483648) !== 0) return;
+        const style = readDword(data, 20);
+        const width = readDword(data, 24);
+        const brushStyle = readDword(data, 28);
+        const color = readDword(data, 32);
+        const elpHatch = readLong(data, 36);
+        let penColor;
+        if (brushStyle === 2 && (elpHatch === 8 || elpHatch === 9)) penColor = this.textColor;
+        else if (brushStyle === 2 && (elpHatch === 10 || elpHatch === 11)) penColor = this.fillColor;
+        else penColor = colorRefToHex(color);
+        this.gdiObjectManager.createObjectAt(ihPen, { type: "pen", style, width, color: penColor });
+        __wmfEmfRendererLog("EMR_EXTCREATEPEN: ih=", ihPen, "style:", style, "width:", width, "color:", penColor);
+      }
+      processEmfSmallTextOut(data) {
+        if (data.length < 28) return;
+        const x = readLong(data, 0);
+        const y = readLong(data, 4);
+        const cChars = readDword(data, 8);
+        const options = readDword(data, 12);
+        const ETO_NO_RECT = 256;
+        const ETO_SMALL_CHARS = 512;
+        const charWidth = options & ETO_SMALL_CHARS ? 2 : 1;
+        let stringOffset = options & ETO_NO_RECT ? 28 : 44;
+        if (!(options & ETO_NO_RECT)) this._fillOpaqueTextRect(options, data, 28);
+        if (cChars === 0 || stringOffset + cChars * charWidth > data.length) return;
+        const text = charWidth === 2 ? decodeUtf16Le(data, stringOffset, cChars) : decodeSingleBytes(data, stringOffset, cChars);
+        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const savedFillStyle = this.ctx.fillStyle;
+        this.ctx.fillStyle = this.textColor;
+        this.ctx.fillText(text, transformed.x, transformed.y);
+        this.ctx.fillStyle = savedFillStyle;
+        __wmfEmfRendererLog("EMR_SMALLTEXTOUT:", x, y, "text:", text.substring(0, 50));
+      }
+      // 处理 EMR_GDICOMMENT：EMF+ 数据经此内嵌于标准 EMF 记录流（Windows 按记录序交织播放）。
+      // data（record.data，已剥离 8 字节 EMR 头）布局：[DataSize(4)] [CommentIdentifier(4)] [EMF+ 记录...]
+      // 判定是否为 EMF+/GDI 双模式文件：存在 EMF+ 注释块 && 存在 GDI 绘图记录。
+      _detectDualMode(records) {
+        let hasEmfPlus = false;
+        let hasGdiDraw = false;
+        for (const r of records) {
+          const t = r.type >>> 0;
+          if (t === RECORD_TYPES.EMR_GDICOMMENT) {
+            if (r.data && r.data.length >= 8 && r.data[4] === 69 && r.data[5] === 77 && r.data[6] === 70 && r.data[7] === 43) {
+              hasEmfPlus = true;
+              if (hasGdiDraw) return true;
+            }
+            continue;
+          }
+          const handler = EMF_RECORD_HANDLERS[t];
+          if (typeof handler === "string" && EMF_DRAW_HANDLER_RE.test(handler)) hasGdiDraw = true;
+          if (hasEmfPlus && hasGdiDraw) return true;
+        }
+        return false;
+      }
+      processEmfGdiComment(data) {
+        if (!data || data.length < 8) return;
+        if (readDword(data, 4) !== SIGNATURES.EMF_PLUS_COMMENT_ID) return;
+        try {
+          if (this._skipEmfPlusPlayback) return;
+          const parser = new EmfPlusParser2(data);
+          const emfPlusRecords = parser.parseEmfPlusRecords(data);
+          if (emfPlusRecords.length === 0) return;
+          if (!this._emfPlusDrawer) {
+            this._emfPlusDrawer = new EmfPlusDrawer2(this.ctx);
+            this._emfPlusDrawer.coordinateTransformer = this.coordinateTransformer;
+          }
+          for (const rec of emfPlusRecords) {
+            this._emfPlusDrawer.processEmfPlusRecordType(rec.type, rec.flags, rec.data);
+          }
+        } catch (e) {
+          __wmfEmfRendererLog(
+            "EMF+ GDIComment playback failed:",
+            /** @type {Error} */
+            e.message
+          );
+        }
+      }
+      processEmfSetWindowExtEx(data) {
+        if (data.length < 8) return;
+        const x = readLong(data, 0);
+        const y = readLong(data, 4);
+        __wmfEmfRendererLog("EMF SetWindowExtEx:", x, y);
+        this._fileWindowExtX = x || 1;
+        this._fileWindowExtY = y || 1;
+        this.coordinateTransformer.setWindowExt(this._fileWindowExtX, this._fileWindowExtY);
+      }
+      processEmfSetWindowOrgEx(data) {
+        if (data.length < 8) return;
+        const x = readLong(data, 0);
+        const y = readLong(data, 4);
+        __wmfEmfRendererLog("EMF SetWindowOrgEx:", x, y);
+        this.coordinateTransformer.setWindowOrg(x, y);
+      }
+      processEmfSetViewportExtEx(data) {
+        if (data.length < 8) return;
+        const x = readLong(data, 0);
+        const y = readLong(data, 4);
+        __wmfEmfRendererLog("EMF SetViewportExtEx:", x, y);
+        this._fileViewportExtX = x || 1;
+        this._fileViewportExtY = y || 1;
+        this.coordinateTransformer.setViewportExt(x, y);
+      }
+      processEmfSetViewportOrgEx(data) {
+        if (data.length < 8) return;
+        const x = readLong(data, 0);
+        const y = readLong(data, 4);
+        __wmfEmfRendererLog("EMF SetViewportOrgEx:", x, y);
+        this.coordinateTransformer.setViewportOrg(x, y);
+      }
+      processEmfSetBrushOrgEx(data) {
+        if (data.length < 8) return;
+        const x = readDword(data, 0);
+        const y = readDword(data, 4);
+        __wmfEmfRendererLog("EMF SetBrushOrgEx:", x, y);
+      }
+      processEmfSetMapMode(data) {
+        if (data.length < 4) return;
+        const mode = readDword(data, 0);
+        this.coordinateTransformer.setMapMode(mode);
+        __wmfEmfRendererLog("EMF SetMapMode:", mode);
+      }
+      processEmfSetTextColor(data) {
+        if (data.length < 4) return;
+        const color = readDword(data, 0);
+        this.textColor = colorRefToHex(color);
+        __wmfEmfRendererLog("EMF SetTextColor:", color, "->", this.textColor);
+      }
+      processEmfSetBkColor(data) {
+        if (data.length < 4) return;
+        const color = readDword(data, 0);
+        this.fillColor = colorRefToHex(color);
+        this.ctx.fillStyle = this.fillColor;
+        __wmfEmfRendererLog("EMF SetBkColor:", color, "->", this.fillColor);
+      }
+      processEmfMoveToEx(data) {
+        if (data.length < 8) return;
+        const x = readLong(data, 0);
+        const y = readLong(data, 4);
+        if (this._pathActive()) {
+          const t = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          this.ctx.moveTo(t.x, t.y);
+        }
+        this.currentPos = { x, y };
+        __wmfEmfRendererLog("EMF MoveToEx:", x, y);
+      }
+      processEmfRestoreDC(data) {
+        if (data.length < 4) return;
+        const savedDC = readDword(data, 0) | 0;
+        const count = Math.min(savedDC === 0 ? 1 : Math.abs(savedDC), this.dcStateStack.length);
+        let restored = null;
+        for (let i = 0; i < count; i++) {
+          if (this.dcStateStack.length > 0) {
+            restored = this.dcStateStack.pop();
+          }
+          this.ctx.restore();
+        }
+        if (restored) {
+          this._restoreDcState(restored);
+        }
+        __wmfEmfRendererLog("EMF RestoreDC:", savedDC, "count:", count);
+      }
+      processEmfSelectObject(data) {
+        if (data.length < 4) return;
+        const objectHandle = readDword(data, 0);
+        __wmfEmfRendererLog("EMF SelectObject:", objectHandle);
+        const obj = this.gdiObjectManager.selectObject(objectHandle);
+        if (obj) {
+          this.applyGdiObject(obj);
+        } else if (objectHandle >>> 0 >= 2147483648) {
+          this.applyStockObject(objectHandle >>> 0);
+        }
+      }
+      processEmfCreatePen(data) {
+        if (data.length < 20) return;
+        const ihPen = readDword(data, 0);
+        if ((ihPen & 2147483648) !== 0) return;
+        const penStyle = readDword(data, 4);
+        const width = readLong(data, 8);
+        const color = readDword(data, 16);
+        __wmfEmfRendererLog("EMF CreatePen: ih=", ihPen, "style:", penStyle, "width:", width, "color:", color.toString(16));
+        const penColor = colorRefToHex(color);
+        this.gdiObjectManager.createObjectAt(ihPen, { type: "pen", style: penStyle, width, color: penColor });
+      }
+      processEmfCreateBrushIndirect(data) {
+        if (data.length < 16) return;
+        const ihBrush = readDword(data, 0);
+        if ((ihBrush & 2147483648) !== 0) return;
+        const brushStyle = readDword(data, 4);
+        const color = readDword(data, 8);
+        const hatch = readLong(data, 12);
+        __wmfEmfRendererLog("EMF CreateBrushIndirect: ih=", ihBrush, "style:", brushStyle, "color:", color.toString(16), "hatch:", hatch);
+        let brushColor = colorRefToHex(color);
+        if (brushStyle === 2) {
+          if (hatch === 8 || hatch === 9) brushColor = this.textColor;
+          else if (hatch === 10 || hatch === 11) brushColor = this.fillColor;
+        }
+        this.gdiObjectManager.createObjectAt(ihBrush, {
+          type: "brush",
+          style: brushStyle,
+          color: brushStyle === 1 ? "transparent" : brushColor
+        });
+      }
+      processEmfEllipse(data) {
+        if (data.length < 16) return;
+        const left = readDword(data, 0);
+        const top = readDword(data, 4);
+        const right = readDword(data, 8);
+        const bottom = readDword(data, 12);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const { cx, cy, rx, ry } = GeometryUtils.ellipseFromCorners(transformedLeftTop, transformedRightBottom);
+        this.ctx.beginPath();
+        this.ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.stroke();
+      }
+      processEmfRectangle(data) {
+        if (data.length < 16) return;
+        const left = readLong(data, 0);
+        const top = readLong(data, 4);
+        const right = readLong(data, 8);
+        const bottom = readLong(data, 12);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const width = Math.abs(transformedRightBottom.x - transformedLeftTop.x);
+        const height = Math.abs(transformedRightBottom.y - transformedLeftTop.y);
+        const x = Math.min(transformedLeftTop.x, transformedRightBottom.x);
+        const y = Math.min(transformedLeftTop.y, transformedRightBottom.y);
+        __wmfEmfRendererLog("EMF Rectangle:", x, y, width, height);
+        this.ctx.beginPath();
+        this.ctx.rect(x, y, width, height);
+        this.ctx.fill();
+        this.ctx.stroke();
+      }
+      processEmfLineTo(data) {
+        if (data.length < 8) return;
+        const x = readLong(data, 0);
+        const y = readLong(data, 4);
+        const to = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        if (this._pathActive()) {
+          this._ensurePathStart();
+          this.ctx.lineTo(to.x, to.y);
+        } else {
+          const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          this.ctx.beginPath();
+          this.ctx.moveTo(from.x, from.y);
+          this.ctx.lineTo(to.x, to.y);
+          this.ctx.stroke();
+        }
+        this.currentPos = { x, y };
+        __wmfEmfRendererLog("EMF LineTo:", x, y);
+      }
+      processEmfBeginPath(data) {
+        __wmfEmfRendererLog("EMF BeginPath");
+        this.ctx.beginPath();
+        this.pathState = "active";
+      }
+      processEmfEndPath(data) {
+        __wmfEmfRendererLog("EMF EndPath");
+        this.pathState = "completed";
+      }
+      // ===== GDI 路径记录语义（BeginPath/EndPath 之间）=====
+      // 路径记录期间，To 类记录（PolylineTo/PolyBezierTo/LINETo 等）只向当前路径
+      // 追加线段，不产生绘制动作；渲染统一由 FILLPATH/STROKEPATH/STROKEANDFILLPATH
+      // 触发。若在此期间 beginPath()/stroke() 会清空/截断已累积的子路径
+      //（test-182：槽位圆角矩形被截成退化碎片段）。
+      _pathActive() {
+        return this.pathState === "active";
+      }
+      // 路径记录中确保子路径起点在"当前位置"（首记录无 MoveToEx 时）
+      _ensurePathStart() {
+        if (!this.ctx._hasSubpath) {
+          const s = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+          this.ctx.moveTo(s.x, s.y);
+        }
+      }
+      processEmfStrokeAndFillPath(data) {
+        __wmfEmfRendererLog("EMF StrokeAndFillPath");
+        const skipFill = (this._recSinceGdiC || 999) < 30 && this._isGrayFillStyle();
+        if (skipFill) {
+          __wmfEmfRendererLog("  skip fill (GDI+ \u540E\u7ED8\u56FE\u533A\u80CC\u666F)");
+        } else {
+          this.ctx.fill();
+        }
+        this.ctx.stroke();
+        this.pathState = "idle";
+      }
+      // 当前 ctx.fillStyle 是否为纯灰色（R===G===B），用于识别绘图区背景 fill
+      _isGrayFillStyle() {
+        const s = this.ctx && this.ctx.fillStyle;
+        if (!s || typeof s !== "string") return false;
+        if (s.startsWith("#") && s.length === 7) {
+          const r = parseInt(s.slice(1, 3), 16);
+          const g = parseInt(s.slice(3, 5), 16);
+          const b = parseInt(s.slice(5, 7), 16);
+          return r === g && g === b;
+        }
+        return false;
+      }
+      processEmfStrokePath(data) {
+        __wmfEmfRendererLog("EMF StrokePath");
+        this.ctx.stroke();
+        this.pathState = "idle";
+      }
+      processEmfAbortPath(data) {
+        __wmfEmfRendererLog("EMF AbortPath");
+        this.pathState = "idle";
+      }
+      processEmfSetBkMode(data) {
+        if (data.length < 4) return;
+        const mode = readDword(data, 0);
+        __wmfEmfRendererLog("EMF SetBkMode:", mode);
+      }
+      processEmfSetRop2(data) {
+        if (data.length < 4) return;
+        const rop2 = readDword(data, 0);
+        __wmfEmfRendererLog("EMF SetRop2:", rop2);
+      }
+      processEmfSetStretchBltMode(data) {
+        if (data.length < 4) return;
+        const mode = readDword(data, 0);
+        __wmfEmfRendererLog("EMF SetStretchBltMode:", mode);
+      }
+      processEmfSetTextAlign(data) {
+        if (data.length < 4) return;
+        const align = readDword(data, 0);
+        __wmfEmfRendererLog("EMF SetTextAlign:", align);
+        const horiz = align & 6;
+        if (horiz === 2) {
+          this.ctx.textAlign = "right";
+        } else if (horiz === 6) {
+          this.ctx.textAlign = "center";
+        } else {
+          this.ctx.textAlign = "left";
+        }
+        const vert = align & 24;
+        if (vert === 8) {
+          this.ctx.textBaseline = "bottom";
+        } else if (vert === 24) {
+          this.ctx.textBaseline = "alphabetic";
+        } else {
+          this.ctx.textBaseline = "top";
+        }
+      }
+      processEmfDeleteObject(data) {
+        if (data.length < 4) return;
+        const objectHandle = readDword(data, 0);
+        __wmfEmfRendererLog("EMF DeleteObject:", objectHandle);
+        this.gdiObjectManager.deleteObject(objectHandle);
+      }
+      processEmfExtCreateFontIndirectW(data) {
+        if (data.length < 12) return;
+        const ihFont = readDword(data, 0);
+        if ((ihFont & 2147483648) !== 0) return;
+        const lfOff = 4;
+        if (lfOff + 92 > data.length) return;
+        const height = readLong(data, lfOff);
+        const width = readLong(data, lfOff + 4);
+        const escapement = readLong(data, lfOff + 8);
+        const orientation = readLong(data, lfOff + 12);
+        const weight = readLong(data, lfOff + 16);
+        const italic = data[lfOff + 20];
+        const underline = data[lfOff + 21];
+        const strikeOut = data[lfOff + 22];
+        const charset = data[lfOff + 23];
+        const faceName = readUtf16Name(data, lfOff + 28, 32);
+        __wmfEmfRendererLog("EMF ExtCreateFontIndirectW: ih=", ihFont, "height:", height, "width:", width, "weight:", weight, "face:", faceName, "escapement:", escapement);
+        this.gdiObjectManager.createObjectAt(ihFont, {
+          type: "font",
+          height,
+          width,
+          weight,
+          italic,
+          underline,
+          strikeOut,
+          faceName,
+          charset,
+          escapement,
+          orientation
+        });
+      }
+      processEmfExtTextOutA(data) {
+        this.processEmfTextOut(data, false);
+      }
+      processEmfExtTextOutW(data) {
+        this.processEmfTextOut(data, true);
+      }
+      // ETO_OPAQUE (0x0002)：以当前背景色（SETBKCOLOR → this.fillColor）填充 EmrText.rcl。
+      // 该动作**与文本内容无关**，nChars=0 时同样是合法且常用的「填充矩形」调用。
+      // data 布局见 processEmfTextOut；SMALLTEXTOUT 的 rcl 从 28 起（此处由调用方剔除该分支）。
+      _fillOpaqueTextRect(options, data, rclOff = 48) {
+        if ((options & 2) === 0) return;
+        if (rclOff + 16 > data.length) return;
+        const bg1 = this.coordinateTransformer.transform(
+          readLong(data, rclOff),
+          readLong(data, rclOff + 4),
+          this.ctx.canvas.width,
+          this.ctx.canvas.height
+        );
+        const bg2 = this.coordinateTransformer.transform(
+          readLong(data, rclOff + 8),
+          readLong(data, rclOff + 12),
+          this.ctx.canvas.width,
+          this.ctx.canvas.height
+        );
+        const bgW = Math.abs(bg2.x - bg1.x);
+        const bgH = Math.abs(bg2.y - bg1.y);
+        if (bgW > 0 && bgH > 0) {
+          const savedFillStyle = this.ctx.fillStyle;
+          this.ctx.fillStyle = this.fillColor;
+          this.ctx.fillRect(Math.min(bg1.x, bg2.x), Math.min(bg1.y, bg2.y), bgW, bgH);
+          this.ctx.fillStyle = savedFillStyle;
+        }
+      }
+      processEmfTextOut(data, isUnicode) {
+        if (data.length < 64) return;
+        const x = readLong(data, 28);
+        const y = readLong(data, 32);
+        const stringLength = readDword(data, 36);
+        const offString = readDword(data, 40);
+        const options = readDword(data, 44);
+        const stringOffset = offString - 8;
+        __wmfEmfRendererLog(`EMF ExtTextOut${isUnicode ? "W" : "A"}:`, x, y, "length:", stringLength, "offString:", offString, "options:", options);
+        this._fillOpaqueTextRect(options, data);
+        if (stringLength > 0 && stringOffset >= 0 && stringOffset < data.length) {
+          let text = "";
+          try {
+            if (isUnicode && stringOffset + stringLength * 2 <= data.length) {
+              text = decodeUtf16Le(data, stringOffset, stringLength, { skipNul: true });
+            } else if (!isUnicode && stringOffset + stringLength <= data.length) {
+              text = decodeAnsiBytes(data, stringOffset, stringLength);
+            }
+            if (text.length > 0) {
+              const savedFillStyle = this.ctx.fillStyle;
+              this.ctx.fillStyle = this.textColor;
+              const curFont = this.gdiObjectManager && this.gdiObjectManager.currentFont;
+              const rawHeight = curFont && curFont.height ? Math.abs(curFont.height) : 12;
+              const escapement = curFont && curFont.escapement ? curFont.escapement : 0;
+              const weight = curFont && curFont.weight >= 700 ? "bold " : "";
+              const italic = curFont && curFont.italic ? "italic " : "";
+              const face = curFont && curFont.faceName ? curFont.faceName : "sans-serif";
+              const savedFont = this.ctx.font;
+              let matrix = this.coordinateTransformer.getSvgMatrix();
+              if (escapement !== 0) {
+                const deg = -Math.trunc(escapement / 10);
+                const rad = deg * Math.PI / 180;
+                const cos = Math.cos(rad), sin = Math.sin(rad);
+                const px = x, py = y;
+                const r = { a: cos, b: sin, c: -sin, d: cos, e: px - px * cos + py * sin, f: py - px * sin - py * cos };
+                matrix = {
+                  a: matrix.a * r.a + matrix.c * r.b,
+                  b: matrix.b * r.a + matrix.d * r.b,
+                  c: matrix.a * r.c + matrix.c * r.d,
+                  d: matrix.b * r.c + matrix.d * r.d,
+                  e: matrix.a * r.e + matrix.c * r.f + matrix.e,
+                  f: matrix.b * r.e + matrix.d * r.f + matrix.f
+                };
+              }
+              const gscale = Math.hypot(matrix.a, matrix.b) || 1;
+              const dev = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+              let rotDeg = 0;
+              if (Math.abs(matrix.b) > 1e-9 || Math.abs(matrix.c) > 1e-9) {
+                rotDeg = Math.atan2(matrix.b, matrix.a) * 180 / Math.PI;
+              }
+              this.ctx.font = `${italic}${weight}${rawHeight * gscale}px "${face}"`;
+              const escNorm = escapement % 3600;
+              const rotated = escNorm !== 0 || rotDeg !== 0;
+              this.ctx.fillText(text, dev.x, dev.y, rotated ? { rotate: rotDeg, escapement: escNorm } : void 0);
+              this.ctx.font = savedFont;
+              this.ctx.fillStyle = savedFillStyle;
+              __wmfEmfRendererLog("  Rendered text:", text.substring(0, 50));
+            }
+          } catch (error) {
+            __wmfEmfRendererLog(
+              "  Error reading text:",
+              /** @type {Error} */
+              error.message
+            );
+          }
+        }
+      }
+      // ---- 位图记录公共工具 ----
+      // 五种 BLT 记录的位图数据按 offBmiSrc/offBitsSrc 精确定位。
+      // 注意：这些偏移相对记录起始（含 8 字节 EMR 头），而 record.data 已剥离头部，
+      // 因此 data 内偏移 = 文件声明值 - 8。
+      // 解码 DIB（BITMAPINFOHEADER + 调色板 + 像素位）为 RGBA。
+      // 支持 1/4/8/16/24/32bpp、BI_RGB 未压缩、BI_RLE8/BI_RLE4、top-down（biHeight<0）。
+      _decodeDib(data, offBmi, cbBmi, offBits, cbBits, opts = {}) {
+        try {
+          const bmi = offBmi - 8;
+          const bits = offBits - 8;
+          if (bmi < 0 || bmi + 40 > data.length) return null;
+          const biSize = readDword(data, bmi);
+          const biWidth = readLong(data, bmi + 4);
+          const biHeightRaw = readLong(data, bmi + 8);
+          const biPlanes = data[bmi + 12] | data[bmi + 13] << 8;
+          const biBitCount = data[bmi + 14] | data[bmi + 15] << 8;
+          const biCompression = readDword(data, bmi + 16);
+          const biClrUsed = readDword(data, bmi + 32);
+          if (biPlanes !== 1 || biWidth <= 0 || biWidth > 2e4 || Math.abs(biHeightRaw) > 2e4) return null;
+          const width = biWidth;
+          const height = Math.abs(biHeightRaw);
+          const topDown = biHeightRaw < 0;
+          if (width * height > 4194304) return null;
+          const palCount = biBitCount <= 8 ? biClrUsed || 1 << biBitCount : 0;
+          const palette = [];
+          let anyPaletteAlpha = false;
+          if (opts.iUsage === 1 && this.currentPalette && this.currentPalette.entries && this.currentPalette.entries.length) {
+            for (let i = 0; i < palCount; i++) {
+              const o = bmi + biSize + i * 2;
+              if (o + 2 > data.length) break;
+              const idx = data[o] | data[o + 1] << 8;
+              const e = this.currentPalette.entries[idx];
+              palette.push(e ? [e.r, e.g, e.b, 255] : [0, 0, 0, 255]);
+            }
+          } else {
+            for (let i = 0; i < palCount; i++) {
+              const o = bmi + biSize + i * 4;
+              if (o + 4 > data.length) break;
+              const a = data[o + 3];
+              if (a !== 0) anyPaletteAlpha = true;
+              palette.push([data[o + 2], data[o + 1], data[o], a]);
+            }
+          }
+          const out = new Uint8ClampedArray(width * height * 4);
+          const end = Math.min(data.length, bits + cbBits);
+          const transparent = opts.transparentColor;
+          const tr = transparent !== void 0 ? transparent & 255 : -1;
+          const tg = transparent !== void 0 ? transparent >> 8 & 255 : -1;
+          const tb = transparent !== void 0 ? transparent >> 16 & 255 : -1;
+          const useAlpha = !!opts.alphaFromPixels;
+          const constantAlpha = opts.constantAlpha !== void 0 ? opts.constantAlpha : 255;
+          const putPx = (x, y, r, g, b, a) => {
+            if (x < 0 || x >= width || y < 0 || y >= height) return;
+            if (r === tr && g === tg && b === tb) a = 0;
+            if (constantAlpha < 255) a = a * constantAlpha / 255;
+            const o = (y * width + x) * 4;
+            out[o] = r;
+            out[o + 1] = g;
+            out[o + 2] = b;
+            out[o + 3] = a;
+          };
+          const rawAlpha = biBitCount === 32 ? new Uint8Array(width * height) : null;
+          let anyAlpha32 = false;
+          if (biCompression === 0 || biCompression === 3) {
+            const rowSize = Math.ceil(width * biBitCount / 32) * 4;
+            for (let y = 0; y < height; y++) {
+              const srcY = topDown ? y : height - 1 - y;
+              const rowOff = bits + srcY * rowSize;
+              for (let x = 0; x < width; x++) {
+                let r = 0, g = 0, b = 0, a = 255;
+                if (biBitCount === 1) {
+                  const o = rowOff + (x >> 3);
+                  if (o >= end) continue;
+                  const idx = data[o] >> 7 - (x & 7) & 1;
+                  const c = palette[idx] || [0, 0, 0, 255];
+                  r = c[0];
+                  g = c[1];
+                  b = c[2];
+                  a = c[3];
+                } else if (biBitCount === 4) {
+                  const o = rowOff + (x >> 1);
+                  if (o >= end) continue;
+                  const idx = (x & 1) === 0 ? data[o] >> 4 : data[o] & 15;
+                  const c = palette[idx] || [0, 0, 0, 255];
+                  r = c[0];
+                  g = c[1];
+                  b = c[2];
+                  a = c[3];
+                } else if (biBitCount === 8) {
+                  const o = rowOff + x;
+                  if (o >= end) continue;
+                  const c = palette[data[o]] || [0, 0, 0, 255];
+                  r = c[0];
+                  g = c[1];
+                  b = c[2];
+                  a = c[3];
+                } else if (biBitCount === 16) {
+                  const o = rowOff + x * 2;
+                  if (o + 2 > end) continue;
+                  const v = data[o] | data[o + 1] << 8;
+                  r = (v >> 10 & 31) * 255 / 31;
+                  g = (v >> 5 & 31) * 255 / 31;
+                  b = (v & 31) * 255 / 31;
+                } else if (biBitCount === 24) {
+                  const o = rowOff + x * 3;
+                  if (o + 3 > end) continue;
+                  b = data[o];
+                  g = data[o + 1];
+                  r = data[o + 2];
+                } else if (biBitCount === 32) {
+                  const o = rowOff + x * 4;
+                  if (o + 4 > end) continue;
+                  b = data[o];
+                  g = data[o + 1];
+                  r = data[o + 2];
+                  if (rawAlpha) rawAlpha[y * width + x] = data[o + 3];
+                  if (data[o + 3] !== 0) anyAlpha32 = true;
+                  a = useAlpha ? data[o + 3] : 255;
+                }
+                putPx(x, y, r, g, b, a);
+              }
+            }
+          } else if (biCompression === 1 || biCompression === 2) {
+            let pos = bits;
+            let x = 0, y = height - 1;
+            const horiz = biCompression === 2 ? 2 : 1;
+            while (pos + 2 <= end && y >= 0) {
+              const b0 = data[pos], b1 = data[pos + 1];
+              pos += 2;
+              if (b0 > 0) {
+                for (let i = 0; i < b0; i++) {
+                  let r, g, b;
+                  if (biCompression === 1) {
+                    const c = palette[b1] || [0, 0, 0, 255];
+                    r = c[0];
+                    g = c[1];
+                    b = c[2];
+                  } else {
+                    const idx = (i & 1) === 0 ? b1 >> 4 : b1 & 15;
+                    const c = palette[idx] || [0, 0, 0, 255];
+                    r = c[0];
+                    g = c[1];
+                    b = c[2];
+                  }
+                  putPx(x + i, y, r, g, b, 255);
+                }
+                x += b0;
+              } else if (b1 === 0) {
+                x = 0;
+                y--;
+              } else if (b1 === 1) {
+                break;
+              } else if (b1 === 2) {
+                if (pos + 2 > end) break;
+                x += data[pos];
+                y -= data[pos + 1];
+                pos += 2;
+              } else {
+                const nbytes = biCompression === 1 ? b1 : Math.ceil(b1 / 2);
+                if (pos + nbytes > end) break;
+                for (let i = 0; i < b1; i++) {
+                  let idx;
+                  if (biCompression === 1) idx = data[pos + i];
+                  else idx = (i & 1) === 0 ? data[pos + (i >> 1)] >> 4 : data[pos + (i >> 1)] & 15;
+                  const c = palette[idx] || [0, 0, 0, 255];
+                  putPx(x + i, y, c[0], c[1], c[2], 255);
+                }
+                x += b1;
+                pos += nbytes + (nbytes & 1 ? 1 : 0);
+              }
+            }
+          } else {
+            return null;
+          }
+          if (rawAlpha && anyAlpha32 && !useAlpha && constantAlpha >= 255 && transparent === void 0) {
+            for (let i = 0; i < rawAlpha.length; i++) {
+              out[i * 4 + 3] = rawAlpha[i];
+            }
+          }
+          if (!useAlpha && constantAlpha >= 255 && transparent === void 0 && biBitCount <= 8 && biCompression !== 1 && biCompression !== 2) {
+            let allZero = true;
+            for (let i = 0; i < out.length; i += 4) {
+              if (out[i + 3] !== 0) {
+                allZero = false;
+                break;
+              }
+            }
+            if (allZero) {
+              for (let i = 3; i < out.length; i += 4) out[i] = 255;
+            }
+          }
+          return { width, height, data: out };
+        } catch (e) {
+          __wmfEmfRendererLog(
+            "DIB decode failed:",
+            /** @type {Error} */
+            e.message
+          );
+          return null;
+        }
+      }
+      // 将解码后的 DIB 绘制到目标矩形（支持缩放）
+      // 语义：
+      //   position = map(Dest)，size = 映射的线性缩放作用于**带符号** (cxDest, cyDest)。
+      // 不做「min/max 归一化矩形」：负 cyDest 经 y 翻转映射（sy<0，如 winExt.y<0）自然
+      // 转为正高度、矩形从 map(yDest) 向下延伸；旧实现在此会少画恰好一个图高
+      // （test-041~049 簇 RMSE 0.12 的主因之一）。
+      _drawDecodedDib(dib, destX, destY, destW, destH) {
+        if (!dib || destW === 0 || destH === 0) return;
+        const t1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
+        const size = dib.__pointCalSize ? this.coordinateTransformer.mapSizeAsPoint(destW, destH) : this.coordinateTransformer.mapSize(destW, destH);
+        let x = t1.x;
+        let y = t1.y;
+        let w = size.x;
+        let h = size.y;
+        if (w <= 0 || h <= 0) {
+          if (w < 0 || h < 0) {
+            const flipped = this.ctx.createImageData(dib.width, dib.height);
+            for (let sy = 0; sy < dib.height; sy++) {
+              for (let sx = 0; sx < dib.width; sx++) {
+                const dx2 = w < 0 ? dib.width - 1 - sx : sx;
+                const dy2 = h < 0 ? dib.height - 1 - sy : sy;
+                for (let k = 0; k < 4; k++) {
+                  flipped.data[(dy2 * dib.width + dx2) * 4 + k] = dib.data[(sy * dib.width + sx) * 4 + k];
+                }
+              }
+            }
+            dib = flipped;
+          }
+          w = Math.abs(w);
+          h = Math.abs(h);
+        }
+        if (w <= 0 || h <= 0) return;
+        const tempCanvas = resolveTempCanvas(this.ctx, dib.width, dib.height);
+        if (tempCanvas) {
+          const tempCtx = tempCanvas.getContext("2d");
+          tempCtx.putImageData(wrapImageData(dib), 0, 0);
+          this.ctx.drawImage(tempCanvas, x, y, w, h);
+        } else {
+          this.ctx.putImageData(
+            wrapImageData(dib),
+            x,
+            y,
+            w,
+            h,
+            { stretch: this.coordinateTransformer.isWorldAnisotropic() }
+          );
+        }
+        __wmfEmfRendererLog("  DIB drawn at:", x, y, w, h, "(source", dib.width, "x", dib.height + ")");
+      }
+      // ImageData wrapping now lives in utils/bitmapSurface (wrapImageData)
+      processEmfBitBlt(data) {
+        if (data.length < 92) return;
+        const xDest = readLong(data, 16);
+        const yDest = readLong(data, 20);
+        const cxDest = readLong(data, 24);
+        const cyDest = readLong(data, 28);
+        const dwRop = readDword(data, 32);
+        const offBmi = readDword(data, 76);
+        const cbBmi = readDword(data, 80);
+        const offBits = readDword(data, 84);
+        const cbBits = readDword(data, 88);
+        __wmfEmfRendererLog("EMF BitBlt: dest=(", xDest, yDest, ")", cxDest, "x", cyDest, "rop=0x" + dwRop.toString(16));
+        if (this._bltSolidRop(dwRop, xDest, yDest, cxDest, cyDest)) return;
+        const iUsage = readDword(data, 72);
+        const dib = offBmi && cbBmi ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
+        if (dib) {
+          this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
+        }
+      }
+      processEmfStretchBlt(data) {
+        if (data.length < 100) return;
+        const xDest = readLong(data, 16);
+        const yDest = readLong(data, 20);
+        const cxDest = readLong(data, 24);
+        const cyDest = readLong(data, 28);
+        const dwRop = readDword(data, 32);
+        const xSrc = readLong(data, 36);
+        const ySrc = readLong(data, 40);
+        const offBmi = readDword(data, 76);
+        const cbBmi = readDword(data, 80);
+        const offBits = readDword(data, 84);
+        const cbBits = readDword(data, 88);
+        const cxSrc = readLong(data, 92);
+        const cySrc = readLong(data, 96);
+        __wmfEmfRendererLog("EMF StretchBlt: dest=(", xDest, yDest, ")", cxDest, "x", cyDest, "src=(", xSrc, ySrc, ")", cxSrc, "x", cySrc);
+        const iUsage = readDword(data, 72);
+        if (this._bltSolidRop(dwRop, xDest, yDest, cxDest, cyDest)) return;
+        const dib = offBmi && cbBmi ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
+        if (dib) {
+          dib.__pointCalSize = true;
+          this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
+        }
+      }
+      processEmfStretchDibBits(data) {
+        if (data.length < 72) return;
+        const xDest = readLong(data, 16);
+        const yDest = readLong(data, 20);
+        const xSrc = readLong(data, 24);
+        const ySrc = readLong(data, 28);
+        const cxSrc = readDword(data, 32);
+        const cySrc = readDword(data, 36);
+        const offBmi = readDword(data, 40);
+        const cbBmi = readDword(data, 44);
+        const offBits = readDword(data, 48);
+        const cbBits = readDword(data, 52);
+        const dwRop = readDword(data, 60);
+        let cxDest = readLong(data, 64);
+        let cyDest = readLong(data, 68);
+        if (cxDest === 0 && cxSrc) cxDest = cxSrc;
+        if (cyDest === 0 && cySrc) cyDest = cySrc;
+        __wmfEmfRendererLog("EMF StretchDIBits: dest=(", xDest, yDest, ")", cxDest, "x", cyDest, "src=(", xSrc, ySrc, ")", cxSrc, "x", cySrc);
+        const iUsage = readDword(data, 56);
+        if (this._bltSolidRop(dwRop, xDest, yDest, cxDest, cyDest)) return;
+        const dib = offBmi && cbBmi ? this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage }) : null;
+        if (dib) {
+          let use = dib;
+          if (cxSrc > 0 && cxSrc < dib.width || cySrc > 0 && cySrc < dib.height) {
+            const sw = cxSrc > 0 ? cxSrc : dib.width;
+            const sh = cySrc > 0 ? cySrc : dib.height;
+            const sub = this.ctx.createImageData(sw, sh);
+            for (let yy = 0; yy < sh; yy++) {
+              for (let xx = 0; xx < sw; xx++) {
+                const sx = xSrc + xx, sy = ySrc + yy;
+                if (sx < 0 || sx >= dib.width || sy < 0 || sy >= dib.height) continue;
+                for (let k = 0; k < 4; k++) {
+                  sub.data[(yy * sw + xx) * 4 + k] = dib.data[(sy * dib.width + sx) * 4 + k];
+                }
+              }
+            }
+            use = { width: sw, height: sh, data: sub.data };
+          }
+          use.__pointCalSize = true;
+          this._drawDecodedDib(use, xDest, yDest, cxDest, cyDest);
+        }
+      }
+      processEmfAlphaBlend(data) {
+        if (data.length < 92) return;
+        const xDest = readLong(data, 16);
+        const yDest = readLong(data, 20);
+        const cxDest = readLong(data, 24);
+        const cyDest = readLong(data, 28);
+        const blendFn = readDword(data, 32);
+        const offBmi = readDword(data, 76);
+        const cbBmi = readDword(data, 80);
+        const offBits = readDword(data, 84);
+        const cbBits = readDword(data, 88);
+        const alphaFormat = blendFn & 255;
+        const constantAlpha = blendFn >>> 16 & 255;
+        __wmfEmfRendererLog("EMF AlphaBlend: dest=(", xDest, yDest, ")", cxDest, "x", cyDest, "alphaFmt=", alphaFormat, "constA=", constantAlpha);
+        const dib = offBmi && cbBmi ? this._decodeDib(
+          data,
+          offBmi,
+          cbBmi,
+          offBits,
+          cbBits,
+          { alphaFromPixels: alphaFormat === 1, constantAlpha, iUsage: readDword(data, 72) }
+        ) : null;
+        if (dib) {
+          this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
+        }
+      }
+      processEmfTransparentBlt(data) {
+        if (data.length < 100) return;
+        const xDest = readLong(data, 16);
+        const yDest = readLong(data, 20);
+        const cxDest = readLong(data, 24);
+        const cyDest = readLong(data, 28);
+        const transparentColor = readDword(data, 32);
+        const offBmi = readDword(data, 76);
+        const cbBmi = readDword(data, 80);
+        const offBits = readDword(data, 84);
+        const cbBits = readDword(data, 88);
+        __wmfEmfRendererLog("EMF TransparentBlt: dest=(", xDest, yDest, ")", cxDest, "x", cyDest, "colorKey=0x" + transparentColor.toString(16));
+        const dib = offBmi && cbBmi ? this._decodeDib(
+          data,
+          offBmi,
+          cbBmi,
+          offBits,
+          cbBits,
+          { transparentColor, iUsage: readDword(data, 72) }
+        ) : null;
+        if (dib) {
+          this._drawDecodedDib(dib, xDest, yDest, cxDest, cyDest);
+        }
+      }
+      // BLT 类记录中「不需要源位图」的 ROP 快捷分支：
+      //   BLACKNESS(0x00000042) → 目标矩形全黑
+      //   WHITENESS(0x00FF0062) → 目标矩形全白
+      //   PATCOPY  (0x00F00021) → 目标矩形填当前画刷颜色（GDI 语义：把画刷图案拷到目标）
+      // PATCOPY 在 Office/Excel 生成的图表里是纯色矩形的主要画法：
+      //   先 CREATEBRUSHINDIRECT 建彩色刷（如 0xA9A9A9），再发一条
+      //   「offBmiSrc=cbBmiSrc=0」的 EMR_BITBLT(rop=PATCOPY) 填柱子。
+      // 旧实现只认 BLACKNESS/WHITENESS，PATCOPY 落到「无 DIB → 不绘制」分支，
+      // 导致整块柱形/色块缺失（test-013 直方图灰柱、test-068 表格底色）。
+      // @returns {boolean} 是否已处理（true 则调用方应直接返回）
+      _bltSolidRop(dwRop, x, y, w, h) {
+        const rop = dwRop >>> 0;
+        if (rop === 66) {
+          this._fillBltRect(x, y, w, h, "#000000");
+          return true;
+        }
+        if (rop === 16711778) {
+          this._fillBltRect(x, y, w, h, "#ffffff");
+          return true;
+        }
+        if (rop === 15728673) {
+          this._fillBltRect(x, y, w, h, this.ctx.fillStyle);
+          return true;
+        }
+        return false;
+      }
+      // BLT 无位图时的纯色填充（BLACKNESS/WHITENESS 或占位）
+      _fillBltRect(x, y, w, h, color) {
+        if (!color || color === "transparent" || color === "none") return;
+        const t1 = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        const t2 = this.coordinateTransformer.transform(x + Math.abs(w), y + Math.abs(h), this.ctx.canvas.width, this.ctx.canvas.height);
+        const rx = Math.min(t1.x, t2.x), ry = Math.min(t1.y, t2.y);
+        const rw = Math.abs(t2.x - t1.x), rh = Math.abs(t2.y - t1.y);
+        if (rw <= 0 || rh <= 0) return;
+        const saved = this.ctx.fillStyle;
+        this.ctx.fillStyle = color;
+        this.ctx.fillRect(rx, ry, rw, rh);
+        this.ctx.fillStyle = saved;
+      }
+      processEmfCreateMonoBrush(data) {
+        __wmfEmfRendererLog("EMF CreateMonoBrush");
+        this.gdiObjectManager.createBrush(0, "#000000");
+      }
+      processEmfCreateColorSpaceW(data) {
+        __wmfEmfRendererLog("EMF CreateColorSpaceW");
+      }
+      processEmfText(data) {
+        this.processEmfTextOut(data, true);
+      }
+      // === 新增的EMF记录处理方法 ===
+      processEmfSetPixelV(data) {
+        if (data.length < 12) return;
+        const x = readLong(data, 0);
+        const y = readLong(data, 4);
+        const color = readDword(data, 8);
+        const hexColor = colorRefToHex(color);
+        const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+        this.ctx.fillStyle = hexColor;
+        this.ctx.fillRect(transformed.x, transformed.y, 1, 1);
+        __wmfEmfRendererLog("EMF SetPixelV:", x, y, hexColor);
+      }
+      processEmfSetMapperFlags(data) {
+        if (data.length < 4) return;
+        const flags = readDword(data, 0);
+        __wmfEmfRendererLog("EMF SetMapperFlags:", flags);
+      }
+      processEmfSetPolyFillMode(data) {
+        if (data.length < 4) return;
+        const mode = readDword(data, 0);
+        __wmfEmfRendererLog("EMF SetPolyFillMode:", mode);
+        if (mode === 1) {
+          this.ctx.fillRule = "evenodd";
+        } else if (mode === 2) {
+          this.ctx.fillRule = "nonzero";
+        }
+      }
+      processEmfSetColorAdjustment(data) {
+        __wmfEmfRendererLog("EMF SetColorAdjustment");
+      }
+      processEmfOffsetClipRgn(data) {
+        if (data.length < 8) return;
+        const x = readLong(data, 0);
+        const y = readLong(data, 4);
+        __wmfEmfRendererLog("EMF OffsetClipRgn:", x, y);
+      }
+      processEmfSetMetaRgn(data) {
+        __wmfEmfRendererLog("EMF SetMetaRgn");
+      }
+      processEmfExcludeClipRect(data) {
+        if (data.length < 16) return;
+        const left = readLong(data, 0);
+        const top = readLong(data, 4);
+        const right = readLong(data, 8);
+        const bottom = readLong(data, 12);
+        __wmfEmfRendererLog("EMF ExcludeClipRect:", left, top, right, bottom);
+      }
+      processEmfIntersectClipRect(data) {
+        if (data.length < 16) return;
+        const left = readLong(data, 0);
+        const top = readLong(data, 4);
+        const right = readLong(data, 8);
+        const bottom = readLong(data, 12);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        this.ctx.beginPath();
+        this.ctx.rect(
+          transformedLeftTop.x,
+          transformedLeftTop.y,
+          transformedRightBottom.x - transformedLeftTop.x,
+          transformedRightBottom.y - transformedLeftTop.y
+        );
+        this.ctx.clip();
+        __wmfEmfRendererLog("EMF IntersectClipRect:", left, top, right, bottom);
+      }
+      // ===== Region 支持 =====
+      // 解析 RegionData（MS-EMF 2.2.44）：iType(4)+nRgnSize(4)+nCount(4)+nRgnBytes(4)
+      // +rclBounds(16)+aRects[nCount](16 字节 RectL/个)。返回逻辑坐标矩形数组。
+      _readRgnData(data, off) {
+        if (!data || off + 32 > data.length) return null;
+        const count = readDword(data, off + 8);
+        if (count > 65536) return null;
+        const rects = [];
+        for (let i = 0; i < count; i++) {
+          const o = off + 32 + i * 16;
+          if (o + 16 > data.length) break;
+          rects.push({
+            l: readLong(data, o),
+            t: readLong(data, o + 4),
+            r: readLong(data, o + 8),
+            b: readLong(data, o + 12)
+          });
+        }
+        return rects;
+      }
+      // 将 region 矩形集合转为设备坐标路径（并集近似：nonzero 填充下重叠同向矩形无孔洞，等效 Area.add）
+      _buildRgnPath(rects) {
+        this.ctx.beginPath();
+        for (const rc of rects) {
+          const lt = this.coordinateTransformer.transform(rc.l, rc.t, this.ctx.canvas.width, this.ctx.canvas.height);
+          const rb = this.coordinateTransformer.transform(rc.r, rc.b, this.ctx.canvas.width, this.ctx.canvas.height);
+          this.ctx.rect(lt.x, lt.y, rb.x - lt.x, rb.y - lt.y);
+        }
+      }
+      // 按句柄应用画刷（含 stock 0x80000000 回落），返回原 fillStyle 供恢复
+      _applyBrushForRegion(ihBrush) {
+        const savedFill = this.ctx.fillStyle;
+        const obj = this.gdiObjectManager.selectObject(ihBrush | 0);
+        if (obj) {
+          this.applyGdiObject(obj);
+        } else if (ihBrush >>> 0 >= 2147483648) {
+          this.applyStockObject(ihBrush >>> 0);
+        }
+        return savedFill;
+      }
+      // EMR_FILLRGN (0x47, MS-EMF 2.3.2.19)：rclBounds(16)+cbRgnData(4)+ihBrush(4)+RgnData
+      processEmfFillRgn(data) {
+        if (data.length < 24) return;
+        const cbRgnData = readDword(data, 16);
+        const ihBrush = readDword(data, 20);
+        const rects = this._readRgnData(data, 24);
+        if (!rects || !rects.length) return;
+        const savedFill = this._applyBrushForRegion(ihBrush);
+        this._buildRgnPath(rects);
+        this.ctx.fill();
+        this.ctx.fillStyle = savedFill;
+        __wmfEmfRendererLog("EMF FillRgn: rects=", rects.length, "brush=", (ihBrush >>> 0).toString(16));
+      }
+      // EMR_FRAMERGN (0x48, MS-EMF 2.3.2.18)：rclBounds(16)+cbRgnData(4)+ihBrush(4)
+      // +Width(4)+Height(4)+RgnData。框线宽：垂直边 Width、水平边 Height。
+      processEmfFrameRgn(data) {
+        if (data.length < 32) return;
+        const cbRgnData = readDword(data, 16);
+        const ihBrush = readDword(data, 20);
+        const frameW = readLong(data, 24);
+        const frameH = readLong(data, 28);
+        const rects = this._readRgnData(data, 32);
+        if (!rects || !rects.length) return;
+        const savedFill = this._applyBrushForRegion(ihBrush);
+        const scale = this.coordinateTransformer.getScale();
+        const lw = Math.max(1, Math.min(Math.abs(frameW), Math.abs(frameH)) * Math.abs(scale.x || 1));
+        const savedStroke = this.ctx.strokeStyle;
+        const savedLw = this.ctx.lineWidth;
+        this.ctx.strokeStyle = this.ctx.fillStyle;
+        this.ctx.lineWidth = lw;
+        this._buildRgnPath(rects);
+        this.ctx.stroke();
+        this.ctx.strokeStyle = savedStroke;
+        this.ctx.lineWidth = savedLw;
+        this.ctx.fillStyle = savedFill;
+        __wmfEmfRendererLog("EMF FrameRgn: rects=", rects.length, "frame=", frameW, frameH);
+      }
+      // EMR_PAINTRGN (0x4A, MS-EMF 2.3.2.21)：rclBounds(16)+cbRgnData(4)+RgnData
+      // 用当前画刷填充 region。
+      processEmfPaintRgn(data) {
+        if (data.length < 20) return;
+        const rects = this._readRgnData(data, 20);
+        if (!rects || !rects.length) return;
+        this._buildRgnPath(rects);
+        this.ctx.fill();
+        __wmfEmfRendererLog("EMF PaintRgn: rects=", rects.length);
+      }
+      // EMR_EXTSELECTCLIPRGN (0x4B, MS-EMF 2.3.1.5)：cbRgnData(4)+iMode(4)+[RgnData]
+      // iMode：1=RGN_AND 2=RGN_OR 3=RGN_XOR 4=RGN_DIFF 5=RGN_COPY（COPY 时 RgnData 可省略）
+      processEmfExtSelectClipRgn(data) {
+        if (data.length < 8) return;
+        const cbRgnData = readDword(data, 0);
+        const mode = readDword(data, 4);
+        let rects = null;
+        if (mode !== 5 && cbRgnData > 0) {
+          rects = this._readRgnData(data, 8);
+        }
+        if (rects && rects.length) {
+          this._buildRgnPath(rects);
+          this.ctx.clip();
+        } else if (mode === 5) {
+          if (this.ctx._state) this.ctx._state.clip = null;
+        }
+        __wmfEmfRendererLog("EMF ExtSelectClipRgn: mode=", mode, "rects=", rects ? rects.length : 0);
+      }
+      processEmfScaleViewportExtEx(data) {
+        if (data.length < 16) return;
+        const xNum = readLong(data, 0);
+        const xDenom = readLong(data, 4);
+        const yNum = readLong(data, 8);
+        const yDenom = readLong(data, 12);
+        if (xDenom !== 0) this.coordinateTransformer.viewportExtX *= xNum / xDenom;
+        if (yDenom !== 0) this.coordinateTransformer.viewportExtY *= yNum / yDenom;
+        __wmfEmfRendererLog("EMF ScaleViewportExtEx:", xNum, xDenom, yNum, yDenom);
+      }
+      processEmfScaleWindowExtEx(data) {
+        if (data.length < 16) return;
+        const xNum = readLong(data, 0);
+        const xDenom = readLong(data, 4);
+        const yNum = readLong(data, 8);
+        const yDenom = readLong(data, 12);
+        if (xDenom !== 0) this.coordinateTransformer.windowExtX *= xNum / xDenom;
+        if (yDenom !== 0) this.coordinateTransformer.windowExtY *= yNum / yDenom;
+        __wmfEmfRendererLog("EMF ScaleWindowExtEx:", xNum, xDenom, yNum, yDenom);
+      }
+      processEmfSaveDC(data) {
+        this.ctx.save();
+        this.dcStateStack.push(this._captureDcState());
+        __wmfEmfRendererLog("EMF SaveDC");
+      }
+      // 快照当前设备上下文状态（GDI 对象 + 坐标变换 + 绘制样式）
+      _captureDcState() {
+        const ct = this.coordinateTransformer;
+        return {
+          fillColor: this.fillColor,
+          strokeColor: this.strokeColor,
+          lineWidth: this.lineWidth,
+          arcDirection: this.arcDirection,
+          textColor: this.textColor,
+          currentPalette: this.currentPalette,
+          // GDI 语义：裁剪区属于 DC 状态，SaveDC 快照 / RestoreDC 恢复
+          // （test-156：INTERSECTCLIPRECT 后若 RESTOREDC 不撤裁剪，96 个 PIE 风玫瑰
+          //  花瓣全部被裁剪带吞掉，整图近乎空白）。
+          clip: this.ctx._state ? this.ctx._state.clip || null : null,
+          // 注意：不得快照 gdiObjectManager.objectTable。GDI 的 SaveDC/RestoreDC 只
+          // 保存/恢复 DC 状态（选中对象、映射模式等），不保存"已创建对象集合"——
+          // 块内新建的对象在 RestoreDC 后依然有效（只有 DeleteObject 能销毁）。
+          // 旧实现把对象表一并快照，导致 Office clipart 的典型模式
+          //    DELETEOBJECT 1 / SAVEDC / CREATEBRUSHINDIRECT 1 / SELECTOBJECT 1 / ... / RESTOREDC
+          // 在 RestoreDC 后丢掉了刚创建的画笔，随后的 SELECTOBJECT 1 找不到对象而
+          // 沿用上一次样式（画笔颜色丢失 → 黑色轮廓被画成白色）。
+          //
+          // ⚠️ 映射模式 / window 范围 / window 原点属于 DC 状态，SaveDC 必须快照、
+          // RestoreDC 必须恢复（Win32 SaveDC 文档：DC 状态含 mapping mode、window 与
+          // viewport 的 org/ext、world transform、clip region…）。若把这些放在顶层
+          // 状态里、不随 RestoreDC 回滚，则会出现缺陷：
+          // test-171 的 40 个 SAVEDC 块各自 SETMAPMODE(MM_TEXT)+SETWORLDTRANSFORM 后
+          // 画椭圆，RESTOREDC 出来再 LINETO——此时映射模式应回到块外的
+          // MM_ANISOTROPIC（winExt=2231x-2255）。不恢复的话 LINETO 按 MM_TEXT 的 1:1
+          // 画到 (928,1802)，整批折线全部落在画布外（RMSE 0.951，全语料最差）；
+          // 恢复后残差降到 0.29 量级（余量仅来自线宽策略）。
+          mapMode: ct.mapMode,
+          windowExtX: ct.windowExtX,
+          windowExtY: ct.windowExtY,
+          windowOrgX: ct.windowOrgX,
+          windowOrgY: ct.windowOrgY,
+          viewportExtX: ct.viewportExtX,
+          viewportExtY: ct.viewportExtY,
+          viewportOrgX: ct.viewportOrgX,
+          viewportOrgY: ct.viewportOrgY,
+          worldM11: ct.worldM11,
+          worldM12: ct.worldM12,
+          worldM21: ct.worldM21,
+          worldM22: ct.worldM22,
+          worldDx: ct.worldDx,
+          worldDy: ct.worldDy
+        };
+      }
+      // 恢复设备上下文状态
+      _restoreDcState(state) {
+        if (!state) return;
+        this.fillColor = state.fillColor;
+        this.strokeColor = state.strokeColor;
+        this.lineWidth = state.lineWidth;
+        this.arcDirection = state.arcDirection;
+        if (state.textColor) this.textColor = state.textColor;
+        if (state.currentPalette !== void 0) this.currentPalette = state.currentPalette;
+        if (this.ctx._state) this.ctx._state.clip = state.clip || null;
+        const ct = this.coordinateTransformer;
+        if (state.mapMode !== void 0) ct.mapMode = state.mapMode;
+        if (state.windowExtX !== void 0) {
+          ct.windowExtX = state.windowExtX;
+          ct.windowExtY = state.windowExtY;
+          ct.windowOrgX = state.windowOrgX;
+          ct.windowOrgY = state.windowOrgY;
+          ct.viewportExtX = state.viewportExtX;
+          ct.viewportExtY = state.viewportExtY;
+          ct.viewportOrgX = state.viewportOrgX;
+          ct.viewportOrgY = state.viewportOrgY;
+        }
+        ct.worldM11 = state.worldM11;
+        ct.worldM12 = state.worldM12;
+        ct.worldM21 = state.worldM21;
+        ct.worldM22 = state.worldM22;
+        ct.worldDx = state.worldDx;
+        ct.worldDy = state.worldDy;
+      }
+      // 读取 XFORM（MS-EMF 2.2.13，6 个 4 字节浮点：eM11 eM12 eM21 eM22 eDx eDy）
+      _readXForm(data, off) {
+        if (!data || off + 24 > data.length) return null;
+        return {
+          eM11: readFloat32(data, off),
+          eM12: readFloat32(data, off + 4),
+          eM21: readFloat32(data, off + 8),
+          eM22: readFloat32(data, off + 12),
+          eDx: readFloat32(data, off + 16),
+          eDy: readFloat32(data, off + 20)
+        };
+      }
+      processEmfSetWorldTransform(data) {
+        if (data.length < 24) return;
+        const xf = this._readXForm(data, 0);
+        if (!xf) return;
+        __wmfEmfRendererLog("EMF SetWorldTransform:", xf);
+        this.coordinateTransformer.setWorldTransform(xf);
+      }
+      processEmfModifyWorldTransform(data) {
+        if (data.length < 28) return;
+        const xf = this._readXForm(data, 0);
+        if (!xf) return;
+        const mode = readDword(data, 24);
+        __wmfEmfRendererLog("EMF ModifyWorldTransform mode:", mode, xf);
+        this.coordinateTransformer.modifyWorldTransform(xf, mode);
+      }
+      processEmfAngleArc(data) {
+        if (data.length < 20) return;
+        const centerX = readLong(data, 0);
+        const centerY = readLong(data, 4);
+        const radius = readDword(data, 8);
+        const startAngle = readDword(data, 12);
+        const sweepAngle = readDword(data, 16);
+        const transformed = this.coordinateTransformer.transform(centerX, centerY, this.ctx.canvas.width, this.ctx.canvas.height);
+        const startRad = startAngle * Math.PI / 180;
+        const endRad = (startAngle + sweepAngle) * Math.PI / 180;
+        this.ctx.beginPath();
+        this.ctx.arc(transformed.x, transformed.y, radius, startRad, endRad, sweepAngle < 0);
+        this.ctx.stroke();
+        __wmfEmfRendererLog("EMF AngleArc:", centerX, centerY, radius, startAngle, sweepAngle);
+      }
+      processEmfRoundRect(data) {
+        if (data.length < 24) return;
+        const left = readLong(data, 0);
+        const top = readLong(data, 4);
+        const right = readLong(data, 8);
+        const bottom = readLong(data, 12);
+        const cornerWidth = readLong(data, 16);
+        const cornerHeight = readLong(data, 20);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const width = transformedRightBottom.x - transformedLeftTop.x;
+        const height = transformedRightBottom.y - transformedLeftTop.y;
+        const rx = cornerWidth / 2;
+        const ry = cornerHeight / 2;
+        this.ctx.beginPath();
+        this.ctx.roundRect(transformedLeftTop.x, transformedLeftTop.y, width, height, [rx]);
+        this.ctx.fill();
+        this.ctx.stroke();
+        __wmfEmfRendererLog("EMF RoundRect:", left, top, right, bottom);
+      }
+      // 计算部分椭圆弧的起止角（画布角度）。
+      // GDI 坐标 Y 轴向下，"逆时针"（AD_COUNTERCLOCKWISE，
+      // 默认）在屏幕上即逆时针 = 画布 anticlockwise=true（沿角度递减方向）；
+      // GDI 顺时针（AD_CLOCKWISE）= 画布 anticlockwise=false。
+      // 几何计算见 utils/geometryUtils（与 WmfDrawer 共用同一实现）。
+      _calcArcAngles(cx, cy, rx, ry, startX, startY, endX, endY) {
+        const st = this.coordinateTransformer.transform(startX, startY, this.ctx.canvas.width, this.ctx.canvas.height);
+        const en = this.coordinateTransformer.transform(endX, endY, this.ctx.canvas.width, this.ctx.canvas.height);
+        return GeometryUtils.arcAngles(cx, cy, rx, ry, st, en, this.arcDirection !== 2);
+      }
+      // EMR_ARC / EMR_CHORD / EMR_PIE 的记录结构完全相同
+      // （Bounds(16) + Start(8) + End(8)），差异只在收尾方式，
+      // 与 WmfDrawer._drawArcRecord 共用同一套几何实现。
+      _drawArcLikeRecord(data, kind) {
+        if (data.length < 32) return;
+        const left = readLong(data, 0);
+        const top = readLong(data, 4);
+        const right = readLong(data, 8);
+        const bottom = readLong(data, 12);
+        const startX = readLong(data, 16);
+        const startY = readLong(data, 20);
+        const endX = readLong(data, 24);
+        const endY = readLong(data, 28);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const ellipse = GeometryUtils.absEllipseFromCorners(transformedLeftTop, transformedRightBottom);
+        if (ellipse.rx === 0 || ellipse.ry === 0) return;
+        const angles = this._calcArcAngles(ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry, startX, startY, endX, endY);
+        GeometryUtils.drawArcLike(this.ctx, kind, ellipse, angles);
+        __wmfEmfRendererLog("EMF " + kind + ":", left, top, right, bottom);
+      }
+      processEmfArc(data) {
+        this._drawArcLikeRecord(data, "Arc");
+      }
+      processEmfChord(data) {
+        this._drawArcLikeRecord(data, "Chord");
+      }
+      processEmfPie(data) {
+        this._drawArcLikeRecord(data, "Pie");
+      }
+      // ===== 调色板链路 =====
+      // PaletteEntry 4 字节：flags(1)+blue(1)+green(1)+red(1)
+      processEmfSelectPalette(data) {
+        if (data.length < 4) return;
+        const paletteHandle = readDword(data, 0);
+        const obj = this.gdiObjectManager.selectObject(paletteHandle | 0);
+        if (obj && obj.type === "palette") {
+          this.currentPalette = obj;
+        } else if (paletteHandle >>> 0 >= 2147483648) {
+          this.currentPalette = null;
+        }
+        __wmfEmfRendererLog("EMF SelectPalette:", (paletteHandle >>> 0).toString(16), !!this.currentPalette);
+      }
+      // EMR_CREATEPALETTE：ihPal(4) + LGPAL（Version(2)+NumberOfEntries(2)+aPalEntries[4字节/个]）
+      processEmfCreatePalette(data) {
+        if (data.length < 8) return;
+        const ihPal = readDword(data, 0);
+        if ((ihPal & 2147483648) !== 0) return;
+        const numEntries = data[6] | data[7] << 8;
+        const entries = [];
+        for (let i = 0; i < numEntries; i++) {
+          const o = 8 + i * 4;
+          if (o + 4 > data.length) break;
+          entries.push({ r: data[o + 3], g: data[o + 2], b: data[o + 1] });
+        }
+        this.gdiObjectManager.createObjectAt(ihPal, { type: "palette", entries });
+        __wmfEmfRendererLog("EMF CreatePalette: ih=", (ihPal >>> 0).toString(16), "entries=", entries.length);
+      }
+      // EMR_SETPALETTEENTRIES：ihPal(4)+Start(4)+NumEntries(4)+aPalEntries
+      processEmfSetPaletteEntries(data) {
+        if (data.length < 12) return;
+        const ihPal = readDword(data, 0);
+        const start = readDword(data, 4);
+        const num = readDword(data, 8);
+        const obj = this.gdiObjectManager.selectObject(ihPal | 0);
+        if (obj && obj.type === "palette") {
+          for (let i = 0; i < num; i++) {
+            const o = 12 + i * 4;
+            if (o + 4 > data.length) break;
+            obj.entries[start + i] = { r: data[o + 3], g: data[o + 2], b: data[o + 1] };
+          }
+        }
+      }
+      processEmfResizePalette(data) {
+      }
+      processEmfRealizePalette(data) {
+      }
+      processEmfExtFloodFill(data) {
+        if (data.length < 16) return;
+        const x = readLong(data, 0);
+        const y = readLong(data, 4);
+        const color = readDword(data, 8);
+        const fillType = readDword(data, 12);
+        __wmfEmfRendererLog("EMF ExtFloodFill:", x, y, color, fillType);
+      }
+      processEmfArcTo(data) {
+        if (data.length < 32) return;
+        const left = readLong(data, 0);
+        const top = readLong(data, 4);
+        const right = readLong(data, 8);
+        const bottom = readLong(data, 12);
+        const startX = readLong(data, 16);
+        const startY = readLong(data, 20);
+        const endX = readLong(data, 24);
+        const endY = readLong(data, 28);
+        const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
+        const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
+        const centerX = (transformedLeftTop.x + transformedRightBottom.x) / 2;
+        const centerY = (transformedLeftTop.y + transformedRightBottom.y) / 2;
+        const radiusX = Math.abs(transformedRightBottom.x - transformedLeftTop.x) / 2;
+        const radiusY = Math.abs(transformedRightBottom.y - transformedLeftTop.y) / 2;
+        if (radiusX === 0 || radiusY === 0) return;
+        const { startAngle, endAngle, anticlockwise } = this._calcArcAngles(centerX, centerY, radiusX, radiusY, startX, startY, endX, endY);
+        const full = Math.abs(endAngle - startAngle) < 1e-6;
+        const arcStart = { x: centerX + radiusX * Math.cos(startAngle), y: centerY + radiusY * Math.sin(startAngle) };
+        const arcEnd = { x: centerX + radiusX * Math.cos(endAngle), y: centerY + radiusY * Math.sin(endAngle) };
+        const from = this.coordinateTransformer.transform(this.currentPos.x, this.currentPos.y, this.ctx.canvas.width, this.ctx.canvas.height);
+        this.ctx.beginPath();
+        this.ctx.moveTo(from.x, from.y);
+        this.ctx.lineTo(arcStart.x, arcStart.y);
+        if (full) {
+          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+        } else {
+          this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, endAngle, anticlockwise);
+        }
+        this.ctx.stroke();
+        const cxL = (left + right) / 2;
+        const cyL = (top + bottom) / 2;
+        const rxL = Math.abs(right - left) / 2;
+        const ryL = Math.abs(bottom - top) / 2;
+        this.currentPos = {
+          x: cxL + rxL * Math.cos(endAngle),
+          y: cyL + ryL * Math.sin(endAngle)
+        };
+      }
+      processEmfPolyDraw(data) {
+        if (data.length < 20) return;
+        const count = readDword(data, 16);
+        if (data.length < 20 + count * 8 + count) return;
+        this.ctx.beginPath();
+        for (let i = 0; i < count; i++) {
+          const x = readLong(data, 20 + i * 8);
+          const y = readLong(data, 24 + i * 8);
+          const type = data[20 + count * 8 + i];
+          const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+          let closeFlag = (type & 1) !== 0;
+          switch (type & 6) {
+            case 2:
+              this.ctx.lineTo(transformed.x, transformed.y);
+              break;
+            case 4: {
+              if (i + 2 >= count) break;
+              const pts = [transformed];
+              for (let k = 1; k <= 2; k++) {
+                const bx = readLong(data, 20 + (i + k) * 8);
+                const by = readLong(data, 24 + (i + k) * 8);
+                pts.push(this.coordinateTransformer.transform(bx, by, this.ctx.canvas.width, this.ctx.canvas.height));
+              }
+              this.ctx.bezierCurveTo(pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
+              closeFlag = (data[20 + count * 8 + i + 2] & 1) !== 0;
+              i += 2;
+              break;
+            }
+            case 6:
+              this.ctx.moveTo(transformed.x, transformed.y);
+              break;
+          }
+          if (closeFlag) {
+            this.ctx.closePath();
+          }
+        }
+        this.ctx.stroke();
+      }
+      // EMR_CREATEDIBPATTERNBRUSHPT (0x5E, MS-EMF 2.3.5.4)：
+      //   EMR(8) | ihBrush(4) | iUsage(4) | offBmi(4) | cbBmi(4) | offBits(4) | cbBits(4) | <DIB>
+      // 解析 DIB 为 RGBA 位图并注册为 SVG <pattern>，使 poly fill 走 pattern 填充（对齐参考）。
+      processEmfCreateDibPatternBrushPT(data) {
+        if (data.length < 24) return;
+        const ihBrush = readDword(data, 0);
+        if ((ihBrush & 2147483648) !== 0) return;
+        const iUsage = readDword(data, 4);
+        const offBmi = readDword(data, 8);
+        const cbBmi = readDword(data, 12);
+        const offBits = readDword(data, 16);
+        const cbBits = readDword(data, 20);
+        if (!offBmi || !cbBmi || !offBits || !cbBits) return;
+        const dib = this._decodeDib(data, offBmi, cbBmi, offBits, cbBits, { iUsage });
+        if (!dib) {
+          __wmfEmfRendererLog("EMF CreateDibPatternBrushPT: DIB decode failed");
+          return;
+        }
+        const url = this.ctx.addPattern(dib, { orgX: 0, orgY: 0 });
+        if (!url) return;
+        this.gdiObjectManager.createObjectAt(ihBrush, { type: "pattern", url, width: dib.width, height: Math.abs(dib.height) });
+        __wmfEmfRendererLog("EMF CreateDibPatternBrushPT: ih=", ihBrush, "size=", dib.width, "x", dib.height);
+      }
+      processEmfSetArcDirection(data) {
+        if (data.length < 4) return;
+        const direction = readDword(data, 0);
+        this.arcDirection = direction;
+        __wmfEmfRendererLog("EMF SetArcDirection:", direction);
+      }
+      processEmfSetMiterLimit(data) {
+        if (data.length < 4) return;
+        const miterLimit = readDword(data, 0);
+        this.ctx.miterLimit = miterLimit;
+        __wmfEmfRendererLog("EMF SetMiterLimit:", miterLimit);
+      }
+      processEmfCloseFigure(data) {
+        this.ctx.closePath();
+        __wmfEmfRendererLog("EMF CloseFigure");
+      }
+      processEmfFillPath(data) {
+        this.ctx.fill();
+        this.pathState = "idle";
+        __wmfEmfRendererLog("EMF FillPath");
+      }
+      processEmfFlattenPath(data) {
+        __wmfEmfRendererLog("EMF FlattenPath");
+      }
+      processEmfWidenPath(data) {
+        __wmfEmfRendererLog("EMF WidenPath");
+      }
+      processEmfSelectClipPath(data) {
+        if (data.length < 4) return;
+        const mode = readDword(data, 0);
+        __wmfEmfRendererLog("EMF SelectClipPath, mode:", mode);
+        if (mode >= 1 && mode <= 5) {
+          this.ctx.clip();
+        }
+      }
+      tryProcessAsCoordinates(data) {
+        if (data.length < 16) return;
+        const points = [];
+        for (let i = 0; i < data.length - 8; i += 8) {
+          const x = readDword(data, i);
+          const y = readDword(data, i + 4);
+          if (Math.abs(x) < 5e4 && Math.abs(y) < 5e4) {
+            const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
+            points.push(transformed);
+          }
+        }
+        if (points.length >= 3) {
+          this.ctx.beginPath();
+          this.ctx.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length; i++) {
+            this.ctx.lineTo(points[i].x, points[i].y);
+          }
+          this.ctx.stroke();
+          __wmfEmfRendererLog("Drew polyline with", points.length, "points from unknown record");
+        }
+      }
+      finishPath() {
+        if (this.pathState === "active" || this.pathState === "completed") {
+          this.ctx.stroke();
+          this.pathState = "idle";
+        }
+      }
+    };
+    module2.exports = EmfDrawer2;
   }
 });
 
@@ -6159,9 +6118,12 @@ var require_wmfDrawer = __commonJS({
   "src/modules/drawers/wmfDrawer.js"(exports2, module2) {
     "use strict";
     var BaseDrawer2 = require_baseDrawer();
-    var EmfPlusDrawer2 = require_emfPlusDrawer();
     var MathTypeMtefParser2 = require_mathTypeMtefParser();
     var GeometryUtils = require_geometryUtils();
+    var { readWord, readShort, readDword, readLong, readString } = require_binaryReader();
+    var { colorRefToHex } = require_colorUtils();
+    var { dbcsLabelForCharset, decodeLocalBytes, printableAscii, mergeDbcsRuns } = require_textCodec();
+    var { resolveTempCanvas } = require_bitmapSurface();
     var WMF_RECORD_HANDLERS = {
       // ========== 状态记录 (State Records) ==========
       259: "processSetMapMode",
@@ -6271,7 +6233,6 @@ var require_wmfDrawer = __commonJS({
         this.emfPlusDetected = false;
         this.emfPlusRecordCount = 0;
         this.emfPlusRecords = [];
-        this.emfPlusDrawer = null;
         this.currentPosX = 0;
         this.currentPosY = 0;
         this.hasValidPosition = false;
@@ -6373,7 +6334,7 @@ var require_wmfDrawer = __commonJS({
       extractWmfcData(record) {
         const data = record.data;
         if (data.length < 8) return null;
-        const escapeFunction = this.readWordFromData(data, 0);
+        const escapeFunction = readWord(data, 0);
         if (escapeFunction !== 15) return null;
         const signature = String.fromCharCode(data[4], data[5], data[6], data[7]);
         if (signature === "WMFC") {
@@ -6429,32 +6390,7 @@ var require_wmfDrawer = __commonJS({
         __wmfEmfRendererLog("Unknown/Unimplemented WMF function:", record.functionId, "(0x" + record.functionId.toString(16).padStart(4, "0") + ")");
       }
       // ========== 辅助方法 ==========
-      readWordFromData(data, offset) {
-        if (offset + 1 >= data.length) return 0;
-        return data[offset] | data[offset + 1] << 8;
-      }
-      readShortFromData(data, offset) {
-        const value = this.readWordFromData(data, offset);
-        return value & 32768 ? value - 65536 : value;
-      }
-      readDwordFromData(data, offset) {
-        if (offset + 3 >= data.length) return 0;
-        return data[offset] | data[offset + 1] << 8 | data[offset + 2] << 16 | data[offset + 3] << 24;
-      }
-      // 读取有符号 32 位整数
-      readLongFromData(data, offset) {
-        const value = this.readDwordFromData(data, offset);
-        return value > 2147483647 ? value - 4294967296 : value;
-      }
-      readStringFromData(data, offset, length) {
-        let str = "";
-        for (let i = 0; i < length && offset + i < data.length; i++) {
-          if (data[offset + i] !== 0) {
-            str += String.fromCharCode(data[offset + i]);
-          }
-        }
-        return str;
-      }
+      // Byte readers now live in utils/binaryReader (readWord/readShort/readDword/readLong/readString)
       mapSymbolString(text) {
         if (!/symbol/i.test(this.currentFontFace || "")) return text;
         let out = "";
@@ -6623,81 +6559,76 @@ var require_wmfDrawer = __commonJS({
         }
         return out;
       }
-      rgbToHex(rgb) {
-        const r = (rgb & 255).toString(16).padStart(2, "0");
-        const g = (rgb >> 8 & 255).toString(16).padStart(2, "0");
-        const b = (rgb >> 16 & 255).toString(16).padStart(2, "0");
-        return `#${r}${g}${b}`;
-      }
+      // Color conversion now lives in utils/colorUtils (colorRefToHex)
       // ========== 实现绘制方法 ==========
       processSetMapMode(data) {
         if (data.length < 2) return;
-        const mode = this.readWordFromData(data, 0);
+        const mode = readWord(data, 0);
         __wmfEmfRendererLog("SetMapMode:", mode);
         this.coordinateTransformer.setMapMode(mode);
       }
       processSetWindowOrg(data) {
         if (data.length < 4) return;
-        const y = this.readShortFromData(data, 0);
-        const x = this.readShortFromData(data, 2);
+        const y = readShort(data, 0);
+        const x = readShort(data, 2);
         __wmfEmfRendererLog("SetWindowOrg:", x, y);
         this.coordinateTransformer.setWindowOrg(x, y);
       }
       processSetWindowExt(data) {
         if (data.length < 4) return;
-        const y = this.readShortFromData(data, 0);
-        const x = this.readShortFromData(data, 2);
+        const y = readShort(data, 0);
+        const x = readShort(data, 2);
         __wmfEmfRendererLog("SetWindowExt:", x, y);
         this.coordinateTransformer.setWindowExt(x, y);
       }
       processSetViewportOrg(data) {
         if (data.length < 4) return;
-        const y = this.readShortFromData(data, 0);
-        const x = this.readShortFromData(data, 2);
+        const y = readShort(data, 0);
+        const x = readShort(data, 2);
         __wmfEmfRendererLog("SetViewportOrg:", x, y);
         this.coordinateTransformer.setViewportOrg(x, y);
       }
       processSetViewportExt(data) {
         if (data.length < 4) return;
-        const y = this.readShortFromData(data, 0);
-        const x = this.readShortFromData(data, 2);
+        const y = readShort(data, 0);
+        const x = readShort(data, 2);
         __wmfEmfRendererLog("SetViewportExt:", x, y);
         this.coordinateTransformer.setViewportExt(x, y);
       }
       processSetBkColor(data) {
         if (data.length < 4) return;
-        const color = this.readDwordFromData(data, 0);
+        const color = readDword(data, 0);
         __wmfEmfRendererLog("SetBkColor:", color);
       }
       processSetBkMode(data) {
         if (data.length < 2) return;
-        const mode = this.readWordFromData(data, 0);
+        const mode = readWord(data, 0);
         __wmfEmfRendererLog("SetBkMode:", mode);
       }
       processSetTextColor(data) {
         if (data.length < 4) return;
-        const color = this.readDwordFromData(data, 0);
+        const color = readDword(data, 0);
         __wmfEmfRendererLog("SetTextColor:", color);
-        this.ctx.fillStyle = this.rgbToHex(color);
+        this.ctx.fillStyle = colorRefToHex(color);
       }
       processSetROP2(data) {
         if (data.length < 2) return;
-        const rop2 = this.readWordFromData(data, 0);
+        const rop2 = readWord(data, 0);
         __wmfEmfRendererLog("SetROP2:", rop2);
       }
       processSetPolyFillMode(data) {
         if (data.length < 2) return;
-        const mode = this.readWordFromData(data, 0);
+        const mode = readWord(data, 0);
         __wmfEmfRendererLog("SetPolyFillMode:", mode);
       }
       processSetStretchBltMode(data) {
         if (data.length < 2) return;
-        const mode = this.readWordFromData(data, 0);
+        const mode = readWord(data, 0);
         __wmfEmfRendererLog("SetStretchBltMode:", mode);
       }
       processSetTextAlign(data) {
         if (data.length < 2) return;
-        const align = this.readWordFromData(data, 0);
+        const align = readWord(data, 0);
         __wmfEmfRendererLog("SetTextAlign:", align);
         this.textAlignFlags = align;
         this.textUpdateCp = (align & 1) !== 0;
@@ -6720,39 +6651,39 @@ var require_wmfDrawer = __commonJS({
       }
       processCreatePenIndirect(data) {
         if (data.length < 10) return;
-        const style = this.readWordFromData(data, 0);
-        const originalWidth = this.readWordFromData(data, 2);
+        const style = readWord(data, 0);
+        const originalWidth = readWord(data, 2);
         let width = originalWidth;
-        const color = this.readDwordFromData(data, 6);
+        const color = readDword(data, 6);
         const scale = this.coordinateTransformer.getScale();
         width = Math.max(1, Math.round(width * scale.x));
         __wmfEmfRendererLog("Pen width conversion:", originalWidth, "logical units ->", width, "pixels (scale:", scale.x, ")");
         __wmfEmfRendererLog("CreatePenIndirect:", style, width, color);
-        const penColor = this.rgbToHex(color);
+        const penColor = colorRefToHex(color);
         this.gdiObjectManager.createPen(style, width, penColor);
       }
       processCreateBrushIndirect(data) {
         if (data.length < 8) return;
-        const style = this.readWordFromData(data, 0);
-        const color = this.readDwordFromData(data, 2);
+        const style = readWord(data, 0);
+        const color = readDword(data, 2);
         __wmfEmfRendererLog("CreateBrushIndirect:", style, color);
-        const brushColor = this.rgbToHex(color);
+        const brushColor = colorRefToHex(color);
         this.gdiObjectManager.createBrush(style, brushColor);
       }
       // META_CREATEBRUSH (0x00F8, 已废弃)：仅含 ColorRef (4 字节)，按实心画刷处理
       processCreateBrush(data) {
         if (data.length < 4) return;
-        const color = this.readDwordFromData(data, 0);
+        const color = readDword(data, 0);
         __wmfEmfRendererLog("CreateBrush (obsolete):", color);
-        this.gdiObjectManager.createBrush(0, this.rgbToHex(color));
+        this.gdiObjectManager.createBrush(0, colorRefToHex(color));
       }
       processCreateFontIndirect(data) {
         if (data.length < 18) return;
-        let height = this.readWordFromData(data, 0);
+        let height = readWord(data, 0);
         if (height > 32767) height = height - 65536;
         height = Math.abs(height);
-        const width = this.readWordFromData(data, 2);
-        const weight = this.readWordFromData(data, 8);
+        const width = readWord(data, 2);
+        const weight = readWord(data, 8);
         const italic = data[10];
         const underline = data[11];
         const strikeOut = data[12];
@@ -6763,30 +6694,23 @@ var require_wmfDrawer = __commonJS({
           faceBytes.push(data[i]);
         }
         let faceName = "";
-        const charsetLabel = this.getDbcsCharsetLabel(charset);
+        const charsetLabel = dbcsLabelForCharset(charset);
         if (charsetLabel && faceBytes.some((b) => b > 126)) {
-          try {
-            faceName = new TextDecoder(charsetLabel).decode(Uint8Array.from(faceBytes));
-          } catch (e) {
-          }
+          faceName = decodeLocalBytes(faceBytes, charsetLabel);
         }
-        if (!faceName) {
-          for (const b of faceBytes) {
-            if (b >= 32 && b <= 126) faceName += String.fromCharCode(b);
-          }
-        }
+        if (!faceName) faceName = printableAscii(faceBytes);
         if (faceName === "") faceName = "Arial";
         __wmfEmfRendererLog("CreateFontIndirect: height=", height, "width=", width, "weight=", weight, "charset=", charset, "faceName=", faceName);
         this.gdiObjectManager.createFont(height, width, weight, italic, underline, strikeOut, faceName, charset);
       }
       processSelectClipRgn(data) {
         if (data.length < 2) return;
-        const regionIndex = this.readWordFromData(data, 0);
+        const regionIndex = readWord(data, 0);
         __wmfEmfRendererLog("SelectClipRgn:", regionIndex);
       }
       processSelectObject(data) {
         if (data.length < 2) return;
-        const objectIndex = this.readWordFromData(data, 0);
+        const objectIndex = readWord(data, 0);
         __wmfEmfRendererLog("SelectObject:", objectIndex);
         const obj = this.gdiObjectManager.selectObject(objectIndex);
         if (obj) {
@@ -6829,14 +6753,14 @@ var require_wmfDrawer = __commonJS({
       }
       processDeleteObject(data) {
         if (data.length < 2) return;
-        const objectIndex = this.readWordFromData(data, 0);
+        const objectIndex = readWord(data, 0);
         __wmfEmfRendererLog("DeleteObject:", objectIndex);
         this.gdiObjectManager.deleteObject(objectIndex);
       }
       processMoveTo(data) {
         if (data.length < 4) return;
-        const y = this.readShortFromData(data, 0);
-        const x = this.readShortFromData(data, 2);
+        const y = readShort(data, 0);
+        const x = readShort(data, 2);
         const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
         __wmfEmfRendererLog("MoveTo:", x, y, "->", transformed.x, transformed.y);
         this.currentPosX = x;
@@ -6845,8 +6769,8 @@ var require_wmfDrawer = __commonJS({
       }
       processLineTo(data) {
         if (data.length < 4) return;
-        const y = this.readShortFromData(data, 0);
-        const x = this.readShortFromData(data, 2);
+        const y = readShort(data, 0);
+        const x = readShort(data, 2);
         const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
         __wmfEmfRendererLog("LineTo:", x, y, "->", transformed.x, transformed.y);
         let startX, startY;
@@ -6875,10 +6799,10 @@ var require_wmfDrawer = __commonJS({
       }
       processRectangle(data) {
         if (data.length < 8) return;
-        const bottom = this.readShortFromData(data, 0);
-        const right = this.readShortFromData(data, 2);
-        const top = this.readShortFromData(data, 4);
-        const left = this.readShortFromData(data, 6);
+        const bottom = readShort(data, 0);
+        const right = readShort(data, 2);
+        const top = readShort(data, 4);
+        const left = readShort(data, 6);
         const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
         const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
         __wmfEmfRendererLog("Rectangle:", left, top, right, bottom);
@@ -6906,10 +6830,10 @@ var require_wmfDrawer = __commonJS({
       }
       processEllipse(data) {
         if (data.length < 8) return;
-        const bottom = this.readShortFromData(data, 0);
-        const right = this.readShortFromData(data, 2);
-        const top = this.readShortFromData(data, 4);
-        const left = this.readShortFromData(data, 6);
+        const bottom = readShort(data, 0);
+        const right = readShort(data, 2);
+        const top = readShort(data, 4);
+        const left = readShort(data, 6);
         __wmfEmfRendererLog("Ellipse:", left, top, right, bottom);
         const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
         const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
@@ -6922,12 +6846,12 @@ var require_wmfDrawer = __commonJS({
       }
       processRoundRect(data) {
         if (data.length < 12) return;
-        const bottom = this.readShortFromData(data, 0);
-        const right = this.readShortFromData(data, 2);
-        const top = this.readShortFromData(data, 4);
-        const left = this.readShortFromData(data, 6);
-        const cornerWidth = this.readWordFromData(data, 8);
-        const cornerHeight = this.readWordFromData(data, 10);
+        const bottom = readShort(data, 0);
+        const right = readShort(data, 2);
+        const top = readShort(data, 4);
+        const left = readShort(data, 6);
+        const cornerWidth = readWord(data, 8);
+        const cornerHeight = readWord(data, 10);
         __wmfEmfRendererLog("RoundRect:", left, top, right, bottom, "corner:", cornerWidth, cornerHeight);
         const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
         const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
@@ -6969,14 +6893,14 @@ var require_wmfDrawer = __commonJS({
       // 绘制椭圆弧/饼图/弦的公共逻辑
       _drawArcRecord(data, kind) {
         if (data.length < 16) return;
-        const bottom = this.readShortFromData(data, 0);
-        const right = this.readShortFromData(data, 2);
-        const top = this.readShortFromData(data, 4);
-        const left = this.readShortFromData(data, 6);
-        const startY = this.readShortFromData(data, 8);
-        const startX = this.readShortFromData(data, 10);
-        const endY = this.readShortFromData(data, 12);
-        const endX = this.readShortFromData(data, 14);
+        const bottom = readShort(data, 0);
+        const right = readShort(data, 2);
+        const top = readShort(data, 4);
+        const left = readShort(data, 6);
+        const startY = readShort(data, 8);
+        const startX = readShort(data, 10);
+        const endY = readShort(data, 12);
+        const endX = readShort(data, 14);
         __wmfEmfRendererLog(kind + ":", left, top, right, bottom, "start:", startX, startY, "end:", endX, endY);
         const transformedLeftTop = this.coordinateTransformer.transform(left, top, this.ctx.canvas.width, this.ctx.canvas.height);
         const transformedRightBottom = this.coordinateTransformer.transform(right, bottom, this.ctx.canvas.width, this.ctx.canvas.height);
@@ -7003,18 +6927,18 @@ var require_wmfDrawer = __commonJS({
           if (data[dibOffset] === 66 && data[dibOffset + 1] === 77) {
             bmiOffset = dibOffset + 14;
           }
-          const biSize = this.readDwordFromData(data, bmiOffset);
+          const biSize = readDword(data, bmiOffset);
           if (biSize !== 40 && biSize !== 108 && biSize !== 124) return false;
-          const biWidth = this.readLongFromData(data, bmiOffset + 4);
-          const biHeightRaw = this.readLongFromData(data, bmiOffset + 8);
-          const biBitCount = this.readWordFromData(data, bmiOffset + 14);
-          const biCompression = this.readDwordFromData(data, bmiOffset + 16);
+          const biWidth = readLong(data, bmiOffset + 4);
+          const biHeightRaw = readLong(data, bmiOffset + 8);
+          const biBitCount = readWord(data, bmiOffset + 14);
+          const biCompression = readDword(data, bmiOffset + 16);
           if (biWidth <= 0 || biWidth > 2e4 || Math.abs(biHeightRaw) > 2e4) return false;
           if (biBitCount !== 1 && biBitCount !== 4 && biBitCount !== 8 && biBitCount !== 16 && biBitCount !== 24 && biBitCount !== 32) return false;
           __wmfEmfRendererLog("  DIB Bitmap:", biWidth, "x", biHeightRaw, "bits:", biBitCount, "compression:", biCompression);
           let colorTableSize = 0;
           if (biBitCount <= 8) {
-            const biClrUsed = this.readDwordFromData(data, bmiOffset + 32);
+            const biClrUsed = readDword(data, bmiOffset + 32);
             colorTableSize = (biClrUsed || 1 << biBitCount) * 4;
           }
           const bitsOffset = bmiOffset + biSize + colorTableSize;
@@ -7094,12 +7018,8 @@ var require_wmfDrawer = __commonJS({
               pixels[dstOffset + 3] = a;
             }
           }
-          const canvasCtor = typeof document === "undefined" && this.ctx.canvas ? this.ctx.canvas.constructor : null;
-          const isRealCanvasCtor = typeof canvasCtor === "function" && canvasCtor.name !== "Object";
-          const tempCanvas = typeof document !== "undefined" ? document.createElement("canvas") : isRealCanvasCtor ? new canvasCtor(biWidth, absHeight) : null;
+          const tempCanvas = resolveTempCanvas(this.ctx, biWidth, absHeight);
           if (tempCanvas) {
-            tempCanvas.width = biWidth;
-            tempCanvas.height = absHeight;
             const tempCtx = tempCanvas.getContext("2d");
             tempCtx.putImageData(imageData, 0, 0);
             const transformed1 = this.coordinateTransformer.transform(destX, destY, this.ctx.canvas.width, this.ctx.canvas.height);
@@ -7124,11 +7044,11 @@ var require_wmfDrawer = __commonJS({
       }
       processDibBitBlt(data) {
         if (data.length < 16) return;
-        const rop = this.readDwordFromData(data, 0);
-        const destHeight = this.readShortFromData(data, 8);
-        const destWidth = this.readShortFromData(data, 10);
-        const destY = this.readShortFromData(data, 12);
-        const destX = this.readShortFromData(data, 14);
+        const rop = readDword(data, 0);
+        const destHeight = readShort(data, 8);
+        const destWidth = readShort(data, 10);
+        const destY = readShort(data, 12);
+        const destX = readShort(data, 14);
         __wmfEmfRendererLog("DibBitBlt: rop=", rop.toString(16), "dest=", destX, destY, destWidth, "x", destHeight);
         if (!this.renderDib(data, 16, destX, destY, destWidth, destHeight)) {
           this._drawDibPlaceholder(destX, destY, destWidth, destHeight);
@@ -7136,13 +7056,13 @@ var require_wmfDrawer = __commonJS({
       }
       processDibStretchBlt(data) {
         if (data.length < 20) return;
-        const rop = this.readDwordFromData(data, 0);
-        const srcHeight = this.readShortFromData(data, 4);
-        const srcWidth = this.readShortFromData(data, 6);
-        const destHeight = this.readShortFromData(data, 12);
-        const destWidth = this.readShortFromData(data, 14);
-        const destY = this.readShortFromData(data, 16);
-        const destX = this.readShortFromData(data, 18);
+        const rop = readDword(data, 0);
+        const srcHeight = readShort(data, 4);
+        const srcWidth = readShort(data, 6);
+        const destHeight = readShort(data, 12);
+        const destWidth = readShort(data, 14);
+        const destY = readShort(data, 16);
+        const destX = readShort(data, 18);
         __wmfEmfRendererLog("DibStretchBlt: rop=", rop.toString(16), "src=", srcWidth, "x", srcHeight, "dest=", destX, destY, destWidth, "x", destHeight);
         if (!this.renderDib(data, 20, destX, destY, destWidth, destHeight)) {
           this._drawDibPlaceholder(destX, destY, destWidth, destHeight);
@@ -7150,14 +7070,12 @@ var require_wmfDrawer = __commonJS({
       }
       processStretchDib(data) {
         if (data.length < 22) return;
-        const rop = this.readDwordFromData(data, 0);
-        const colorUsage = this.readWordFromData(data, 4);
-        const srcHeight = this.readShortFromData(data, 6);
-        const srcWidth = this.readShortFromData(data, 8);
-        const destHeight = this.readShortFromData(data, 14);
-        const destWidth = this.readShortFromData(data, 16);
-        const destY = this.readShortFromData(data, 18);
-        const destX = this.readShortFromData(data, 20);
+        const rop = readDword(data, 0);
+        const colorUsage = readWord(data, 4);
+        const destHeight = readShort(data, 14);
+        const destWidth = readShort(data, 16);
+        const destY = readShort(data, 18);
+        const destX = readShort(data, 20);
         __wmfEmfRendererLog("StretchDib: rop=", rop.toString(16), "colorUsage=", colorUsage, "dest=", destX, destY, destWidth, "x", destHeight);
         if (!this.renderDib(data, 22, destX, destY, destWidth, destHeight)) {
           this._drawDibPlaceholder(destX, destY, destWidth, destHeight);
@@ -7181,13 +7099,13 @@ var require_wmfDrawer = __commonJS({
       }
       processPolyline(data) {
         if (data.length < 2) return;
-        const numPoints = this.readWordFromData(data, 0);
+        const numPoints = readWord(data, 0);
         __wmfEmfRendererLog("Polyline, numPoints:", numPoints);
         if (data.length < 2 + numPoints * 4) return;
         this.ctx.beginPath();
         for (let i = 0; i < numPoints; i++) {
-          const x = this.readShortFromData(data, 2 + i * 4);
-          const y = this.readShortFromData(data, 4 + i * 4);
+          const x = readShort(data, 2 + i * 4);
+          const y = readShort(data, 4 + i * 4);
           const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
           if (i < 3 || i === numPoints - 1) {
             __wmfEmfRendererLog(`  Point ${i}: logical (${x}, ${y}) -> canvas (${transformed.x.toFixed(2)}, ${transformed.y.toFixed(2)})`);
@@ -7202,13 +7120,13 @@ var require_wmfDrawer = __commonJS({
       }
       processPolygon(data) {
         if (data.length < 2) return;
-        const numPoints = this.readWordFromData(data, 0);
+        const numPoints = readWord(data, 0);
         __wmfEmfRendererLog("Polygon, numPoints:", numPoints);
         if (data.length < 2 + numPoints * 4) return;
         this.ctx.beginPath();
         for (let i = 0; i < numPoints; i++) {
-          const x = this.readShortFromData(data, 2 + i * 4);
-          const y = this.readShortFromData(data, 4 + i * 4);
+          const x = readShort(data, 2 + i * 4);
+          const y = readShort(data, 4 + i * 4);
           const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
           if (i === 0) {
             this.ctx.moveTo(transformed.x, transformed.y);
@@ -7222,13 +7140,13 @@ var require_wmfDrawer = __commonJS({
       }
       processPolyPolygon(data) {
         if (data.length < 2) return;
-        const numPolygons = this.readWordFromData(data, 0);
+        const numPolygons = readWord(data, 0);
         __wmfEmfRendererLog("PolyPolygon, numPolygons:", numPolygons);
         if (data.length < 2 + numPolygons * 2) return;
         const pointCounts = [];
         let offset = 2;
         for (let i = 0; i < numPolygons; i++) {
-          pointCounts.push(this.readWordFromData(data, offset));
+          pointCounts.push(readWord(data, offset));
           offset += 2;
         }
         for (let i = 0; i < numPolygons; i++) {
@@ -7237,8 +7155,8 @@ var require_wmfDrawer = __commonJS({
           if (offset + numPoints * 4 > data.length) break;
           this.ctx.beginPath();
           for (let j = 0; j < numPoints; j++) {
-            const x = this.readShortFromData(data, offset);
-            const y = this.readShortFromData(data, offset + 2);
+            const x = readShort(data, offset);
+            const y = readShort(data, offset + 2);
             const transformed = this.coordinateTransformer.transform(x, y, this.ctx.canvas.width, this.ctx.canvas.height);
             if (i === 0 && j < 3) {
               __wmfEmfRendererLog(`    Point ${j}: logical (${x}, ${y}) -> canvas (${transformed.x.toFixed(2)}, ${transformed.y.toFixed(2)})`);
@@ -7257,13 +7175,13 @@ var require_wmfDrawer = __commonJS({
       }
       processTextOut(data) {
         if (data.length < 2) return;
-        const textLength = this.readWordFromData(data, 0);
+        const textLength = readWord(data, 0);
         if (data.length < 2 + textLength + 4) return;
-        let text = this.readStringFromData(data, 2, textLength);
+        let text = readString(data, 2, textLength);
         text = this.mapMathTypeString(text, textLength);
         text = this.mapSymbolString(text);
-        const y = this.readShortFromData(data, 2 + textLength);
-        const x = this.readShortFromData(data, 4 + textLength);
+        const y = readShort(data, 2 + textLength);
+        const x = readShort(data, 4 + textLength);
         let finalX;
         let finalY;
         if (this.textUpdateCp && this.hasValidPosition) {
@@ -7285,27 +7203,13 @@ var require_wmfDrawer = __commonJS({
           this.updateCurrentPositionByText(text);
         }
       }
-      // DBCS CharSet -> TextDecoder 编码标签（非 DBCS 返回 null）
-      getDbcsCharsetLabel(charset) {
-        switch (charset) {
-          case 128:
-            return "shift_jis";
-          case 129:
-            return "euc-kr";
-          case 134:
-            return "gbk";
-          case 136:
-            return "big5";
-          default:
-            return null;
-        }
-      }
+      // The DBCS CharSet -> encoding label map now lives in utils/textCodec (dbcsLabelForCharset)
       processExtTextOut(data) {
         if (data.length < 8) return;
-        const y = this.readShortFromData(data, 0);
-        const x = this.readShortFromData(data, 2);
-        const stringLength = this.readWordFromData(data, 4);
-        const fwOpts = this.readWordFromData(data, 6);
+        const y = readShort(data, 0);
+        const x = readShort(data, 2);
+        const stringLength = readWord(data, 4);
+        const fwOpts = readWord(data, 6);
         let offset = 8;
         const ETO_OPAQUE = 2;
         const ETO_CLIPPED = 4;
@@ -7323,32 +7227,20 @@ var require_wmfDrawer = __commonJS({
         if (data.length >= dxStart + stringLength * 2) {
           const dxSigned = [];
           for (let i = 0; i < stringLength; i++) {
-            dxSigned.push(this.readShortFromData(data, dxStart + i * 2));
+            dxSigned.push(readShort(data, dxStart + i * 2));
           }
           dxList = dxSigned;
         }
         let chars = null;
         let charDx = null;
-        let text = this.readStringFromData(data, offset, stringLength);
-        const charsetLabel = this.getDbcsCharsetLabel(this.currentCharset);
+        let text = readString(data, offset, stringLength);
+        const charsetLabel = dbcsLabelForCharset(this.currentCharset);
         if (charsetLabel && dxList && dxList.some((v) => v === 0)) {
-          try {
-            const runs = [];
-            for (let i = 0; i < stringLength; i++) {
-              if (dxList[i] === 0 && runs.length > 0) {
-                runs[runs.length - 1].bytes.push(rawBytes[i]);
-              } else {
-                runs.push({ bytes: [rawBytes[i]], dx: dxList[i] });
-              }
-            }
-            const decoder = new TextDecoder(charsetLabel);
-            const decoded = runs.map((r) => decoder.decode(Uint8Array.from(r.bytes)));
-            if (decoded.join("").length > 0) {
-              chars = decoded;
-              charDx = runs.map((r) => r.dx);
-              text = chars.join("");
-            }
-          } catch (e) {
+          const merged = mergeDbcsRuns(rawBytes, dxList, charsetLabel);
+          if (merged) {
+            chars = merged.chars;
+            charDx = merged.charDx;
+            text = merged.text;
           }
         }
         text = this.mapMathTypeString(text, stringLength);
@@ -7420,7 +7312,7 @@ var require_wmfDrawer = __commonJS({
       // 重写 Escape 处理方法（标准 WMF 渲染时使用）
       processEscape(data) {
         if (data.length < 2) return;
-        const escapeFunction = this.readWordFromData(data, 0);
+        const escapeFunction = readWord(data, 0);
         __wmfEmfRendererLog("Escape function:", escapeFunction, "(0x" + escapeFunction.toString(16).padStart(4, "0") + ")");
         if (escapeFunction === 15) {
           if (this.isMathTypeComment(data)) {
@@ -7435,7 +7327,7 @@ var require_wmfDrawer = __commonJS({
       }
       extractMathTypeMtef(data) {
         if (!data || data.length < 6) return null;
-        const byteCount = this.readWordFromData(data, 2);
+        const byteCount = readWord(data, 2);
         if (byteCount <= 0 || data.length < 4 + byteCount) return null;
         const commentData = data.slice(4, 4 + byteCount);
         const appsId = "AppsMFCC";
@@ -7455,8 +7347,8 @@ var require_wmfDrawer = __commonJS({
       _consumeAppsMfcc(commentData) {
         let offset = 8;
         if (offset + 10 > commentData.length) return null;
-        const totalLen = this.readDwordFromData(commentData, offset + 2);
-        const dataLen = this.readDwordFromData(commentData, offset + 6);
+        const totalLen = readDword(commentData, offset + 2);
+        const dataLen = readDword(commentData, offset + 6);
         offset += 10;
         while (offset < commentData.length && commentData[offset] !== 0) offset++;
         offset++;

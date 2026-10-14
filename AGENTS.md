@@ -204,12 +204,16 @@ src/
 │   └── icon.png                # Extension icon
 │
 ├── utils/               # Utility modules
+│   ├── binaryReader.js          # Little-endian byte readers shared by all drawers
+│   ├── bitmapSurface.js         # Bitmap landing: host detection + ImageData wrapping
+│   ├── colorUtils.js            # COLORREF / ARGB -> CSS color conversion
 │   ├── constants.js             # Shared file types, signatures, defaults
 │   ├── coordinateTransformer.js # Coordinate transformations
 │   ├── fileTypeDetector.js      # Auto file type detection
 │   ├── gdiObjectManager.js      # GDI object state manager
 │   ├── mathTypeMtefParser.js    # MathType MTEF payload reader
 │   ├── metafileParser.js        # Main parser orchestrator
+│   ├── textCodec.js             # Text decoding (DBCS / ANSI / UTF-16LE) shared by all drawers
 │   └── webviewHtml.ts           # Shared webview HTML builder (extension layer)
 │
 ├── browser.js           # Browser bundle entry (esbuild IIFE, exposes window globals)
