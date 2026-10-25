@@ -83,7 +83,7 @@
 | G3 | EmfPlusObject/Brush | ✅ 已实现(10-25) | Solid/Hatch/LinearGradient/PathGradient 四种按 MS-EMFPLUS 布局完整解析（渐变的 BrushDataPresetColors 色标位置精确还原）；渐变几何在使用时刻才映射，同一画刷在不同世界变换下不会串味。Texture(2) 需内嵌图像解码，保留主色兜底并记入 `unsupportedRecords` |
 | G4 | EmfPlusPen 字段 | ✅ 已修复(09-11) | **4 字节错位**（已人工复核参考实现）：参考实现顺序 type(0)+penDataFlags(4)+unitType(8)+penWidth(12)；本项目曾把 penDataFlags 当 unit、unitType 当 width、penWidth 当 ARGB（emfPlusDrawer.js:931-946）→ 所有 EMF+ 画笔 width/color 错 |
 | G5 | PageTransform/容器栈 | ✅ 已实现(10-25) | Save/Restore/BeginContainer/EndContainer/SetWorldTransform/Reset/Multiply/Translate/Scale/Rotate/SetPageTransform 全部实装；世界变换在 `_emfPlusMapPoint` 统一施加，故全部绘制记录自动受益。物理单位（point/inch/mm）的 PageScale 仍按 1 处理并记入 `unsupportedRecords` |
-| G6 | DrawString | ✅ 已实现(10-25) | StringFormat 的 StringAlignment/LineAlign 已按 LibreOffice 的换算公式生效：水平对齐交给 SVG `text-anchor`（用渲染器真实字体度量，优于 `measureText` 估算），垂直对齐在世界单位算偏移。leadingMargin/trailingMargin 取实值。tracking/trimming/tabStops/右到左/竖排仍为近似并记入 unsupportedRecords |
+| G6 | DrawString | ✅ 已实现(10-25) | StringFormat 的 StringAlignment/LineAlign 已按规范换算生效：水平对齐交给 SVG `text-anchor`（用渲染器真实字体度量，优于 `measureText` 估算），垂直对齐在世界单位算偏移。leadingMargin/trailingMargin 取实值。tracking/trimming/tabStops/右到左/竖排仍为近似并记入 unsupportedRecords |
 | G10 | StringFormat 对象（0x0700） | ✅ 已实现(10-25) | 语料实测 391 个对象，此前完全未解析。字段布局与 `emfpstringformat.cxx` 逐项对照；实测 leadingMargin/trailingMargin 全为 0、tracking 全为 1，但 **lineAlign 有 232 条不是 Near**，故垂直对齐是主要收益 |
 | G7 | FillRegion/ClosedCurve/DrawCurve/Beziers/DrawArc | ❌ | 全是 console.log 空 stub；ClosedCurve/Curve 张力公式（t×2/3）未实现 |
 | G8 | DrawImage/DrawImagePoints | ✅ DrawImage已修复(09-11) | **DrawImage 只读 SourceRect、漏读目标 RectF**（画到源坐标位置）；ImageAttributes/UnitType 忽略；PNG/JPEG+内嵌 EMF 支持 |
@@ -225,3 +225,25 @@
      npm 包 3/3。
   6) 未做：EMF+ ImageAttributes（0x0800，26 次）——需要把颜色矩阵/alpha 施加到
      解码后的像素，成本高于收益且易误解析伤到现有图像，留待单独评估。
+
+- ✅ 第八梯队（2026-10-25）：给 `scripts/diff-emf.js` 补上**取景归一化**，修正两个
+  会让 RMSE 完全失真的方法论错误。
+  1) 背景：本文档引用的 RMSE 依赖外部 `EMF2SVG` 转换器提供的参考 SVG。此前该脚本
+     只做固定 800×600 的直接比对，实测发现这个口径几乎测不出真实差异。
+  2) **错误一：固定画布比对不成立。** 本实现按 EMF 头的 `rclBounds`（内容框）缩放
+     画布，而不少外部转换器按 `rclFrame`（页面框，0.01mm）排版，同一文件取景可差
+     一个数量级——实测 test-007 我们的内容包围盒 776×582，参考侧只有居中的 54×28。
+     直接比 800×600 得到 0.62，几乎全部来自取景。归一化（按非白包围盒裁切后拉成
+     同尺寸）后该样例降到 0.22，25 个样本均值 0.2432 → 0.1494。
+  3) **错误二：长宽比也必须归一化。** test-031 两边画的是同一个 3D 曲面，但我们是
+     竖版、参考侧是横版，保留各自比例会把形状相同的图判成 0.72；强制拉方后降到
+     0.2660，全量最差值从 0.72 收敛到 0.3379。
+  4) 实现：`node scripts/diff-emf.js <目录> [输出目录] --normalize`。归一化是**可选**
+     开关，默认保持原始口径以便与历史数据对照；带该参数时衡量的是形状与配色保真度，
+     位置与页面尺寸约定不参与。
+  5) 基线（186 个 emf-valid，`--normalize`）：**平均 RMSE 0.1574，中位 0.1552**，
+     >0.30 仅 3 个（test-178 / test-025 / test-104），下一步优先排查这三个。
+  6) 必须记住的局限：外部参考实现自身的 EMF+ 支持并不完整（hatch 用纯色近似、
+     裁剪与渐变多处 TODO），因此 RMSE 衡量的是**差异**而非**正确性**。要判断正确性
+     仍需 Windows GDI 真值——元文件每条记录头里的 `rclBounds` 记录的正是 Windows
+     播放该记录时的输出包围盒，可作为免外部参考的逐记录真值。

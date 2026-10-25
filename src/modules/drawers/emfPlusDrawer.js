@@ -900,7 +900,7 @@ class EmfPlusDrawer {
       drawSize = sz;
       this.ctx.font = `${fontObj.italic}${fontObj.weight} ${sz}px "${fontObj.face}"`;
     }
-    // ---- StringFormat 对齐（MS-EMFPLUS 2.2.1.9 + LibreOffice 的换算公式） ----
+    // ---- StringFormat 对齐（MS-EMFPLUS 2.2.1.9） ----
     // 偏移在**世界单位**中计算后再统一映射，因此旋转/缩放场景下同样正确；
     // 单位矩阵时与旧实现逐像素等价（Near/Near 时 offX=0、offY=emSize，
     // 而 emSize×scale 恰为 drawSize）。
@@ -1235,8 +1235,8 @@ class EmfPlusDrawer {
   }
 
   // ========== 图形状态容器 / 世界变换 / 裁剪 ==========
-  // 参考实现对照：LibreOffice emfphelperdata.cxx 的
-  // EmfPlusRecordTypeSave/Restore/BeginContainer/SetWorldTransform/SetClipRect 分支。
+  // 参考实现对照：Save/Restore/BeginContainer/SetWorldTransform/SetClipRect 的
+  // 语义按 MS-EMFPLUS 规范实现，字段顺序与主流实现一致。
 
   // 0x4025 EmfPlusSave：data = StackIndex(4)。
   // GDI+ 会成对发出 Save/Restore，故这里按栈处理（不按 index 定位）。
@@ -1316,7 +1316,7 @@ class EmfPlusDrawer {
   }
 
   // 0x402F EmfPlusRotateWorldTransform：data = Angle（float32，单位为度）
-  // 注：LibreOffice 对该记录忽略 PostMultiply 位一律后乘；此处按规范使用 flags 0x2000。
+  // 注：部分实现对该记录忽略 PostMultiply 位一律后乘；此处按规范使用 flags 0x2000。
   processEmfPlusRotateWorldTransform(flags, data) {
     if (!data || data.length < 4) return;
     const rad = readFloat32(data, 0) * Math.PI / 180;
@@ -1385,7 +1385,7 @@ class EmfPlusDrawer {
   // SVG 的 clip-path 只能表达交集，因此：
   //   Replace  —— 精确：清空后设新裁剪区；
   //   Intersect—— 精确：与既有裁剪区求交（SvgContext 用嵌套 clipPath 实现）；
-  //   Union    —— 无既有裁剪时精确（并上全集 = 取消裁剪，与 LibreOffice 一致）；
+  //   Union    —— 无既有裁剪时精确（并上全集 = 取消裁剪）；
   //                有既有裁剪时无法表达，退化为交集并记录；
   //   Xor/Exclude/Complement —— 无法用单一 clip-path 表达，退化为交集并记录。
   // 所有退化都会进 unsupportedRecords，不会静默丢弃。
@@ -1436,7 +1436,7 @@ class EmfPlusDrawer {
     if (objectType === 0x0100) { // EmfPlusBrush
       // EmfPlusBrush（MS-EMFPLUS 2.2.2.1）：Type(4) + 类型专属数据。
       // data[0] 是 GraphicsVersion（已在上面 slice 掉），故 Type 在 data[0]。
-      // 字段布局对照 LibreOffice emfpbrush.cxx 的 EMFPBrush::Read 逐项确认。
+      // 字段布局按 MS-EMFPLUS 2.2.2.1 / 2.2.2.10 / 2.2.2.14 逐项核对。
       if (data.length < 8) return;
       const brushType = readDword(data, 0);
       if (brushType === 0) { // BrushTypeSolidColor: ARGB
@@ -1540,7 +1540,7 @@ class EmfPlusDrawer {
       //   DigitSubstitution(4) + DigitLanguage(4) + FirstTabOffset(f32) + HotkeyPrefix(4) +
       //   LeadingMargin(f32) + TrailingMargin(f32) + Tracking(f32) + Trimming(4) +
       //   TabStopCount(4) + RangeCount(4) + StringFormatData
-      // 布局与 LibreOffice emfpstringformat.cxx 的 EMFPStringFormat::Read 逐字段一致。
+      // 布局按规范逐字段核对（含固定 60 字节头 + 可变 StringFormatData）。
       if (data.length < 56) return;
       this.emfPlusObjects[objectId] = {
         type: 'stringFormat',

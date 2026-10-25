@@ -77,8 +77,39 @@ function compare(a, b) {
   }
 }
 
-const input = process.argv[2];
-const outDir = process.argv[3] || path.join(__dirname, '..', 'out', 'emf-diff');
+// 取景归一化（--normalize）。
+//
+// 本实现按 EMF 头的 rclBounds（内容框）缩放画布，而不少外部转换器按 rclFrame
+// （页面框，单位 0.01mm）排版，同一文件的取景可以差一个数量级：实测某样例我们的
+// 内容包围盒是 776×582，参考侧只有居中的 54×28。这种情况下直接比固定 800×600，
+// 差异几乎全部来自取景而不是渲染，测出来的 RMSE 没有意义（该样例 0.62）。
+//
+// 归一化做法：各自按非白包围盒裁切，再**强制**拉伸成同尺寸方块。
+// 长宽比也必须一起归一化——两边可能画的是同一个图形、仅是页面比例不同，
+// 若保留各自比例，形状相同的图会被判成 0.7 量级的差异（实测 0.72 → 0.27）。
+//
+// 取舍：--normalize 衡量的是**形状与配色保真度**，位置/页面尺寸约定不参与；
+// 不加该参数时仍按原始 800×600 直接比较，便于与历史数据对照。
+const NORM = 400;
+
+function normalizePng(src, dst) {
+  try {
+    execFileSync('magick', [src, '-fuzz', '2%', '-trim', '+repage',
+      '-resize', NORM + 'x' + NORM + '!',
+      '-background', 'white', '-gravity', 'center', '-extent', NORM + 'x' + NORM,
+      dst], { stdio: 'ignore', timeout: 60000 });
+    return true;
+  } catch (e) { return false; }
+}
+
+const argv = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const NORMALIZE = process.argv.includes('--normalize');
+const input = argv[0];
+const outDir = argv[1] || path.join(__dirname, '..', 'out', 'emf-diff');
+if (!input) {
+  console.error('用法: node scripts/diff-emf.js <emf文件或目录> [输出目录] [--normalize]');
+  process.exit(1);
+}
 fs.mkdirSync(outDir, { recursive: true });
 
 // 外部转换器已知缺陷样本：其输出本身错误（如整幅全黑/全白），
@@ -115,8 +146,18 @@ for (const f of files) {
   if (!rasterize(oursSvg, oursPng) || !rasterize(refSvg, refPng)) {
     results.push({ base, rmse: 'N/A', note: 'raster-fail', excluded }); continue;
   }
-  const rmse = compare(oursPng, refPng);
-  results.push({ base, rmse, note: ours.fileType + '/' + ours.records + 'rec' + (excluded ? ' [ref缺陷,排除]' : ''), excluded });
+  let cmpA = oursPng, cmpB = refPng;
+  if (NORMALIZE) {
+    const normA = path.join(outDir, base + '.ours.norm.png');
+    const normB = path.join(outDir, base + '.ref.norm.png');
+    if (normalizePng(oursPng, normA) && normalizePng(refPng, normB)) { cmpA = normA; cmpB = normB; }
+  }
+  const rmse = compare(cmpA, cmpB);
+  results.push({
+    base, rmse,
+    note: ours.fileType + '/' + ours.records + 'rec' + (NORMALIZE ? ' [归一化]' : '') + (excluded ? ' [ref缺陷,排除]' : ''),
+    excluded,
+  });
   // 保留中间 SVG 便于人工比对
 }
 
