@@ -194,6 +194,7 @@ src/
 │   │   ├── emfDrawer.js        # EMF renderer
 │   │   └── emfPlusDrawer.js    # EMF+ renderer
 │   │
+│   ├── pdfContext.js   # Canvas2D-compatible context that emits PDF (shared with website)
 │   └── svgContext.js   # Canvas2D-compatible context that emits SVG
 │
 ├── providers/           # VSCode provider implementations
@@ -232,7 +233,7 @@ src/
 #### VSCode Integration
 - **CustomEditorProvider**: Seamless integration with VSCode editor system
 - **Commands**: Separate command handlers in `commands/` directory
-- **WebView**: Secure webview with base64 data embedding (via `utils/webviewHtml.ts`)
+- **WebView**: File URI handed to the webview (it `fetch`es the bytes) — no base64 inline unless the source is not a `file:` URI (via `utils/webviewHtml.ts`)
 - **Context Management**: Proper VSCode extension context handling
 
 #### Build System
@@ -246,7 +247,7 @@ src/
 - **extension.ts**: Main entry point, registers providers and commands
 - **wmfEditorProvider.ts**: Custom editor provider for `.wmf`/`.emf` files
 - **previewCommand.ts**: Preview command implementation
-- **utils/webviewHtml.ts**: Shared "read file → base64 → inject into template" logic
+- **utils/webviewHtml.ts**: Shared "file URI + nonce → fill template" logic (base64 fallback for non-`file:` URIs)
 
 #### Parsing Layer (JavaScript)
 - **FileTypeDetector**: Auto-detects WMF, EMF, EMF+ format from binary signature
@@ -332,8 +333,8 @@ It runs with `noImplicitAny: false` on purpose: annotating every internal parser
 - **watch**: Watch mode for development
 
 ### WebView Security
-- Use `localResourceRoots` for secure resource loading
-- Handle base64 data embedding properly
+- Use `localResourceRoots` for secure resource loading — the previewed file's directory must be added (see `getWebviewOptions(context, fileUri)`)
+- The template ships a nonce-based CSP; every `<script>` needs `nonce="${nonce}"`
 - Enable scripts with caution (`enableScripts: true`)
 - WebView HTML located in `src/resources/webview.html`
 - Parser script loaded from `out/metafileParser.browser.js`
@@ -372,7 +373,7 @@ It runs with `noImplicitAny: false` on purpose: annotating every internal parser
 ### Common Patterns
 - **File Operations**: `fs.promises.readFile()` in the extension layer (avoid `readFileSync`, it blocks the extension host); `readFileSync` is fine inside synchronous parsers/drawers
 - **Path Operations**: Use `path.join()` for cross-platform compatibility
-- **Base64 Handling**: Convert binary data with `.toString('base64')`
+- **Binary Delivery**: Hand the webview a `file:` URI (`asWebviewUri`) and let it `fetch`; base64 (`.toString('base64')`) is only the fallback for non-`file:` schemes
 - **WebView HTML**: Use `utils/webviewHtml.ts` rather than re-implementing template injection
 - **Resource Loading**: Use `asWebviewUri()` for secure webview resource loading
 - **Module Bundling**: Just add a `require`; esbuild inlines it automatically

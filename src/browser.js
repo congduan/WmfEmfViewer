@@ -13,6 +13,7 @@ const WmfDrawer = require('./modules/drawers/wmfDrawer');
 const EmfDrawer = require('./modules/drawers/emfDrawer');
 const EmfPlusDrawer = require('./modules/drawers/emfPlusDrawer');
 const SvgContext = require('./modules/svgContext');
+const { PdfContext, buildPdfFromContent } = require('./modules/pdfContext');
 const MetafileParser = require('./utils/metafileParser');
 
 // 在浏览器环境中导出全局变量
@@ -33,4 +34,7 @@ if (typeof window !== 'undefined') {
     g.EmfDrawer = EmfDrawer;
     g.EmfPlusDrawer = EmfPlusDrawer;
     g.SvgContext = SvgContext;
+    // PDF 导出上下文：webview 与 website 共用同一实现（不再各自维护一份副本）
+    g.PdfContext = PdfContext;
+    g.buildPdfFromContent = buildPdfFromContent;
 }

@@ -36,13 +36,14 @@ export class WmfEditorProvider implements vscode.CustomEditorProvider {
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken
     ): Promise<void> {
-        webviewPanel.webview.options = getWebviewOptions(this.context);
+        // 资源根需包含被预览文件所在目录：webview 通过 URI 自行 fetch 二进制
+        webviewPanel.webview.options = getWebviewOptions(this.context, document.uri);
 
         // 数据注入逻辑与预览命令共用同一实现（见 utils/webviewHtml）
         webviewPanel.webview.html = await buildWebviewHtml(
             this.context,
             webviewPanel.webview,
-            document.uri.fsPath
+            document.uri
         );
     }
 

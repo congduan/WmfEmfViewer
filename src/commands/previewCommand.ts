@@ -11,12 +11,12 @@ export function registerPreviewCommand(context: vscode.ExtensionContext): vscode
             'wmfPreview',
             'WMF Preview',
             vscode.ViewColumn.One,
-            getWebviewOptions(context)
+            getWebviewOptions(context, uri)
         );
 
         try {
-            // 与自定义编辑器共用同一套注入逻辑（异步读取，不阻塞扩展主线程）
-            panel.webview.html = await buildWebviewHtml(context, panel.webview, uri.fsPath);
+            // 与自定义编辑器共用同一套注入逻辑（webview 侧以 URI fetch 文件）
+            panel.webview.html = await buildWebviewHtml(context, panel.webview, uri);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             console.error('Error in preview:', message);

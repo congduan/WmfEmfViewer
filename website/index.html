@@ -442,7 +442,6 @@
     <input type="file" id="fileInput" hidden accept=".wmf,.emf" />
 
     <script src="metafileParser.browser.js"></script>
-    <script src="pdfContext.js"></script>
     <script>
       "use strict";
 
@@ -700,7 +699,9 @@
       function exportToPDF() {
         try {
           if (typeof PdfContext === "undefined") {
-            throw new Error("PdfContext is not defined (pdfContext.js not loaded)");
+            throw new Error(
+              "PdfContext is not defined — the browser bundle (metafileParser.browser.js) may have failed to load",
+            );
           }
           const pdfCtx = new PdfContext();
           const drawer = createDrawer(pdfCtx, currentRenderFileType);

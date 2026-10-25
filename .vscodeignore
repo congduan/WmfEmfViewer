@@ -17,6 +17,9 @@ screenshots/
 coverage/
 node_modules/
 .workbuddy/
+# 本地参考源码（未跟踪）与系统垃圾文件，不应进入发布产物
+.reference/
+.DS_Store
 output/
 # 本地回归/调试输出（与 .gitignore 同步，否则会混入 120MB+ 的图片产物）
 test-107.emf/

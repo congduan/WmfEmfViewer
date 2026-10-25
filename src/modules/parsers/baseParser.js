@@ -1,7 +1,9 @@
 // 基础解析器类 - 提供共享的字节读取方法
 class BaseParser {
     constructor(data) {
-        this.data = new Uint8Array(data);
+        // 已是 Uint8Array 时直接复用视图：`new Uint8Array(typedArray)` 会整份复制，
+        // 大文件（十几 MB）会白白多占一倍内存。下游对 this.data 只读。
+        this.data = data instanceof Uint8Array ? data : new Uint8Array(data);
         this.offset = 0;
     }
 

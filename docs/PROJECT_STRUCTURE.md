@@ -75,7 +75,7 @@ Main source code directory. See detailed structure below.
 Sample WMF and EMF files used by both test entry points. On a developer machine with the full corpora present this is 403 `.wmf` + 229 `.emf`; the committed subset is 222 files. The large corpora (`emf-corpus/`, `wmf-corpus/`, `sample-wmf/`) are gitignored and downloaded/generated locally.
 
 ### `/website` - Static Site
-Static deployment of the same rendering engine. `website/metafileParser.browser.js` is copied here by the build script and is gitignored; `website/pdfContext.js` and `website/index.html` are hand-written.
+Static deployment of the same rendering engine. `website/metafileParser.browser.js` is copied here by the build script and is gitignored; `website/index.html` is hand-written. `PdfContext` used to live here as `website/pdfContext.js` — it now lives in `src/modules/pdfContext.js` and ships inside the bundle.
 
 ### `/out` - Build Output
 Compiled JavaScript output (gitignored). Contains:

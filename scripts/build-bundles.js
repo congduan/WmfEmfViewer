@@ -61,6 +61,9 @@ async function buildBrowserBundle() {
         define: {
             'console.log': '__wlog' // 编译期替换：不影响字符串/注释，console.error/warn 保留
         },
+        // 压缩：315KB -> ~126KB，减少 webview 脚本解析时间与首屏延迟
+        // 需要可读产物调试时：WMF_BUILD_NO_MINIFY=1 npm run build:bundle
+        minify: !process.env.WMF_BUILD_NO_MINIFY,
         legalComments: 'none',
         logLevel: 'info'
     });
@@ -88,6 +91,7 @@ async function buildNpmPackage() {
             // 库默认静默；宿主通过 setDebugEnabled(true) 开启
             'console.log': '__wmfEmfRendererLog'
         },
+        minify: !process.env.WMF_BUILD_NO_MINIFY,
         legalComments: 'none',
         logLevel: 'info'
     });
