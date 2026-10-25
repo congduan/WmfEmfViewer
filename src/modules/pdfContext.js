@@ -7,6 +7,8 @@
 // 坐标系：PDF 原点在左下角、y 轴向上，Canvas 原点在左上角、y 轴向下，
 // 因此所有点经 CTM 变换后还要做一次 y 翻转（见 _emitPt）。
 
+const textMetrics = require('../utils/textMetrics');
+
 class PdfContext {
     constructor() {
         // style 对象允许绘制器（baseDrawer.initCanvas）设置 CSS 尺寸而不抛错
@@ -339,7 +341,11 @@ class PdfContext {
     }
 
     measureText(text) {
-        return { width: this._getFontSize() * 0.6 * text.length };
+        const value = String(text == null ? '' : text);
+        // 与 SvgContext 共用度量源：PDF 文本推进同样依赖真实宽度
+        const measured = textMetrics.measureWidth(this.font || '12px sans-serif', value);
+        if (measured !== null) return { width: measured };
+        return { width: this._getFontSize() * 0.6 * value.length };
     }
 
     _getFontSize() {
@@ -512,5 +518,8 @@ function buildPdfFromContent(contentStream, width, height, images) {
     }
     return pdfBytes;
 }
+
+// 与 SvgContext.setMeasureProvider 同一个开关（两者共享 src/utils/textMetrics）。
+PdfContext.setMeasureProvider = (fn) => textMetrics.setMeasureProvider(fn);
 
 module.exports = { PdfContext, buildPdfFromContent };

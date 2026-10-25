@@ -35,6 +35,20 @@ const EmfPlusDrawer = require('../../src/modules/drawers/emfPlusDrawer');
 const SvgContext = require('../../src/modules/svgContext');
 const MetafileParser = require('../../src/utils/metafileParser');
 
+// Node 侧默认启用系统字体度量（纯 JS 解析 head/hhea/hmtx/cmap，无 native 依赖）。
+// 影响面：SVG / PDF 文本推进宽度、WMF TA_UPDATECP 文本序列的下一个位置。
+// 度量索引按需惰性建立（首次遇到文本时），字体名找不到时自动回退到 0.6em 估算。
+// 环境变量 WMF_EMF_SYSTEM_FONTS=0 可整体关闭。
+if (typeof process !== 'undefined' && process.versions && process.versions.node
+    && process.env.WMF_EMF_SYSTEM_FONTS !== '0') {
+    try {
+        const fontFileMetrics = require('../../src/utils/fontFileMetrics');
+        SvgContext.setMeasureProvider(fontFileMetrics.createMeasureProvider());
+    } catch (error) {
+        // 无字体目录 / 权限受限：保持估算回退，不影响渲染
+    }
+}
+
 /**
  * Enable/disable verbose debug logging from parsers/drawers.
  * Disabled by default for a quiet library experience.

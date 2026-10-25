@@ -5,6 +5,8 @@
 /** PNG CRC32 查表（进程内惰性初始化）@type {Uint32Array|null} */
 let crcTableCache = null;
 
+const textMetrics = require('../utils/textMetrics');
+
 class SvgContext {
     constructor() {
         this.canvas = { width: 0, height: 0, style: {} };
@@ -566,10 +568,16 @@ class SvgContext {
     }
 
     measureText(text) {
-        // 粗测文本宽度（0.6 × 字号 × 字符数），用于对齐计算
+        const value = String(text == null ? '' : text);
+        // 真实度量可用时优先使用（宿主字体引擎或注入的 provider）：
+        // WMF 的 TA_UPDATECP 文本序列靠这个宽度推进"当前位置"，估算会让后续
+        // 每个字符串整体错位；对齐/锚点则不受影响。
+        const measured = textMetrics.measureWidth(this.font || '12px sans-serif', value);
+        if (measured !== null) return { width: measured };
+        // 回退：粗测（0.6 × 字号 × 字符数），保持既有零依赖行为
         const m = /([\d.]+)\s*px/.exec(this.font || '');
         const size = m ? parseFloat(m[1]) : 12;
-        return { width: size * 0.6 * String(text).length };
+        return { width: size * 0.6 * value.length };
     }
 
     fillText(text, x, y, transformMatrix) {
@@ -952,5 +960,9 @@ class SvgContext {
         );
     }
 }
+
+// 注入真实文本度量源（Node 侧可接系统字体 / 宿主 canvas 度量）。
+// 不注入时：浏览器自动走宿主 canvas，Node 回退到 0.6em 估算（行为不变）。
+SvgContext.setMeasureProvider = (fn) => textMetrics.setMeasureProvider(fn);
 
 module.exports = SvgContext;

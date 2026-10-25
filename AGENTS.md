@@ -46,6 +46,14 @@ npm run lint
 # Type check JS with checkJs (see tsconfig.check.json)
 npm run typecheck
 
+# Rendering-fidelity benchmark: per-record geometric conformance against the
+# rclBounds each EMF record carries (the metafile's own truth, no reference images)
+npm run bench
+npm run bench:canvas   # same corpus through @napi-rs/canvas (real font metrics)
+npm run bench:both     # both backends side by side (backend-independence check)
+npm run bench:metrics  # system-font metric parser vs host engine accuracy
+npm run bench:wmf      # blast radius of real text metrics on WMF output
+
 # Smoke tests against the built browser bundle (out/) 
 # + full-corpus snapshot regression against src/
 npm run test
@@ -154,6 +162,8 @@ WmfEmfViewer/
 ├── packages/
 │   └── wmf-emf-renderer/     # npm package (entry.js + index.d.ts + generated index.js)
 │
+├── bench/                    # Fidelity benchmarks (bounds.js: rclBounds conformance)
+│
 ├── scripts/                  # Development scripts (build + local analysis/debug tools)
 │   ├── build-bundles.js      # THE build script (esbuild; browser + npm)
 │   ├── install.sh
@@ -216,6 +226,8 @@ src/
 │   ├── nestedMetafilePlayer.js  # Nested metafile playback (WMFC / EMF+ comments / EMF+ images)
 │   ├── surface.js               # Surface layer: DPR, canvas sizing/styles, bitmap landing
 │   ├── textCodec.js             # Text decoding (DBCS / ANSI / UTF-16LE) shared by all drawers
+│   ├── textMetrics.js           # Pluggable real text metrics for Svg/Pdf contexts (host canvas / injected)
+│   ├── fontFileMetrics.js       # Node-only: zero-dep TTF/TTC metric parser (head/hhea/hmtx/cmap/name)
 │   └── webviewHtml.ts           # Shared webview HTML builder (extension layer)
 │
 ├── browser.js           # Browser bundle entry (esbuild IIFE, exposes window globals)
