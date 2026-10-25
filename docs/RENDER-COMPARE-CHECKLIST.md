@@ -81,10 +81,11 @@
 | G2 | 记录头/续记录 | ⚠️ | Type/Flags/Size/DataSize 切分一致；**Continued（CONTINUABLE 0x8000/TotalObjectSize）未拼接**，超大对象错位 |
 | G3 | EmfPlusObject/Brush | ⚠️ | ObjectId 位拆分一致；**仅 Solid，其余类型启发式取首个不透明 ARGB，Hatch(2) 漏掉**（emfPlusDrawer.js:918-928） |
 | G4 | EmfPlusPen 字段 | ✅ 已修复(09-11) | **4 字节错位**（已人工复核参考实现）：参考实现顺序 type(0)+penDataFlags(4)+unitType(8)+penWidth(12)；本项目曾把 penDataFlags 当 unit、unitType 当 width、penWidth 当 ARGB（emfPlusDrawer.js:931-946）→ 所有 EMF+ 画笔 width/color 错 |
-| G5 | PageTransform/容器栈 | ❌ | SetPageTransform/Save/Restore/BeginContainer 全为空 stub（emfPlusDrawer.js:806-866）；参考实现应用 unit 缩放与容器 dst/src 比例 |
+| G5 | PageTransform/容器栈 | ✅ 已实现(10-25) | Save/Restore/BeginContainer/EndContainer/SetWorldTransform/Reset/Multiply/Translate/Scale/Rotate/SetPageTransform 全部实装；世界变换在 `_emfPlusMapPoint` 统一施加，故全部绘制记录自动受益。物理单位（point/inch/mm）的 PageScale 仍按 1 处理并记入 `unsupportedRecords` |
 | G6 | DrawString | ⚠️ | 布局与 flags&0x8000 取色一致；字体度量用 `_emfPlusUnitsToPx` 近似，无 StringFormat/字距 |
 | G7 | FillRegion/ClosedCurve/DrawCurve/Beziers/DrawArc | ❌ | 全是 console.log 空 stub；ClosedCurve/Curve 张力公式（t×2/3）未实现 |
 | G8 | DrawImage/DrawImagePoints | ✅ DrawImage已修复(09-11) | **DrawImage 只读 SourceRect、漏读目标 RectF**（画到源坐标位置）；ImageAttributes/UnitType 忽略；PNG/JPEG+内嵌 EMF 支持 |
+| G9 | 裁剪记录族（0x4031–0x4035） | ⚠️ 已实现(10-25) | ResetClip/SetClipRect/SetClipPath 精确（SvgContext 用嵌套 clipPath 表达交集）；CombineMode 仅 Replace/Intersect 精确，Union 无既有裁剪时精确、否则退化，Xor/Exclude/Complement 退化为交集——全部记入 `drawer.unsupportedRecords`。SetClipRegion 因 Region 对象未解析仍为近似 |
 
 ## H. WMF（wmfDrawer.js + wmfParser.js）
 
@@ -145,3 +146,28 @@
   3) RMSE 0.1198→0.1153；>0.3 仅剩 test-176（EXTTEXTOUTA 文本度量）。单文件：
     test-150 0.341→0.195、test-186 0.198→0.060、test-182 0.335→0.254、test-045/048 0.138→0.078。
     快照更新（描边合并进路径，SVG 更小）。
+- ✅ 第五梯队（2026-10-25）：SvgContext 表达力 + EMF+ 状态栈/变换/裁剪。
+  1) SvgContext 补齐 Canvas 子集：`createLinearGradient` / `createRadialGradient` /
+     `createPattern`、`translate` / `rotate` / `transform` / `setTransform` / `resetTransform`
+     （用嵌套 `<g transform>` 实现，坐标仍由绘制层烘焙）、`clip()` 改为**嵌套 clipPath** 表达
+     交集（原实现直接覆盖，连续 IntersectClipRect 会丢失累积裁剪）、`quadraticCurveTo` /
+     `arcTo` / `strokeText` / `clearRect`、`setLineDash` 的 offset、`globalAlpha` →
+     fill/stroke-opacity、`letterSpacing` / `wordSpacing`。
+     除 clip 外全部是「缺省时不输出」的增补，不改动既有输出。
+  2) EMF+ 的 12 条变换/容器记录（0x4025–0x4030）与 5 条裁剪记录（0x4031–0x4035）
+     从 `null` 改为实装。世界变换只在 `_emfPlusMapPoint` 施加一次，故 40+ 个绘制处理器
+     无需改动；单位矩阵走恒等路径，既有快照逐字节不变。
+  3) 顺带修正两处真实 bug：
+     - `_emfPlusComposeMatrix` 的 Prepend/Append 语义反了（Append 应为 A←B·A）。
+       修正前 test-038 的 12 个角度标签绕原点公转并飞出画布；修正后锚点恒定为 (8000,300)，
+       仅字形原地旋转——这才是该测试的意图。
+     - `_emfPlusUnitsToPx` 用 x 轴投影量字高，世界变换含旋转时字号随 cosθ 抖动
+       （90° 时投影为 0）；改为取映射向量的长度。
+  4) 门禁：快照 632/632。clip 嵌套使 112 个文件 SVG 结构变化，经 rsvg 光栅化后
+     RMSE 全部 = 0（纯结构修正）；test-038 及其损坏副本为真实修复
+     （旧输出 "Clip/Intersect/Union/XOR" 四列完全未裁剪、旋转标签堆叠在同一点）。
+     语料 EMF+ 记录实测覆盖：SetWorldTransform×3 / Translate×48 / Rotate×48 /
+     SetPageTransform×3 / ResetClip×14 / SetClipRect×24 / SetClipPath×10（集中于 1 个文件）。
+  5) 待办：Save / Restore / BeginContainer / EndContainer / ScaleWorldTransform /
+     DrawDriverString 在语料中**无样本**，目前只有实现、没有回归验证；
+     EMF+ 渐变刷的渲染接入是下一步（本期已备好 SvgContext 渐变 API）。

@@ -58,25 +58,25 @@ const EMF_PLUS_RECORD_HANDLERS = {
   0x4024: null, // EmfPlusSetCompositingQuality
 
   // ========== 图形状态容器/变换 ==========
-  0x4025: null,                  // EmfPlusSave
-  0x4026: null,               // EmfPlusRestore
-  0x4027: null,        // EmfPlusBeginContainer
-  0x4028: null, // EmfPlusBeginContainerNoParams
-  0x4029: null,          // EmfPlusEndContainer
-  0x402A: null,     // EmfPlusSetWorldTransform
-  0x402B: null,   // EmfPlusResetWorldTransform
-  0x402C: null, // EmfPlusMultiplyWorldTransform
-  0x402D: null, // EmfPlusTranslateWorldTransform
-  0x402E: null,   // EmfPlusScaleWorldTransform
-  0x402F: null,  // EmfPlusRotateWorldTransform
-  0x4030: null,      // EmfPlusSetPageTransform
+  0x4025: 'processEmfPlusSave',                   // EmfPlusSave
+  0x4026: 'processEmfPlusRestore',                // EmfPlusRestore
+  0x4027: 'processEmfPlusBeginContainer',         // EmfPlusBeginContainer
+  0x4028: 'processEmfPlusBeginContainerNoParams', // EmfPlusBeginContainerNoParams
+  0x4029: 'processEmfPlusEndContainer',           // EmfPlusEndContainer
+  0x402A: 'processEmfPlusSetWorldTransform',      // EmfPlusSetWorldTransform
+  0x402B: 'processEmfPlusResetWorldTransform',    // EmfPlusResetWorldTransform
+  0x402C: 'processEmfPlusMultiplyWorldTransform', // EmfPlusMultiplyWorldTransform
+  0x402D: 'processEmfPlusTranslateWorldTransform', // EmfPlusTranslateWorldTransform
+  0x402E: 'processEmfPlusScaleWorldTransform',    // EmfPlusScaleWorldTransform
+  0x402F: 'processEmfPlusRotateWorldTransform',   // EmfPlusRotateWorldTransform
+  0x4030: 'processEmfPlusSetPageTransform',       // EmfPlusSetPageTransform
 
   // ========== 裁剪 ==========
-  0x4031: null,          // EmfPlusResetClip
-  0x4032: null,        // EmfPlusSetClipRect
-  0x4033: null,        // EmfPlusSetClipPath
-  0x4034: null,      // EmfPlusSetClipRegion
-  0x4035: null,         // EmfPlusOffsetClip
+  0x4031: 'processEmfPlusResetClip',          // EmfPlusResetClip
+  0x4032: 'processEmfPlusSetClipRect',        // EmfPlusSetClipRect
+  0x4033: 'processEmfPlusSetClipPath',        // EmfPlusSetClipPath
+  0x4034: 'processEmfPlusSetClipRegion',      // EmfPlusSetClipRegion
+  0x4035: 'processEmfPlusOffsetClip',         // EmfPlusOffsetClip
 
   // ========== 其他 ==========
   0x4037: null,       // EmfPlusStrokeFillPath (非标准)
@@ -98,6 +98,24 @@ class EmfPlusDrawer {
     this.strokeColor = '#000000'; // 默认描边颜色
     this.lineWidth = 1; // 默认线宽
     this.emfPlusObjects = {}; // EMF+ 对象表（ObjectId -> {type, color, width, ...}）
+
+    // ---- 世界变换 / 状态栈 / 裁剪 ----
+    // 仿射矩阵 [a,b,c,d,e,f]（x' = a·x + c·y + e，y' = b·x + d·y + f），
+    // 只在 _emfPlusMapPoint 施加一次，故所有绘制记录自动获得正确坐标，
+    // 无需在 40+ 个记录处理器里各自换算。
+    this.emfPlusMatrix = [1, 0, 0, 1, 0, 0];
+    this.emfPlusPageScale = 1;        // EmfPlusSetPageTransform 的页面缩放
+    this.emfPlusStateStack = [];      // EmfPlusSave / EmfPlusRestore
+    this.emfPlusContainerStack = [];  // EmfPlusBeginContainer / EndContainer
+    // 无法用 SVG 精确表达的记录（按出现次数聚合），draw() 收尾时一次性上报，
+    // 避免「静默丢弃」——这是与 GDI 真值比对时定位差异的依据。
+    this.unsupportedRecords = [];
+  }
+
+  // 记录一条无法精确实现的语义（按 key 聚合计数）
+  _noteUnsupported(key) {
+    const i = this.unsupportedRecords.indexOf(key);
+    if (i < 0) this.unsupportedRecords.push(key);
   }
 
   // ---- EMF+ 辅助方法 ----
@@ -149,10 +167,54 @@ class EmfPlusDrawer {
     return { color: '#000000', width: 1 };
   }
 
-  // 坐标映射（EMF+ 坐标通常与 EMF 设备坐标一致，经由 coordinateTransformer）
+  // 坐标映射：世界变换 → 页面缩放 → coordinateTransformer（mapMode/window/viewport）。
+  // 单位矩阵且页面缩放为 1 时严格走恒等路径（不做乘法），保证既有快照逐字节不变。
   _emfPlusMapPoint(x, y) {
-    const t = this.coordinateTransformer.transform(x, y);
-    return t;
+    const m = this.emfPlusMatrix;
+    let px = x, py = y;
+    if (m[0] !== 1 || m[1] !== 0 || m[2] !== 0 || m[3] !== 1 || m[4] !== 0 || m[5] !== 0) {
+      px = m[0] * x + m[2] * y + m[4];
+      py = m[1] * x + m[3] * y + m[5];
+    }
+    if (this.emfPlusPageScale !== 1) {
+      px *= this.emfPlusPageScale;
+      py *= this.emfPlusPageScale;
+    }
+    return this.coordinateTransformer.transform(px, py);
+  }
+
+  // 世界变换矩阵复合（列向量约定：p' = A·p，A = [[a,c,e],[b,d,f],[0,0,1]]）。
+  // GDI+ 的 PostMultiply（flags 0x2000，Append）语义是「新变换作用在已有变换之后」，
+  // 即 p'' = B·(A·p)，故 A ← B·A；否则（Prepend）A ← A·B。
+  // 两者不可互换：对「先 Rotate 再 Translate」的序列，Append 得到 T·R（锚点保持不动、
+  // 字形原地旋转），Prepend 得到 R·T（锚点绕原点公转）——结果是完全不同的图形。
+  _emfPlusComposeMatrix(m, post) {
+    if (!m || m.length < 6 || m.some(v => !isFinite(v))) return;
+    const t = this.emfPlusMatrix;   // A：已有变换
+    const b = m;                    // B：新变换
+    if (post) {
+      // A ← B·A
+      this.emfPlusMatrix = [
+        b[0] * t[0] + b[2] * t[1], b[1] * t[0] + b[3] * t[1],
+        b[0] * t[2] + b[2] * t[3], b[1] * t[2] + b[3] * t[3],
+        b[0] * t[4] + b[2] * t[5] + b[4], b[1] * t[4] + b[3] * t[5] + b[5],
+      ];
+    } else {
+      // A ← A·B
+      this.emfPlusMatrix = [
+        t[0] * b[0] + t[2] * b[1], t[1] * b[0] + t[3] * b[1],
+        t[0] * b[2] + t[2] * b[3], t[1] * b[2] + t[3] * b[3],
+        t[0] * b[4] + t[2] * b[5] + t[4], t[1] * b[4] + t[3] * b[5] + t[5],
+      ];
+    }
+  }
+
+  // EmfPlusTransformObject 布局（MS-EMFPLUS 2.2.1.2 / GDI+ Matrix）：
+  // M11, M12, M21, M22, Dx, Dy 六个 float32（共 24 字节）。
+  _emfPlusReadMatrix(data) {
+    if (!data || data.length < 24) return null;
+    return [readFloat32(data, 0), readFloat32(data, 4), readFloat32(data, 8),
+      readFloat32(data, 12), readFloat32(data, 16), readFloat32(data, 20)];
   }
 
   // EmfPlusPath (MS-EMFPLUS 2.2.1.6) 解析：data 起点（已跳过 EmfPlusObject 的 GraphicsVersion）
@@ -300,6 +362,14 @@ class EmfPlusDrawer {
 
     // 处理剩余的路径
     this.finishPath();
+
+    // 无法用 SVG 精确表达的语义集中上报：这些条目是与 GDI 真值比对时
+    // 优先排查的差异来源，避免「静默丢弃」造成难以定位的渲染偏差。
+    // 用 console.log（构建时被改写成受 __WMF_DEBUG__ 控制的版本），
+    // 不污染生产控制台；调用方也可直接读 drawer.unsupportedRecords。
+    if (this.unsupportedRecords.length) {
+      console.log('EMF+ 近似/未实现的语义:', this.unsupportedRecords.join(', '));
+    }
 
     console.log('EMF+ drawing completed');
   }
@@ -460,7 +530,10 @@ class EmfPlusDrawer {
     try {
       const a = this._emfPlusMapPoint(0, 0);
       const b = this._emfPlusMapPoint(100, 0);
-      const s = Math.abs(b.x - a.x) / 100;
+      // 取映射后 x 轴向量的**长度**而非 x 分量：世界变换含旋转时，
+      // x 分量会被 cosθ 缩放（90° 时甚至为 0），导致字号随角度跳动；
+      // 向量长度只反映缩放，与旋转无关。恒等/纯缩放场景下与旧实现等价。
+      const s = Math.hypot(b.x - a.x, b.y - a.y) / 100;
       return s > 0 ? s : 1;
     } catch (e) {
       return 1;
@@ -564,7 +637,13 @@ class EmfPlusDrawer {
       this.ctx.font = `${fontObj.italic}${fontObj.weight} ${sz}px "${fontObj.face}"`;
     }
     const p = this._emfPlusMapPoint(layoutX, layoutY);
-    this.ctx.fillText(text, p.x, p.y + drawSize);
+    // 世界变换含旋转时字形方向必须跟着转（GDI+ 语义）：锚点已由 _emfPlusMapPoint
+    // 摆到正确位置，这里只补字形朝向。fillText 的 transformMatrix.rotate 以度为单位、
+    // 绕锚点旋转；角度取矩阵第一列的极角，镜像/反射场景下方向仍由该极角表达。
+    const m = this.emfPlusMatrix;
+    const deg = Math.atan2(m[1], m[0]) * 180 / Math.PI;
+    const xform = Math.abs(deg) > 0.01 ? { rotate: deg } : undefined;
+    this.ctx.fillText(text, p.x, p.y + drawSize, xform);
   }
 
   // 处理EMF+绘制多线段记录：PenId(4) + Count(4) + PointF[Count](8 each)
@@ -842,6 +921,185 @@ class EmfPlusDrawer {
     }
     this.ctx.stroke();
     console.log('EMF+ DrawBeziers:', pts.length, '个点');
+  }
+
+  // ========== 图形状态容器 / 世界变换 / 裁剪 ==========
+  // 参考实现对照：LibreOffice emfphelperdata.cxx 的
+  // EmfPlusRecordTypeSave/Restore/BeginContainer/SetWorldTransform/SetClipRect 分支。
+
+  // 0x4025 EmfPlusSave：data = StackIndex(4)。
+  // GDI+ 会成对发出 Save/Restore，故这里按栈处理（不按 index 定位）。
+  processEmfPlusSave() {
+    this.ctx.save();
+    this.emfPlusStateStack.push(this.emfPlusMatrix.slice());
+  }
+
+  // 0x4026 EmfPlusRestore：恢复到 Save 时的变换与绘制状态（含裁剪）
+  processEmfPlusRestore() {
+    const saved = this.emfPlusStateStack.pop();
+    this.ctx.restore();
+    if (saved) this.emfPlusMatrix = saved;
+  }
+
+  // 0x4027 EmfPlusBeginContainer：
+  //   DestRect(4×float32) + SrcRect(4×float32) + StackIndex(4)
+  // 语义：把 SrcRect 内容映射到 DestRect，等价于一次 scale+translate 复合。
+  processEmfPlusBeginContainer(flags, data) {
+    this.ctx.save();
+    this.emfPlusContainerStack.push(this.emfPlusMatrix.slice());
+    if (!data || data.length < 32) return;
+    const dx = readFloat32(data, 0), dy = readFloat32(data, 4);
+    const dw = readFloat32(data, 8), dh = readFloat32(data, 12);
+    const sx = readFloat32(data, 16), sy = readFloat32(data, 20);
+    const sw = readFloat32(data, 24), sh = readFloat32(data, 28);
+    const kx = sw !== 0 ? dw / sw : 1;
+    const ky = sh !== 0 ? dh / sh : 1;
+    if (!isFinite(kx) || !isFinite(ky)) return;
+    if (kx === 1 && ky === 1 && dx === sx && dy === sy) return;   // 恒等容器不留矩阵
+    this._emfPlusComposeMatrix([kx, 0, 0, ky, dx - sx, dy - sy], true);
+  }
+
+  // 0x4028 EmfPlusBeginContainerNoParams：data = StackIndex(4)，只压栈不改变换
+  processEmfPlusBeginContainerNoParams() {
+    this.ctx.save();
+    this.emfPlusContainerStack.push(this.emfPlusMatrix.slice());
+  }
+
+  // 0x4029 EmfPlusEndContainer：弹出容器状态
+  processEmfPlusEndContainer() {
+    const saved = this.emfPlusContainerStack.pop();
+    this.ctx.restore();
+    if (saved) this.emfPlusMatrix = saved;
+  }
+
+  // 0x402A EmfPlusSetWorldTransform：直接替换世界变换
+  processEmfPlusSetWorldTransform(flags, data) {
+    const m = this._emfPlusReadMatrix(data);
+    if (m) this.emfPlusMatrix = m;
+  }
+
+  // 0x402B EmfPlusResetWorldTransform：恢复单位矩阵
+  processEmfPlusResetWorldTransform() {
+    this.emfPlusMatrix = [1, 0, 0, 1, 0, 0];
+  }
+
+  // 0x402C EmfPlusMultiplyWorldTransform
+  processEmfPlusMultiplyWorldTransform(flags, data) {
+    const m = this._emfPlusReadMatrix(data);
+    if (m) this._emfPlusComposeMatrix(m, (flags & 0x2000) !== 0);
+  }
+
+  // 0x402D EmfPlusTranslateWorldTransform：data = OffsetX, OffsetY（float32×2）
+  processEmfPlusTranslateWorldTransform(flags, data) {
+    if (!data || data.length < 8) return;
+    this._emfPlusComposeMatrix(
+      [1, 0, 0, 1, readFloat32(data, 0), readFloat32(data, 4)], (flags & 0x2000) !== 0);
+  }
+
+  // 0x402E EmfPlusScaleWorldTransform：data = ScaleX, ScaleY（float32×2）
+  processEmfPlusScaleWorldTransform(flags, data) {
+    if (!data || data.length < 8) return;
+    const sx = readFloat32(data, 0), sy = readFloat32(data, 4);
+    if (sx === 0 || sy === 0) return;   // 退化矩阵，忽略（等价于整幅消失）
+    this._emfPlusComposeMatrix([sx, 0, 0, sy, 0, 0], (flags & 0x2000) !== 0);
+  }
+
+  // 0x402F EmfPlusRotateWorldTransform：data = Angle（float32，单位为度）
+  // 注：LibreOffice 对该记录忽略 PostMultiply 位一律后乘；此处按规范使用 flags 0x2000。
+  processEmfPlusRotateWorldTransform(flags, data) {
+    if (!data || data.length < 4) return;
+    const rad = readFloat32(data, 0) * Math.PI / 180;
+    const c = Math.cos(rad), s = Math.sin(rad);
+    this._emfPlusComposeMatrix([c, s, -s, c, 0, 0], (flags & 0x2000) !== 0);
+  }
+
+  // 0x4030 EmfPlusSetPageTransform：data = PageScale（float32），单位由 flags 低字节指定。
+  // 仅当 PageUnit 为像素(2) 以外的单位时才真正参与缩放；像素单位的 PageScale 恒为 1。
+  processEmfPlusSetPageTransform(flags, data) {
+    if (!data || data.length < 4) return;
+    const unit = flags & 0xFF;
+    const scale = readFloat32(data, 0);
+    // UnitType: 0=World 1=Display 2=Pixel 3=Point 4=Inch 5=Document 6=Millimeter
+    // 坐标管线当前按设备像素处理，仅 Pixel/Display/World 的 PageScale 可直接相乘，
+    // 物理单位（point/inch/mm）需要 DPI 才能换算，暂按 1 处理并记录。
+    if (unit <= 2) {
+      if (isFinite(scale) && scale > 0) this.emfPlusPageScale = scale;
+    } else if (scale !== 1) {
+      this._noteUnsupported('EmfPlusSetPageTransform unit=' + unit);
+    }
+  }
+
+  // 0x4031 EmfPlusResetClip：裁剪区重置为无穷（无裁剪）
+  processEmfPlusResetClip() {
+    this.ctx.resetClip();
+  }
+
+  // 0x4032 EmfPlusSetClipRect：data = RectF(4×float32)，CombineMode 在 flags 位 8..11
+  processEmfPlusSetClipRect(flags, data) {
+    if (!data || data.length < 16) return;
+    const x = readFloat32(data, 0), y = readFloat32(data, 4);
+    const w = readFloat32(data, 8), h = readFloat32(data, 12);
+    this._emfPlusApplyClip((flags >> 8) & 0x0F, () => {
+      const p1 = this._emfPlusMapPoint(x, y);
+      const p2 = this._emfPlusMapPoint(x + w, y + h);
+      this.ctx.beginPath();
+      this.ctx.rect(p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
+    });
+  }
+
+  // 0x4033 EmfPlusSetClipPath：路径对象 Id 在 flags 位 0..7
+  processEmfPlusSetClipPath(flags, data) {
+    const path = this.emfPlusObjects[flags & 0xFF];
+    if (!path || path.type !== 'path') return;
+    this._emfPlusApplyClip((flags >> 8) & 0x0F, () => this._emfPlusTracePath(path));
+  }
+
+  // 0x4034 EmfPlusSetClipRegion：Region 对象尚未解析（见 processEmfPlusObject 的 0x0400 分支）
+  processEmfPlusSetClipRegion(flags) {
+    const region = this.emfPlusObjects[flags & 0xFF];
+    if (!region || region.type !== 'region') {
+      this._noteUnsupported('EmfPlusSetClipRegion (Region 对象未解析)');
+      return;
+    }
+    this._noteUnsupported('EmfPlusSetClipRegion');
+  }
+
+  // 0x4035 EmfPlusOffsetClip：data = Dx, Dy（float32×2），平移当前裁剪区
+  processEmfPlusOffsetClip(flags, data) {
+    if (!data || data.length < 8) return;
+    this._noteUnsupported('EmfPlusOffsetClip');
+  }
+
+  // CombineMode（MS-EMFPLUS 2.1.1.4）：0=Replace 1=Intersect 2=Union 3=Xor 4=Exclude 5=Complement
+  // SVG 的 clip-path 只能表达交集，因此：
+  //   Replace  —— 精确：清空后设新裁剪区；
+  //   Intersect—— 精确：与既有裁剪区求交（SvgContext 用嵌套 clipPath 实现）；
+  //   Union    —— 无既有裁剪时精确（并上全集 = 取消裁剪，与 LibreOffice 一致）；
+  //                有既有裁剪时无法表达，退化为交集并记录；
+  //   Xor/Exclude/Complement —— 无法用单一 clip-path 表达，退化为交集并记录。
+  // 所有退化都会进 unsupportedRecords，不会静默丢弃。
+  _emfPlusApplyClip(combine, buildPath) {
+    if (combine === 0) {                  // Replace
+      this.ctx.resetClip();
+      buildPath();
+      this.ctx.clip();
+      return;
+    }
+    if (combine === 2) {                  // Union
+      if (!this.ctx.clipActive) {
+        this.ctx.resetClip();             // 与全集求并 = 不裁剪
+        return;
+      }
+      this._noteUnsupported('EMF+ clip Union(存在既有裁剪)');
+      buildPath();
+      this.ctx.clip();
+      return;
+    }
+    if (combine !== 1) {                  // Xor / Exclude / Complement
+      this._noteUnsupported('EMF+ clip CombineMode=' + combine);
+    }
+    buildPath();                          // Intersect（及各退化分支）
+    this.ctx.clip();
   }
 
   // 补充缺失的处理方法

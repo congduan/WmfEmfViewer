@@ -37,6 +37,15 @@ class SvgContext {
         this._scaleX = 1;       // HiDPI 缩放，用于还原逻辑显示尺寸
         this._dash = [];        // 虚线模式（applyGdiObject 套用 PS_DASH/DOT 等）
         this._scaleY = 1;
+
+        // ---- 扩展表达力（EMF+ 渐变/变换/裁剪/字距所需，均为「0/缺省时不输出」的增补） ----
+        this.letterSpacing = 0;      // 字符间距 px；0 = 不输出 letter-spacing 属性
+        this.wordSpacing = 0;        // 词间距 px；0 = 不输出 word-spacing 属性
+        this.globalCompositeOperation = 'source-over';
+        /** @type {Map<string, {kind:string, x0:number, y0:number, x1:number, y1:number, r0:number, r1:number, stops:string[]}>} */
+        this._gradients = new Map();
+        this._gradSeq = 0;
+        this._groupDepth = 0;        // 已打开的 <g transform> 层数；save/restore 自动收口
     }
 
     // 线宽上限防御：超过画布对角线 2 倍的线宽几乎必然是单位换算错误
@@ -102,9 +111,60 @@ class SvgContext {
         this._scaleY = sy || 1;
     }
 
+    // Canvas 2D 变换子集。坐标由绘制层烘焙进路径，无法事后改数值，
+    // 因此变换以嵌套 <g transform="matrix(...)"> 表达——SVG 的嵌套组天然复合，
+    // 无需在此维护累乘矩阵，也不必改动任何既有绘制代码（没人调用时输出零变化）。
+    // 与 Canvas 语义的差异：save/restore 会成对收口这些组，restore 时若组仍打开
+    // 则自动补 </g>，保证 SVG 结构始终合法。
+    _pushGroup(m) {
+        const ok = m.every(v => typeof v === 'number' && isFinite(v));
+        if (!ok || (m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0)) {
+            return; // 单位矩阵不产生冗余组
+        }
+        this._nodes.push('<g transform="matrix(' + m.map(v => this._fmt(v)).join(' ') + ')">');
+        this._groupDepth++;
+    }
+
+    translate(x, y) {
+        this._pushGroup([1, 0, 0, 1, Number(x) || 0, Number(y) || 0]);
+    }
+
+    rotate(angle) {
+        const c = Math.cos(Number(angle) || 0);
+        const s = Math.sin(Number(angle) || 0);
+        this._pushGroup([c, s, -s, c, 0, 0]);
+    }
+
+    transform(a, b, c, d, e, f) {
+        this._pushGroup([a, b, c, d, e, f].map(v => Number(v) || 0));
+    }
+
+    setTransform(a, b, c, d, e, f) {
+        this.resetTransform();
+        this.transform(a, b, c, d, e, f);
+    }
+
+    // 收口到指定组深度（restore / setTransform / resetTransform 共用）
+    _unwindGroups(depth) {
+        const target = Math.max(0, depth | 0);
+        while (this._groupDepth > target) {
+            this._nodes.push('</g>');
+            this._groupDepth--;
+        }
+    }
+
+    resetTransform() {
+        this._unwindGroups(0);
+    }
+
     // 设置笔的虚线模式（Canvas 标准：传入 dash 数组与可选 offset；传 [] 重置为实线）
-    setLineDash(segments) {
+    setLineDash(segments, offset) {
         this._dash = Array.isArray(segments) ? segments.slice() : [];
+        this._dashOffset = Number(offset) || 0;
+    }
+
+    getLineDashOffset() {
+        return this._dashOffset || 0;
     }
 
     getLineDash() {
@@ -123,14 +183,20 @@ class SvgContext {
             globalAlpha: this.globalAlpha,
             clip: this._state.clip,
             dash: (this._dash || []).slice(),
+            dashOffset: this._dashOffset || 0,
             lineCap: this.lineCap,
             lineJoin: this.lineJoin,
+            letterSpacing: this.letterSpacing,
+            wordSpacing: this.wordSpacing,
+            // 变换组深度：restore 时把 save 之后新开的 <g> 全部收口
+            groupDepth: this._groupDepth,
         });
     }
 
     restore() {
         const s = this._stack.pop();
         if (!s) return;
+        this._unwindGroups(s.groupDepth);
         this.strokeStyle = s.strokeStyle;
         this.fillStyle = s.fillStyle;
         this.lineWidth = s.lineWidth;
@@ -141,8 +207,11 @@ class SvgContext {
         this.globalAlpha = s.globalAlpha;
         this._state.clip = s.clip;
         this._dash = (s.dash || []).slice();
+        this._dashOffset = s.dashOffset || 0;
         this.lineCap = s.lineCap;
         this.lineJoin = s.lineJoin;
+        this.letterSpacing = s.letterSpacing || 0;
+        this.wordSpacing = s.wordSpacing || 0;
     }
 
     // ---- 路径 ----
@@ -165,6 +234,62 @@ class SvgContext {
             'C ' + this._fmt(cp1x) + ' ' + this._fmt(cp1y) + ' ' +
             this._fmt(cp2x) + ' ' + this._fmt(cp2y) + ' ' + this._fmt(x) + ' ' + this._fmt(y)
         );
+    }
+
+    // 二次贝塞尔：SVG 的 Q 指令与 Canvas 语义一致
+    quadraticCurveTo(cpx, cpy, x, y) {
+        this._segments.push(
+            'Q ' + this._fmt(cpx) + ' ' + this._fmt(cpy) + ' ' + this._fmt(x) + ' ' + this._fmt(y)
+        );
+    }
+
+    // 圆弧切线：Canvas arcTo 只画「当前点 → 切线切点」的圆弧，两端各留切线。
+    // SVG 无直接对应指令，按切线几何求出两个切点后用 L + A 表达（无解时退化为 L）。
+    arcTo(x1, y1, x2, y2, radius) {
+        const r = Math.abs(Number(radius) || 0);
+        const cur = this._currentPoint();
+        if (r === 0 || !cur) {
+            this.lineTo(x1, y1);
+            return;
+        }
+        const v1 = { x: cur.x - x1, y: cur.y - y1 };
+        const v2 = { x: x2 - x1, y: y2 - y1 };
+        const l1 = Math.hypot(v1.x, v1.y);
+        const l2 = Math.hypot(v2.x, v2.y);
+        if (l1 === 0 || l2 === 0) {
+            this.lineTo(x1, y1);
+            return;
+        }
+        const n1 = { x: v1.x / l1, y: v1.y / l1 };
+        const n2 = { x: v2.x / l2, y: v2.y / l2 };
+        const cosA = n1.x * n2.x + n1.y * n2.y;
+        const theta = Math.acos(Math.max(-1, Math.min(1, cosA)));   // 夹角
+        if (theta < 1e-6 || Math.abs(theta - Math.PI) < 1e-6) {
+            this.lineTo(x1, y1);                                    // 共线退化
+            return;
+        }
+        const dist = r / Math.tan(theta / 2);                        // 顶点到切点的距离
+        const t1 = { x: x1 + n1.x * dist, y: y1 + n1.y * dist };
+        const t2 = { x: x1 + n2.x * dist, y: y1 + n2.y * dist };
+        const sweep = (n1.x * n2.y - n1.y * n2.x) > 0 ? 1 : 0;
+        this._segments.push(
+            'L ' + this._fmt(t1.x) + ' ' + this._fmt(t1.y) +
+            ' A ' + this._fmt(r) + ' ' + this._fmt(r) + ' 0 0 ' + sweep + ' ' + this._fmt(t2.x) + ' ' + this._fmt(t2.y)
+        );
+        this._hasSubpath = true;
+    }
+
+    // 从路径段尾部反解当前点（仅需要 M/L/Q/C/A 的终点；供 arcTo 使用）
+    _currentPoint() {
+        for (let i = this._segments.length - 1; i >= 0; i--) {
+            const seg = this._segments[i];
+            const nums = seg.match(/-?\d+(?:\.\d+)?/g);
+            if (!nums || !nums.length) continue;
+            if (/^[MLQC]$/.test(seg[0]) || seg[0] === 'A') {
+                return { x: parseFloat(nums[nums.length - 2]), y: parseFloat(nums[nums.length - 1]) };
+            }
+        }
+        return null;
     }
 
     closePath() {
@@ -289,11 +414,27 @@ class SvgContext {
     }
 
     // ---- 填充 / 描边 ----
+    // 画刷取值：字符串色值直接用，渐变/图案对象（由 createXxxGradient/createPattern 返回）
+    // 输出其 url(#id)。_esc 只作用于字符串，否则会把 url(...) 转义坏。
+    _paint(style) {
+        if (style && typeof style === 'object' && typeof style.__svgPaint === 'string') {
+            return style.__svgPaint;
+        }
+        return SvgContext._esc(style);
+    }
+
+    // globalAlpha -> fill-opacity / stroke-opacity（只在 <1 时输出，默认路径零变化）
+    _alphaAttr(kind) {
+        const a = this.globalAlpha;
+        if (typeof a !== 'number' || !isFinite(a) || a >= 1) return '';
+        return ' ' + kind + '-opacity="' + this._fmt(Math.max(0, Math.min(1, a))) + '"';
+    }
+
     fill() {
         if (!this._hasSubpath) return;
         const rule = this.fillRule === 'evenodd' ? 'evenodd' : 'nonzero';
         this._nodes.push(
-            '<path d="' + this._d() + '" fill="' + SvgContext._esc(this.fillStyle) + '" fill-rule="' + rule + '" stroke="none" ' + this._attr() + '/>'
+            '<path d="' + this._d() + '" fill="' + this._paint(this.fillStyle) + '" fill-rule="' + rule + '"' + this._alphaAttr('fill') + ' stroke="none" ' + this._attr() + '/>'
         );
     }
 
@@ -301,7 +442,7 @@ class SvgContext {
         if (!this._hasSubpath) return;
         const dashAttr = (this._dash && this._dash.length) ? ' stroke-dasharray="' + this._dash.map(v => this._fmt(v)).join(' ') + '"' : '';
         this._nodes.push(
-            '<path d="' + this._d() + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this._strokeWidth()) + '"' + dashAttr + this._strokeCaps() + ' ' + this._attr() + '/>'
+            '<path d="' + this._d() + '" fill="none" stroke="' + this._paint(this.strokeStyle) + '" stroke-width="' + this._fmt(this._strokeWidth()) + '"' + this._alphaAttr('stroke') + dashAttr + this._strokeCaps() + ' ' + this._attr() + '/>'
         );
     }
 
@@ -314,7 +455,7 @@ class SvgContext {
     fillRect(x, y, w, h) {
         const r = this._normalizeRect(x, y, w, h);
         this._nodes.push(
-            '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h + '" fill="' + SvgContext._esc(this.fillStyle) + '" stroke="none" ' + this._attr() + '/>'
+            '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h + '" fill="' + this._paint(this.fillStyle) + '"' + this._alphaAttr('fill') + ' stroke="none" ' + this._attr() + '/>'
         );
     }
 
@@ -322,8 +463,91 @@ class SvgContext {
         const r = this._normalizeRect(x, y, w, h);
         const dashAttr = (this._dash && this._dash.length) ? ' stroke-dasharray="' + this._dash.map(v => this._fmt(v)).join(' ') + '"' : '';
         this._nodes.push(
-            '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h + '" fill="none" stroke="' + SvgContext._esc(this.strokeStyle) + '" stroke-width="' + this._fmt(this._strokeWidth()) + '"' + dashAttr + this._strokeCaps() + ' ' + this._attr() + '/>'
+            '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h + '" fill="none" stroke="' + this._paint(this.strokeStyle) + '" stroke-width="' + this._fmt(this._strokeWidth()) + '"' + this._alphaAttr('stroke') + dashAttr + this._strokeCaps() + ' ' + this._attr() + '/>'
         );
+    }
+
+    // 清空区域。SVG 无「擦除」概念，本项目所有渲染与对照管线都以白底光栅化
+    //（diff-emf.js 的 rsvg-convert -b white），故按白色填充实现；
+    // 与 Canvas 的「置为透明」语义不同，仅用于 fillRect 等价场景。
+    clearRect(x, y, w, h) {
+        const r = this._normalizeRect(x, y, w, h);
+        this._nodes.push(
+            '<rect x="' + r.x + '" y="' + r.y + '" width="' + r.w + '" height="' + r.h + '" fill="#ffffff" stroke="none" ' + this._attr() + '/>'
+        );
+    }
+
+    // ---- 渐变 / 图案画刷 ----
+    // 返回对象可直接赋给 ctx.fillStyle / ctx.strokeStyle；addColorStop 可在序列化前
+    // 任意次调用（渐变定义在 getSvg() 时才落盘，故顺序无关）。
+    createLinearGradient(x0, y0, x1, y1) {
+        return this._makeGradient({
+            kind: 'linear',
+            x0: Number(x0) || 0, y0: Number(y0) || 0,
+            x1: Number(x1) || 0, y1: Number(y1) || 0,
+            r0: 0, r1: 0,
+        });
+    }
+
+    createRadialGradient(x0, y0, r0, x1, y1, r1) {
+        return this._makeGradient({
+            kind: 'radial',
+            x0: Number(x0) || 0, y0: Number(y0) || 0,
+            x1: Number(x1) || 0, y1: Number(y1) || 0,
+            r0: Math.max(0, Number(r0) || 0), r1: Math.max(0, Number(r1) || 0),
+        });
+    }
+
+    _makeGradient(cfg) {
+        const id = 'grad-' + (++this._gradSeq);
+        const stops = [];
+        this._gradients.set(id, Object.assign({ stops }, cfg));
+        return {
+            __svgPaint: 'url(#' + id + ')',
+            // 与 Canvas 一致：offset 截断到 [0,1]。
+            // 注：Canvas 允许字符串颜色（含 rgba），SVG stop-color 不接受 rgba，
+            // 但 stop-opacity 可以；此处把 rgba() 拆成 stop-color + stop-opacity。
+            addColorStop: (offset, color) => {
+                const o = Math.max(0, Math.min(1, Number(offset) || 0));
+                const m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i
+                    .exec(String(color).trim());
+                if (m) {
+                    const rgb = 'rgb(' + m[1] + ',' + m[2] + ',' + m[3] + ')';
+                    const alpha = m[4] !== undefined ? parseFloat(m[4]) : 1;
+                    stops.push('<stop offset="' + this._fmt(o) + '" stop-color="' + rgb + '"' +
+                        (alpha < 1 ? ' stop-opacity="' + this._fmt(alpha) + '"' : '') + '/>');
+                } else {
+                    stops.push('<stop offset="' + this._fmt(o) + '" stop-color="' + SvgContext._esc(color) + '"/>');
+                }
+            },
+        };
+    }
+
+    // Canvas createPattern 的 SVG 对应物：本实现已支持 DIB 图案（addPattern），
+    // 若传入的就是那种图案对象则直接透传；其余图像源暂不支持，返回 null（Canvas 同义）。
+    createPattern(image) {
+        if (image && typeof image === 'object' && typeof image.__svgPaint === 'string') {
+            return { __svgPaint: image.__svgPaint };
+        }
+        return null;
+    }
+
+    _gradientDefs() {
+        const out = [];
+        for (const [id, g] of this._gradients) {
+            const stops = g.stops.join('');
+            if (!stops) continue;   // 无 stop 的渐变 SVG 会按「不绘制」处理，直接省略
+            if (g.kind === 'radial') {
+                out.push('<radialGradient id="' + id + '" gradientUnits="userSpaceOnUse" ' +
+                    'cx="' + this._fmt(g.x1) + '" cy="' + this._fmt(g.y1) + '" r="' + this._fmt(Math.max(g.r1, 1e-6)) + '" ' +
+                    'fx="' + this._fmt(g.x0) + '" fy="' + this._fmt(g.y0) + '">' + stops + '</radialGradient>');
+            } else {
+                out.push('<linearGradient id="' + id + '" gradientUnits="userSpaceOnUse" ' +
+                    'x1="' + this._fmt(g.x0) + '" y1="' + this._fmt(g.y0) + '" ' +
+                    'x2="' + this._fmt(g.x1) + '" y2="' + this._fmt(g.y1) + '">' + stops + '</linearGradient>');
+            }
+        }
+        return out;
     }
 
     // ---- 文本 ----
@@ -349,6 +573,24 @@ class SvgContext {
     }
 
     fillText(text, x, y, transformMatrix) {
+        this._drawText(text, x, y, transformMatrix, false);
+    }
+
+    // 描边文本（EMF+ EmfPlusDrawDriverString 需要）；几何/基线逻辑与 fillText 完全共享
+    strokeText(text, x, y, transformMatrix) {
+        this._drawText(text, x, y, transformMatrix, true);
+    }
+
+    // 字距：Canvas 的 letterSpacing 为新增属性，SVG 用同名呈现属性表达。
+    // 两者都为 0 时不输出任何属性，既有输出逐字节不变。
+    _spacingAttrs() {
+        const a = [];
+        if (this.letterSpacing) a.push('letter-spacing="' + this._fmt(this.letterSpacing) + '"');
+        if (this.wordSpacing) a.push('word-spacing="' + this._fmt(this.wordSpacing) + '"');
+        return a.length ? ' ' + a.join(' ') : '';
+    }
+
+    _drawText(text, x, y, transformMatrix, outline) {
         const f = this._parseFont();
         const anchor = this.textAlign === 'right' ? 'end' : this.textAlign === 'center' ? 'middle' : 'start';
         // 基线折算：**不能**依赖 dominant-baseline 属性。
@@ -394,21 +636,47 @@ class SvgContext {
                 xform = xform.slice(0, -1) + ' translate(0 ' + this._fmt(dyBase) + ')"';
             }
         }
+        const paint = outline
+            ? 'fill="none" stroke="' + this._paint(this.strokeStyle) + '" stroke-width="' + this._fmt(this._strokeWidth()) + '"' + this._alphaAttr('stroke')
+            : 'fill="' + this._paint(this.fillStyle) + '"' + this._alphaAttr('fill') + ' stroke="none"';
         this._nodes.push(
             '<text x="' + this._fmt(x) + '" y="' + this._fmt(yAttr) + '" font-family="' + f.family + '" font-size="' + f.size + '"' +
             ' font-style="' + f.style + '" font-weight="' + f.weight + '"' +
-            ' text-anchor="' + anchor + '" dominant-baseline="alphabetic"' +
-            ' fill="' + SvgContext._esc(this.fillStyle) + '" stroke="none" ' + this._attr() + xform + '>' + SvgContext._esc(text) + '</text>'
+            ' text-anchor="' + anchor + '" dominant-baseline="alphabetic"' + this._spacingAttrs() +
+            ' ' + paint + ' ' + this._attr() + xform + '>' + SvgContext._esc(text) + '</text>'
         );
     }
 
     // ---- 裁剪 ----
+    // Canvas 语义是「与当前裁剪区求交」。SVG 的 clip-path 只有一个槽位，
+    // 直接覆盖会丢掉前一次裁剪（IntersectClipRect 连续调用的真实场景）。
+    // 做法：新 clipPath 内部引用父 clipPath，形成交集链；首次裁剪（无父）时
+    // 输出与旧实现完全一致，故既有快照不受影响。
     clip() {
         if (!this._hasSubpath) return;
         this._clipCount++;
         const id = 'clip' + this._clipCount;
-        this._defs.push('<clipPath id="' + id + '"><path d="' + this._d() + '"/></clipPath>');
+        const parent = this._state.clip;
+        this._defs.push('<clipPath id="' + id + '"' + (parent ? ' clip-path="' + parent + '"' : '') +
+            '><path d="' + this._d() + '"/></clipPath>');
         this._state.clip = 'url(#' + id + ')';
+    }
+
+    // 恢复为「无裁剪」（EMF+ EmfPlusResetClip）。非 Canvas 标准 API。
+    resetClip() {
+        this._state.clip = null;
+    }
+
+    // 当前是否已有生效的裁剪区（EMF+ CombineMode 判定需要）。
+    get clipActive() {
+        return !!this._state.clip;
+    }
+
+    // 直接用矩形设置裁剪，省去调用方 beginPath/rect/clip 三步；EMF+ SetClipRect 用。
+    clipRect(x, y, w, h) {
+        this.beginPath();
+        this.rect(x, y, w, h);
+        this.clip();
     }
 
     // ---- 位图 ----
@@ -658,8 +926,12 @@ class SvgContext {
         // 还原逻辑显示尺寸（除以 dpr），viewBox 保持坐标空间不变
         const w = Math.round(cw / (this._scaleX || 1));
         const h = Math.round(ch / (this._scaleY || 1));
-        const defs = this._defs.length
-            ? '<defs>' + this._defs.join('') + '</defs>'
+        // 渐变定义在序列化时才落盘（addColorStop 可在任意时刻追加），
+        // 与 clipPath/pattern 共用同一个 <defs>，避免多份 <defs> 影响极小化差异。
+        const gradDefs = this._gradientDefs();
+        const allDefs = gradDefs.length ? this._defs.concat(gradDefs) : this._defs;
+        const defs = allDefs.length
+            ? '<defs>' + allDefs.join('') + '</defs>'
             : '';
         const nodes = this._nodes.map((n) => {
             if (n.length > 1 && n.charCodeAt(0) === 0) {
@@ -668,12 +940,14 @@ class SvgContext {
             }
             return n;
         });
+        // 未配对的变换组在序列化时统一收口（drawer 若漏掉 restore，仍输出合法 SVG）
+        const tail = this._groupDepth > 0 ? '\n' + new Array(this._groupDepth + 1).join('</g>\n') : '';
         return (
             '<?xml version="1.0" encoding="UTF-8"?>\n' +
             '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"' +
             ' width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">\n' +
             defs + '\n' +
-            nodes.join('\n') + '\n' +
+            nodes.join('\n') + tail + '\n' +
             '</svg>\n'
         );
     }
