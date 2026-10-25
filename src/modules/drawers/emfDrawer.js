@@ -257,6 +257,13 @@ class EmfDrawer {
     this.fillColor = '#ffffff';
     this.strokeColor = '#000000';
 
+    // GDI 新 DC 的文本对齐默认值是 TA_LEFT|TA_TOP（MS-EMF 2.3.11.4）。
+    // 过去沿用了上下文的 alphabetic 基线：无 SETTEXTALIGN 记录的文件（EA 语料全部、
+    // test-156~159 等）每个字符串整体上移约 0.8 字号。显式初始化后，
+    // 无对齐记录的文件走 TA_TOP 语义（svgContext 折算 +0.9×字号基线）。
+    this.ctx.textAlign = 'left';
+    this.ctx.textBaseline = 'top';
+
     // 重置路径状态
     this.currentPath = [];
     this.pathState = 'idle';
@@ -1022,6 +1029,23 @@ class EmfDrawer {
     this._fileWindowExtX = x || 1;
     this._fileWindowExtY = y || 1;
     this.coordinateTransformer.setWindowExt(this._fileWindowExtX, this._fileWindowExtY);
+
+    // 退化 windowExt（|ext|<=2）是 GDI+ 系录制器的惯用写法：整份文件的记录坐标已经是
+    // 设备单位，这里把 viewportExt 对齐成同一个值，使映射退化为 1:1。
+    // 否则会按「viewportExt = 画布尺寸」推出一个几百倍的缩放（EA 语料实测 472×，
+    // 文字与图形整体飞出画布）。判据来自语料核查：22 个含退化 ext 的文件全部
+    // 落在基准的"映射异常"集合内，且对照实现（emf-converter）按 1:1 渲染。
+    // 同一写法里的 SETWINDOWORGEX / SETVIEWPORTORGEX 也是同一套"伪映射"的一部分
+    //（EA-001 的 winOrg(-14,15) 会给所有坐标再加一个 (14,-15) 偏移），一并忽略。
+    if (Math.abs(x) <= 2 || Math.abs(y) <= 2) {
+      this._deviceCoords = true;
+      this._fileViewportExtX = this._fileWindowExtX;
+      this._fileViewportExtY = this._fileWindowExtY;
+      this.coordinateTransformer.setViewportExt(this._fileViewportExtX, this._fileViewportExtY);
+      this.coordinateTransformer.setWindowOrg(0, 0);
+      this.coordinateTransformer.setViewportOrg(0, 0);
+      console.log('EMF SetWindowExtEx: degenerate ext', x, y, '→ 1:1 device mapping');
+    }
   }
 
   processEmfSetWindowOrgEx(data) {
@@ -1029,6 +1053,9 @@ class EmfDrawer {
     const x = readLong(data, 0);
     const y = readLong(data, 4);
     console.log('EMF SetWindowOrgEx:', x, y);
+    // 设备坐标模式（退化 windowExt，见 processEmfSetWindowExtEx）：org 记录
+    // 是伪映射的一部分，应用会叠加偏移，忽略
+    if (this._deviceCoords) return;
     this.coordinateTransformer.setWindowOrg(x, y);
   }
 
@@ -1051,6 +1078,8 @@ class EmfDrawer {
     const x = readLong(data, 0);
     const y = readLong(data, 4);
     console.log('EMF SetViewportOrgEx:', x, y);
+    // 设备坐标模式（退化 windowExt）：同 SetWindowOrgEx，org 属于伪映射，忽略
+    if (this._deviceCoords) return;
     // 文件 vpOrg 就是设备坐标偏移，直接使用（设备空间与 canvas 一致）
     this.coordinateTransformer.setViewportOrg(x, y);
   }
