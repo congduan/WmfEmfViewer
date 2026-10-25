@@ -18,6 +18,7 @@
 | A6 | 路径状态机 BeginPath/EndPath/… | ⚠️ | 本项目绘图记录立即 beginPath+stroke，BeginPath 后不累积进 bracket，StrokePath/FillPath 只对最近路径生效（emfDrawer.js:1089-1137）；参考实现用 prop.path 累积。StrokeAndFillPath 有"灰色 fill 跳过"的 Excel 特判，偏离参考实现 |
 | A7 | SetPixelV | ✅ | Point(8)+Color(4) 一致 |
 | A8 | SelectObject / stock 对象 | ⚠️ | 0x80000000 高位处理一致；但**两套 stock 表冲突**：gdiObjectManager.js:75-88（DKGRAY=#808080、NULL_BRUSH=#ffffff）vs emfDrawer.js:368-389（DKGRAY=#404040、NULL_BRUSH=transparent），且缺 0x0A-0x13 字体 stock 对象 |
+| A9 | EMR_GRADIENTFILL | ✅ 已实现(10-25) | 此前分派表为 null。RECT_H/RECT_V 用 SVG 线性渐变精确表达；TRIANGLE（Gouraud）SVG 无对应图元，用「色差最大顶点→对边中点」线性渐变近似。两处实测反常识细节：顶点色是 **COLOR16（0..65535）**、**Alpha 恒为 0 且必须忽略**（按透明处理整块会消失）。索引为 4 字节 ULONG，矩形模式每矩形 2 个、三角形每片 3 个 |
 
 ## B. EMF 状态与坐标（emfDrawer.js + coordinateTransformer.js）
 
@@ -79,10 +80,11 @@
 |---|------|----------|------|
 | G1 | GDICOMMENT→EMF+ 提取 | ✅ | DataSize(4)+'EMF+'(0x2B464D45)+多记录流 12 字节头切分，与参考实现一致 |
 | G2 | 记录头/续记录 | ⚠️ | Type/Flags/Size/DataSize 切分一致；**Continued（CONTINUABLE 0x8000/TotalObjectSize）未拼接**，超大对象错位 |
-| G3 | EmfPlusObject/Brush | ⚠️ | ObjectId 位拆分一致；**仅 Solid，其余类型启发式取首个不透明 ARGB，Hatch(2) 漏掉**（emfPlusDrawer.js:918-928） |
+| G3 | EmfPlusObject/Brush | ✅ 已实现(10-25) | Solid/Hatch/LinearGradient/PathGradient 四种按 MS-EMFPLUS 布局完整解析（渐变的 BrushDataPresetColors 色标位置精确还原）；渐变几何在使用时刻才映射，同一画刷在不同世界变换下不会串味。Texture(2) 需内嵌图像解码，保留主色兜底并记入 `unsupportedRecords` |
 | G4 | EmfPlusPen 字段 | ✅ 已修复(09-11) | **4 字节错位**（已人工复核参考实现）：参考实现顺序 type(0)+penDataFlags(4)+unitType(8)+penWidth(12)；本项目曾把 penDataFlags 当 unit、unitType 当 width、penWidth 当 ARGB（emfPlusDrawer.js:931-946）→ 所有 EMF+ 画笔 width/color 错 |
 | G5 | PageTransform/容器栈 | ✅ 已实现(10-25) | Save/Restore/BeginContainer/EndContainer/SetWorldTransform/Reset/Multiply/Translate/Scale/Rotate/SetPageTransform 全部实装；世界变换在 `_emfPlusMapPoint` 统一施加，故全部绘制记录自动受益。物理单位（point/inch/mm）的 PageScale 仍按 1 处理并记入 `unsupportedRecords` |
-| G6 | DrawString | ⚠️ | 布局与 flags&0x8000 取色一致；字体度量用 `_emfPlusUnitsToPx` 近似，无 StringFormat/字距 |
+| G6 | DrawString | ✅ 已实现(10-25) | StringFormat 的 StringAlignment/LineAlign 已按 LibreOffice 的换算公式生效：水平对齐交给 SVG `text-anchor`（用渲染器真实字体度量，优于 `measureText` 估算），垂直对齐在世界单位算偏移。leadingMargin/trailingMargin 取实值。tracking/trimming/tabStops/右到左/竖排仍为近似并记入 unsupportedRecords |
+| G10 | StringFormat 对象（0x0700） | ✅ 已实现(10-25) | 语料实测 391 个对象，此前完全未解析。字段布局与 `emfpstringformat.cxx` 逐项对照；实测 leadingMargin/trailingMargin 全为 0、tracking 全为 1，但 **lineAlign 有 232 条不是 Near**，故垂直对齐是主要收益 |
 | G7 | FillRegion/ClosedCurve/DrawCurve/Beziers/DrawArc | ❌ | 全是 console.log 空 stub；ClosedCurve/Curve 张力公式（t×2/3）未实现 |
 | G8 | DrawImage/DrawImagePoints | ✅ DrawImage已修复(09-11) | **DrawImage 只读 SourceRect、漏读目标 RectF**（画到源坐标位置）；ImageAttributes/UnitType 忽略；PNG/JPEG+内嵌 EMF 支持 |
 | G9 | 裁剪记录族（0x4031–0x4035） | ⚠️ 已实现(10-25) | ResetClip/SetClipRect/SetClipPath 精确（SvgContext 用嵌套 clipPath 表达交集）；CombineMode 仅 Replace/Intersect 精确，Union 无既有裁剪时精确、否则退化，Xor/Exclude/Complement 退化为交集——全部记入 `drawer.unsupportedRecords`。SetClipRegion 因 Region 对象未解析仍为近似 |
@@ -171,3 +173,55 @@
   5) 待办：Save / Restore / BeginContainer / EndContainer / ScaleWorldTransform /
      DrawDriverString 在语料中**无样本**，目前只有实现、没有回归验证；
      EMF+ 渐变刷的渲染接入是下一步（本期已备好 SvgContext 渐变 API）。
+
+- ✅ 第六梯队（2026-10-25）：EMF+ 画刷全类型接入。
+  1) 语料实测画刷分布（全语料，非估计）：Solid 3 / Hatch 212 / LinearGradient 54 /
+     PathGradient 36 / Texture 2 —— 即 **305 个非纯色画刷此前全部被降级成单色**。
+  2) 按 MS-EMFPLUS 2.2.2.10 / 2.2.2.14 完整解析：
+     - LinearGradient：BrushDataFlags + RectF(起点+尺寸向量) + 双色 + 两个重复 ARGB
+       + 可选 XForm/BlendFactors/PresetColors。PresetColors 的「位置数组 + 颜色数组」
+       分离布局已还原（实测得到 blue→red 两档、magenta→gray→green 三档等正确色标）。
+     - PathGradient：CenterColor + CenterPoint + SurroundColors[] + 可选边界路径；
+       半径由边界路径包围盒半对角线推导，无路径时退化为中心纯色。
+     - Hatch：53 种样式用 `<pattern>` 平铺。0-5 精确、6-17 按密度反推线距、
+       18-33 为明暗/粗细/虚线变体、34-52 装饰类无对应图元统一退化为交叉网纹，
+       全部近似项记入 unsupportedRecords。
+  3) 关键设计：渐变/图案几何在**使用时刻**才映射（`_emfPlusBrushPaint` 以内联矩阵为缓存键）。
+     EMF+ 的 Brush 坐标属于世界空间，同一画刷可能在多个变换下被使用，创建时烘焙会在
+     变换改变后失真。这同时避免了 `<defs>` 里堆出同义渐变。
+  4) 门禁：快照 632/632，仅 test-038 及其损坏副本变化。视觉核对：8× 放大可确认
+     交叉网纹、棋盘格、渐变（含多档 preset 色标）均正确；path gradient 得到
+     合理半径（如 r=477.78，中心落在画布 14030×9920 的合理位置）。
+  5) 已知近似：hatch 单元格固定 8 用户单位、不随世界变换缩放；TextureFill 未实现；
+     LinearGradient 的 BrushDataTransform 暂不参与几何。
+
+- ✅ 第七梯队（2026-10-25）：按语料实测影响面排序，补齐四项。
+  1) **EMF+ StringFormat（391 个对象，此前完全未解析）**。水平对齐改为输出
+     SVG `text-anchor`——由渲染器用真实字体度量定位，优于 `measureText`
+     （0.6×字号×字数）的估算；垂直对齐在世界单位算偏移后再映射，故旋转场景同样正确。
+     语料实测：leadingMargin/trailingMargin 全为 0、tracking 全为 1，
+     但 lineAlign 有 232 条不是 Near，垂直对齐是主要收益。
+     验证：test-038 里这组文本的字面内容就是 `textalignment:<align>_<lineAlign>`，
+     且由三个纵对齐档位反推出 layoutY=130 / layoutH=380 / em=40 完全自洽
+     （Near 130+40=170、Center 130+190+20=340、Far 130+380=510）。
+  2) **EMR_GRADIENTFILL（28 次 / 7 文件）**。RECT_H/RECT_V 用 SVG 线性渐变精确表达；
+     TRIANGLE 用「色差最大顶点 → 对边中点」渐变近似（SVG 无 Gouraud）。
+     两处实测反常识：顶点色是 COLOR16（0..65535）而非 0..255；**Alpha 恒为 0 且必须忽略**
+     （按透明处理整块会消失，GDI 的 GradientFill 本就不使用 Alpha）。
+     验证：RECT_V 竖采样 r 244→195→134→101、g 11→60→121→154 的平滑插值；
+     RECT_H 的渐变定义满足 y1==y2。
+  3) **Hatch 样式 0-5 换成 MS-WMF 权威 8×8 位图**（数据取自 Apache POI
+     HwmfHatchStyle，与规范逐位一致）。修正三处确定性错误：横/竖间距由 8 改为 4、
+     ForwardDiagonal 与 BackwardDiagonal 方向互换（原先反了）。其余 47 种
+     （含全部百分比样式）微软从未公开像素图案，仍为参数化近似——这一点已写入文档，
+     区分「权威」与「近似」两类而不是笼统标注。
+  4) **未知 EMF 记录不再猜测绘制**。原先落入 `tryProcessAsCoordinates` 把记录体当
+     坐标画折线（语料实测 656 次进入兜底、1 次真的画出虚假图形），比静默跳过更糟。
+     改为显式登记 `EMR_SETICMMODE`/`EMR_SETCOLORSPACE`/`EMR_SETLAYOUT` 等已知可忽略
+     记录，其余只记入 `drawer.unsupportedRecords`。验证：受影响文件从 753 字节降为
+     253 字节，被移除的是一条坐标从 (2052,22250) 跳到 (12312,1028) 的纯垃圾路径。
+  5) 门禁：每项分别更新基线并留痕——StringFormat 2 个文件、GRADIENTFILL 7 个文件、
+     hatch 2 个文件、兜底 1 个文件；lint 0 error、typecheck 通过、快照 632/632、
+     npm 包 3/3。
+  6) 未做：EMF+ ImageAttributes（0x0800，26 次）——需要把颜色矩阵/alpha 施加到
+     解码后的像素，成本高于收益且易误解析伤到现有图像，留待单独评估。

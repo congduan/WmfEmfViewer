@@ -85,6 +85,20 @@ const EMF_PLUS_RECORD_HANDLERS = {
   0x403A: null             // EmfPlusSetTSClip
 };
 
+// MS-WMF 2.1.1.12 的权威 8×8 单色 hatch 位图（GDI 与 GDI+ 对基础样式共用同一组）。
+// 数值取自 Apache POI 的 org.apache.poi.hwmf.record.HwmfHatchStyle（Apache-2.0），
+// 与规范附录的位图逐位一致。位序 LSB-first：byte[y] 的第 x 位 = 像素 (x, y)，置位 = 前景色。
+// EMF+ 的 HatchStyle 0-5 与 GDI 的同名样式一一对应，故可直接复用。
+// 其余 47 种样式（含全部百分比样式）微软从未公开像素图案，只能参数化近似。
+const HATCH_BITMAPS = {
+  0: [0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00], // Horizontal        0x000000FF000000FF
+  1: [0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88], // Vertical          0x8888888888888888
+  2: [0x10, 0x20, 0x40, 0x80, 0x01, 0x02, 0x04, 0x08], // ForwardDiagonal   0x0804020180402010
+  3: [0x08, 0x04, 0x02, 0x01, 0x80, 0x40, 0x20, 0x10], // BackwardDiagonal  0x1020408001020408
+  4: [0xFF, 0x11, 0x11, 0x11, 0xFF, 0x11, 0x11, 0x11], // LargeGrid / Cross 0x111111FF111111FF
+  5: [0x18, 0x24, 0x42, 0x81, 0x81, 0x42, 0x24, 0x18], // DiagonalCross     0x1824428181422418
+};
+
 class EmfPlusDrawer {
   constructor(ctx) {
     this.ctx = ctx;
@@ -148,14 +162,264 @@ class EmfPlusDrawer {
       return argbToCss(brushId);
     }
     const obj = this.emfPlusObjects[brushId >>> 0];
-    if (obj && obj.type === 'solidBrush') {
-      return obj.color;
+    if (obj) {
+      const paint = this._emfPlusBrushPaint(obj);
+      if (paint) return paint;
     }
     // 兜底（容错）：BrushId 超出对象表范围则视为 ARGB 颜色直传
     if (brushId > 63 || brushId >= 0x01000000) {
       return argbToCss(brushId);
     }
     return '#000000';
+  }
+
+  // 画刷对象 -> 可直接赋给 fillStyle/strokeStyle 的值（颜色串或渐变/图案对象）。
+  // 渐变几何在**使用时刻**才映射：EMF+ 的 Brush 坐标属于世界空间，
+  // 同一画刷可能在多个世界变换下被使用，创建时烘焙会在变换改变后失真。
+  // 同一变换下重复使用则复用已建对象，避免 <defs> 里堆出大量同义渐变。
+  _emfPlusBrushPaint(obj) {
+    if (!obj) return null;
+    if (obj.type === 'solidBrush') return obj.color;
+    if (obj.type === 'gradientBrush') {
+      const key = this.emfPlusMatrix.join(',') + '|' + this.emfPlusPageScale;
+      if (obj._paintKey === key) return obj._paint;
+      let paint = null;
+      try {
+        paint = obj.grad.kind === 'linear'
+          ? this._buildLinearGradient(obj.grad)
+          : this._buildRadialGradient(obj.grad);
+      } catch (e) {
+        paint = null;
+      }
+      obj._paintKey = key;
+      obj._paint = paint || obj.grad.fallback || '#000000';
+      return obj._paint;
+    }
+    if (obj.type === 'hatchBrush') return this._buildHatchPaint(obj);
+    return null;
+  }
+
+  // EmfPlusLinearGradientBrushData（MS-EMFPLUS 2.2.2.10）：
+  //   BrushDataFlags(4) + WrapMode(4) + RectF(16, 起点+尺寸向量) + FirstColor(ARGB)
+  //   + SecondColor(ARGB) + 两个语义未知的重复 ARGB(8)
+  //   + [BrushDataTransform 0x02: XForm(24)]
+  //   + [BrushDataBlendFactors 0x08: count + positions[count] + factors[count]]
+  //   + [BrushDataPresetColors 0x04: count + positions[count] + colors[count]]
+  _emfPlusParseLinearGradient(data) {
+    if (data.length < 44) return null;
+    const flags2 = readDword(data, 4);
+    const x = readFloat32(data, 12), y = readFloat32(data, 16);
+    const w = readFloat32(data, 20), h = readFloat32(data, 24);
+    const first = argbToCss(readArgb(data, 28));
+    const second = argbToCss(readArgb(data, 32));
+    let o = 44;                       // 已读 4 个 ARGB（28/32 为色，36/40 为重复字段）
+    if (flags2 & 0x02) o += 24;       // BrushDataTransform：暂不参与几何，记为近似
+    if (flags2 & 0x08) {              // BrushDataBlendFactors：影响 alpha 渐变，暂忽略
+      if (o + 4 > data.length) return null;
+      const n = readDword(data, o);
+      o += 4 + Math.max(0, Math.min(n, 4096)) * 8;
+      this._noteUnsupported('LinearGradient BrushDataBlendFactors');
+    }
+    let stops = null;
+    if (flags2 & 0x04) {              // BrushDataPresetColors：最精确的色标来源
+      if (o + 4 <= data.length) {
+        const n = Math.max(0, Math.min(readDword(data, o), 4096));
+        const posOff = o + 4;
+        const colOff = posOff + n * 4;
+        if (n > 0 && colOff + n * 4 <= data.length) {
+          stops = [];
+          for (let i = 0; i < n; i++) {
+            stops.push({ pos: readFloat32(data, posOff + i * 4), color: argbToCss(readArgb(data, colOff + i * 4)) });
+          }
+        }
+      }
+    }
+    if (!stops || stops.length === 0) {
+      stops = [{ pos: 0, color: first }, { pos: 1, color: second }];
+    }
+    if (flags2 & 0x02) this._noteUnsupported('LinearGradient BrushDataTransform');
+    if (!isFinite(x) || !isFinite(y) || !isFinite(w) || !isFinite(h)) return null;
+    return { kind: 'linear', x, y, w, h, stops, fallback: first };
+  }
+
+  // EmfPlusPathGradientBrushData（MS-EMFPLUS 2.2.2.14）：
+  //   BrushDataFlags(4) + WrapMode(4) + CenterColor(ARGB) + CenterPoint(8)
+  //   + SurroundColorsCount(4) + SurroundColors[Count](ARGB)
+  //   + [BrushDataPath 0x01: PathLength(4) + EmfPlusPath]
+  _emfPlusParsePathGradient(data) {
+    if (data.length < 28) return null;
+    const flags2 = readDword(data, 4);
+    const center = argbToCss(readArgb(data, 12));
+    const cx = readFloat32(data, 16), cy = readFloat32(data, 20);
+    const n = Math.max(0, Math.min(readDword(data, 24), 4096));
+    let o = 28;
+    const surround = [];
+    for (let i = 0; i < n && o + 4 <= data.length; i++, o += 4) {
+      surround.push(argbToCss(readArgb(data, o)));
+    }
+    const stops = [{ pos: 0, color: center }];
+    if (surround.length) stops.push({ pos: 1, color: surround[0] });
+    else stops.push({ pos: 1, color: center });
+    // 边界路径：用于推导向外半径（无路径时无法确定半径，退化为纯中心色）
+    let radius = 0;
+    if (flags2 & 0x01) {
+      const bounds = this._emfPlusBoundaryRadius(data, o);
+      if (bounds > 0) radius = bounds;
+      else this._noteUnsupported('PathGradient 边界路径解析失败');
+    } else {
+      this._noteUnsupported('PathGradient 无边界路径');
+    }
+    if (!isFinite(cx) || !isFinite(cy)) return null;
+    if (radius <= 0) return { kind: 'radial', cx, cy, radius: 0, stops, fallback: center };
+    return { kind: 'radial', cx, cy, radius, stops, fallback: center };
+  }
+
+  // 从 PathGradient 的边界路径点集推导向外半径：取包围盒半对角线。
+  // 数据布局：PathLength(4) + [路径头 4 + PointCount(4) + PointFlags(4) + Points...]
+  // 这里只从点流中取足够点估包围盒，不构建完整路径（半径估算不需要图元类型）。
+  _emfPlusBoundaryRadius(data, offset) {
+    if (offset + 12 > data.length) return 0;
+    const pathLength = readDword(data, offset);
+    if (!(pathLength > 0) || pathLength > data.length) return 0;
+    const base = offset + 4;
+    // 路径头之后为 PointCount + PointFlags
+    const count = readDword(data, base + 4);
+    const pflags = readDword(data, base + 8);
+    if (!(count > 0) || count > 65536) return 0;
+    const compressed = (pflags & 0x4000) !== 0;   // FORMAT_COMPRESSED: int16
+    const relative = (pflags & 0x0800) !== 0;      // RELATIVE_POSITION
+    const stride = compressed ? 4 : 8;
+    const pts = base + 12;
+    if (pts + count * stride > data.length) return 0;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let px = 0, py = 0;
+    for (let i = 0; i < count; i++) {
+      const o = pts + i * stride;
+      let x, y;
+      if (compressed) { x = readShort(data, o); y = readShort(data, o + 2); }
+      else { x = readFloat32(data, o); y = readFloat32(data, o + 4); }
+      if (!isFinite(x) || !isFinite(y)) return 0;
+      if (relative) { x += px; y += py; px = x; py = y; }
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    const w = maxX - minX, h = maxY - minY;
+    if (!(w > 0) && !(h > 0)) return 0;
+    return Math.hypot(w, h) / 2;
+  }
+
+  _buildLinearGradient(spec) {
+    const ctx = this.ctx;
+    if (typeof ctx.createLinearGradient !== 'function') return spec.fallback;
+    const p1 = this._emfPlusMapPoint(spec.x, spec.y);
+    const p2 = this._emfPlusMapPoint(spec.x + spec.w, spec.y + spec.h);
+    if (!isFinite(p1.x) || !isFinite(p1.y) || !isFinite(p2.x) || !isFinite(p2.y)) return spec.fallback;
+    if (Math.abs(p2.x - p1.x) < 1e-6 && Math.abs(p2.y - p1.y) < 1e-6) return spec.fallback;  // 退化向量
+    const g = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+    for (const s of spec.stops) g.addColorStop(s.pos, s.color);
+    return g;
+  }
+
+  _buildRadialGradient(spec) {
+    const ctx = this.ctx;
+    if (typeof ctx.createRadialGradient !== 'function') return spec.fallback;
+    const c = this._emfPlusMapPoint(spec.cx, spec.cy);
+    const e = this._emfPlusMapPoint(spec.cx + spec.radius, spec.cy);
+    if (!isFinite(c.x) || !isFinite(c.y)) return spec.fallback;
+    const r = Math.hypot(e.x - c.x, e.y - c.y);
+    if (!(r > 0)) return spec.fallback;
+    const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, r);
+    for (const s of spec.stops) g.addColorStop(s.pos, s.color);
+    return g;
+  }
+
+  // ---- Hatch 填充 ----
+  // SVG 没有 hatch 图元，用 <pattern> 平铺实现。EmfPlusHatchStyle 共 53 种
+  //（MS-EMFPLUS 2.1.1.7），这里对几何上有明确定义的族给出参数化图案：
+  //   0-5   基本几何（横/竖/两种对角/网格/对角交叉）
+  //   6-17  百分比填充（按密度反推线距，斜线近似）
+  //   18-33 密集度/粗细/虚线变体
+  //   34-52 装饰类（砖、编织、格纹等）无对应图元，统一退化为交叉网纹并记为近似。
+  // 单元格取 8 个用户单位（GDI+ 典型 hatch 单元），不随世界变换缩放——这是已知近似。
+  _buildHatchPaint(obj) {
+    const key = obj.style + '|' + obj.fore + '|' + obj.back;
+    if (this._hatchCache && this._hatchCache[key]) return this._hatchCache[key];
+    if (!this._hatchCache) this._hatchCache = {};
+    if (!this._hatchSeq) this._hatchSeq = 0;
+    const id = 'hatch-' + (++this._hatchSeq);
+    // fore/back 均由 argbToCss 产出（#rrggbb / rgba(...)），不含需要转义的字符
+    const bg = (cellSize) => '<rect x="0" y="0" width="' + cellSize + '" height="' + cellSize + '" fill="' + obj.back + '"/>';
+    let cell, body;
+    const bmp = HATCH_BITMAPS[obj.style];
+    if (bmp) {
+      // 0-5：直接用 MS-WMF 权威 8×8 位图，逐像素输出 1×1 矩形。
+      // 与 GDI 的二值掩码逐位一致——不缩放（hatch 单元本就不随用户变换变化）、
+      // 不抗锯齿（GDI 对密集横竖线同样关 AA 以保证锐利）。
+      cell = 8;
+      let px = '';
+      for (let y = 0; y < 8; y++) {
+        for (let x = 0; x < 8; x++) {
+          if ((bmp[y] >> x) & 1) {
+            px += '<rect x="' + x + '" y="' + y + '" width="1" height="1" fill="' + obj.fore + '"/>';
+          }
+        }
+      }
+      body = bg(8) + px;
+    } else {
+      const geo = this._hatchGeometry(obj.style);
+      cell = geo.cell;
+      if (geo.approximate) this._noteUnsupported('Hatch style ' + obj.style + ' (近似)');
+      body = bg(cell) + geo.lines.map(l =>
+        '<path d="' + l.d + '" fill="none" stroke="' + obj.fore + '" stroke-width="' + l.w + '"/>'
+      ).join('');
+    }
+    this.ctx.defsPush(
+      '<pattern id="' + id + '" patternUnits="userSpaceOnUse" width="' + cell + '" height="' + cell + '">' +
+      body + '</pattern>'
+    );
+    const paint = { __svgPaint: 'url(#' + id + ')' };
+    this._hatchCache[key] = paint;
+    return paint;
+  }
+
+  // 返回 { cell, lines:[{d,w}], approximate }
+  _hatchGeometry(style) {
+    const L = [];
+    const line = (x1, y1, x2, y2, w) => L.push({ d: 'M' + x1 + ' ' + y1 + 'L' + x2 + ' ' + y2, w: w || 1 });
+    // 百分比填充：线距 ≈ 1/密度（1px 线宽下覆盖率与密度同量级）
+    const PCT = [0.05, 0.10, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.70, 0.75, 0.80, 0.90];
+    if (style >= 6 && style <= 17) {
+      const d = PCT[style - 6];
+      const cell = Math.max(2, Math.round(1 / d));
+      line(0, cell, cell, 0, 1);
+      return { cell, lines: L, approximate: true };
+    }
+    // 注：样式 0-5 由 HATCH_BITMAPS 的权威位图处理，不进入本函数。
+    switch (style) {
+      // 对角线的明暗/宽窄变体
+      case 18: line(0, 0, 8, 8); return { cell: 6, lines: L };                 // LightDownwardDiagonal
+      case 19: line(0, 8, 8, 0); return { cell: 6, lines: L };                 // LightUpwardDiagonal
+      case 20: line(0, 0, 4, 4); return { cell: 4, lines: L };                 // DarkDownwardDiagonal
+      case 21: line(0, 4, 4, 0); return { cell: 4, lines: L };                 // DarkUpwardDiagonal
+      case 22: line(0, 0, 8, 8, 2); return { cell: 8, lines: L };              // WideDownwardDiagonal
+      case 23: line(0, 8, 8, 0, 2); return { cell: 8, lines: L };              // WideUpwardDiagonal
+      // 横竖线的明暗/宽窄变体
+      case 24: line(2, 0, 2, 6); return { cell: 6, lines: L };                 // LightVertical
+      case 25: line(0, 2, 6, 2); return { cell: 6, lines: L };                 // LightHorizontal
+      case 26: line(1, 0, 1, 2); return { cell: 2, lines: L };                 // NarrowVertical
+      case 27: line(0, 1, 2, 1); return { cell: 2, lines: L };                 // NarrowHorizontal
+      case 28: line(1, 0, 1, 4, 2); return { cell: 4, lines: L };              // DarkVertical
+      case 29: line(0, 1, 4, 1, 2); return { cell: 4, lines: L };              // DarkHorizontal
+      // 虚线族：SVG 图案里用短划表达
+      case 30: L.push({ d: 'M0 0L3 3M5 5L8 8', w: 1 }); return { cell: 8, lines: L, approximate: true };
+      case 31: L.push({ d: 'M0 8L3 5M5 3L8 0', w: 1 }); return { cell: 8, lines: L, approximate: true };
+      case 32: L.push({ d: 'M0 2L4 2M6 2L8 2', w: 1 }); return { cell: 8, lines: L, approximate: true };// DashedHorizontal
+      case 33: L.push({ d: 'M2 0L2 4M2 6L2 8', w: 1 }); return { cell: 8, lines: L, approximate: true };// DashedVertical
+      default:
+        // 34-52 装饰类：无对应 SVG 图元，退化为中等密度交叉网纹
+        line(0, 0, 8, 8); line(0, 8, 8, 0);
+        return { cell: 8, lines: L, approximate: true };
+    }
   }
 
   // 解析画笔对象 -> { color, width }
@@ -630,20 +894,67 @@ class EmfPlusDrawer {
     // 按当前坐标变换把 EmSize 换算成画布像素（与 LayoutRect 的映射一致）。
     const fontObj = this.emfPlusObjects[fontId];
     let drawSize = 12;
+    const scale = this._emfPlusUnitsToPx() || 1;
     if (fontObj && fontObj.type === 'font') {
-      const scale = this._emfPlusUnitsToPx();
       const sz = Math.max(4, Math.round(fontObj.emSize * scale));
       drawSize = sz;
       this.ctx.font = `${fontObj.italic}${fontObj.weight} ${sz}px "${fontObj.face}"`;
     }
-    const p = this._emfPlusMapPoint(layoutX, layoutY);
+    // ---- StringFormat 对齐（MS-EMFPLUS 2.2.1.9 + LibreOffice 的换算公式） ----
+    // 偏移在**世界单位**中计算后再统一映射，因此旋转/缩放场景下同样正确；
+    // 单位矩阵时与旧实现逐像素等价（Near/Near 时 offX=0、offY=emSize，
+    // 而 emSize×scale 恰为 drawSize）。
+    const fmt = this.emfPlusObjects[readDword(data, 4)];
+    const layoutW = readFloat32(data, 20);
+    const layoutH = readFloat32(data, 24);
+    const emWorld = drawSize / scale;
+    let offX = 0;
+    let offY = emWorld;                       // 默认 Near：基线 = 顶边 + 一个字号
+    // 水平对齐交给 SVG 的 text-anchor：渲染器用真实字体度量定位，比
+    // measureText（0.6×字号×字数 的估算）准确得多。故这里只算锚点位置。
+    let anchorAlign = null;                   // null = 沿用当前 ctx.textAlign
+    if (fmt && fmt.type === 'stringFormat') {
+      const lw = isFinite(layoutW) ? layoutW : 0;
+      const lh = isFinite(layoutH) ? layoutH : 0;
+      if (fmt.align === 1) {                  // Center
+        offX = 0.5 * lw + 0.5 * (fmt.leadingMargin - fmt.trailingMargin) * emWorld;
+        anchorAlign = 'center';
+      } else if (fmt.align === 2) {           // Far
+        offX = lw - fmt.trailingMargin * emWorld;
+        anchorAlign = 'right';
+      } else {                                // Near
+        offX = fmt.leadingMargin * emWorld;
+        anchorAlign = 'left';
+      }
+      if (fmt.lineAlign === 1) {              // Center
+        offY = 0.5 * lh + 0.5 * emWorld;
+      } else if (fmt.lineAlign === 2) {       // Far
+        offY = lh;
+      }
+      // 无法用 SVG <text> 精确表达的格式化语义，记录以免静默丢弃
+      if (fmt.tracking !== 1 && fmt.tracking !== 0) this._noteUnsupported('StringFormat tracking');
+      if (fmt.trimming) this._noteUnsupported('StringFormat trimming');
+      if (fmt.tabStopCount) this._noteUnsupported('StringFormat tabStops');
+      if (fmt.flags & 0x0001) this._noteUnsupported('StringFormat 右到左');
+      if (fmt.flags & 0x0002) this._noteUnsupported('StringFormat 竖排');
+    }
+    const p = this._emfPlusMapPoint(layoutX + offX, layoutY + offY);
     // 世界变换含旋转时字形方向必须跟着转（GDI+ 语义）：锚点已由 _emfPlusMapPoint
     // 摆到正确位置，这里只补字形朝向。fillText 的 transformMatrix.rotate 以度为单位、
     // 绕锚点旋转；角度取矩阵第一列的极角，镜像/反射场景下方向仍由该极角表达。
     const m = this.emfPlusMatrix;
     const deg = Math.atan2(m[1], m[0]) * 180 / Math.PI;
     const xform = Math.abs(deg) > 0.01 ? { rotate: deg } : undefined;
-    this.ctx.fillText(text, p.x, p.y + drawSize, xform);
+    if (anchorAlign) {
+      // 用完即还：DrawString 的对齐取自 StringFormat，不得污染 DC 上的
+      // SETTEXTALIGN 状态（EMF+ 记录常回放在 EmfDrawer 的 DC 上下文中）。
+      const savedAlign = this.ctx.textAlign;
+      this.ctx.textAlign = anchorAlign;
+      this.ctx.fillText(text, p.x, p.y, xform);
+      this.ctx.textAlign = savedAlign;
+      return;
+    }
+    this.ctx.fillText(text, p.x, p.y, xform);
   }
 
   // 处理EMF+绘制多线段记录：PenId(4) + Count(4) + PointF[Count](8 each)
@@ -1123,18 +1434,31 @@ class EmfPlusDrawer {
     if (!this._objTypeStats) this._objTypeStats = {};
     this._objTypeStats['0x'+objectType.toString(16)] = (this._objTypeStats['0x'+objectType.toString(16)]||0)+1;
     if (objectType === 0x0100) { // EmfPlusBrush
+      // EmfPlusBrush（MS-EMFPLUS 2.2.2.1）：Type(4) + 类型专属数据。
+      // data[0] 是 GraphicsVersion（已在上面 slice 掉），故 Type 在 data[0]。
+      // 字段布局对照 LibreOffice emfpbrush.cxx 的 EMFPBrush::Read 逐项确认。
       if (data.length < 8) return;
       const brushType = readDword(data, 0);
-      if (brushType === 0) { // Solid: EmfPlusSolidBrushData = ARGB
-        const argb = readArgb(data, 4);
-        this.emfPlusObjects[objectId] = { type: 'solidBrush', color: argbToCss(argb) };
-      } else if (brushType === 1 || brushType === 3 || brushType === 4) {
-        // Hatch/PathGradient/LinearGradient：完整解析较复杂（可选字段随 BrushDataFlags 变化），
-        // 这里启发式提取首个不透明（alpha>=0x80）ARGB 作为主色——对静态渲染已足够接近。
+      if (brushType === 0) { // BrushTypeSolidColor: ARGB
+        this.emfPlusObjects[objectId] = { type: 'solidBrush', color: argbToCss(readArgb(data, 4)) };
+      } else if (brushType === 1) { // BrushTypeHatchFill: Style(4) + Fore(ARGB) + Back(ARGB)
+        const style = readDword(data, 4);
+        const fore = argbToCss(readArgb(data, 8));
+        const back = argbToCss(readArgb(data, 12));
+        this.emfPlusObjects[objectId] = { type: 'hatchBrush', style, fore, back };
+      } else if (brushType === 4) { // BrushTypeLinearGradient
+        const grad = this._emfPlusParseLinearGradient(data);
+        if (grad) this.emfPlusObjects[objectId] = { type: 'gradientBrush', grad };
+      } else if (brushType === 3) { // BrushTypePathGradient
+        const grad = this._emfPlusParsePathGradient(data);
+        if (grad) this.emfPlusObjects[objectId] = { type: 'gradientBrush', grad };
+      } else {
+        // BrushTypeTextureFill(2) 需要内嵌图像解码，暂不支持；
+        // 保留主色兜底以免整块区域丢失。
         const color = this._emfPlusFirstOpaqueArgb(data, 4);
         if (color) this.emfPlusObjects[objectId] = { type: 'solidBrush', color };
+        this._noteUnsupported('EmfPlusBrush TextureFill');
       }
-      // Texture 后续扩展
     } else if (objectType === 0x0200) { // EmfPlusPen
       // EmfPlusPen（data 已剥离 GraphicsVersion，MS-EMFPLUS 2.2.2.27）：
       // PenType(4,=0) + PenDataFlags(4) + UnitType(4) + PenWidth(float,4) + OptionalData[flags] + Brush
@@ -1210,6 +1534,27 @@ class EmfPlusDrawer {
       const weight = (styleFlags & 0x01) ? 'bold' : 'normal'; // FontStyleBold
       const italic = (styleFlags & 0x02) ? 'italic ' : '';
       this.emfPlusObjects[objectId] = { type: 'font', emSize, weight, italic, face };
+    } else if (objectType === 0x0700) { // EmfPlusStringFormat
+      // EmfPlusStringFormat（MS-EMFPLUS 2.2.1.9）：GraphicsVersion(4) 已剥离，之后为
+      //   StringFormatFlags(4) + Language(4) + StringAlignment(4) + LineAlign(4) +
+      //   DigitSubstitution(4) + DigitLanguage(4) + FirstTabOffset(f32) + HotkeyPrefix(4) +
+      //   LeadingMargin(f32) + TrailingMargin(f32) + Tracking(f32) + Trimming(4) +
+      //   TabStopCount(4) + RangeCount(4) + StringFormatData
+      // 布局与 LibreOffice emfpstringformat.cxx 的 EMFPStringFormat::Read 逐字段一致。
+      if (data.length < 56) return;
+      this.emfPlusObjects[objectId] = {
+        type: 'stringFormat',
+        flags: readDword(data, 0),
+        align: readDword(data, 8),          // StringAlignment: 0=Near 1=Center 2=Far
+        lineAlign: readDword(data, 12),     // LineAlign:     0=Near 1=Center 2=Far
+        digitSubstitution: readDword(data, 16),
+        leadingMargin: readFloat32(data, 32),
+        trailingMargin: readFloat32(data, 36),
+        tracking: readFloat32(data, 40),
+        trimming: readDword(data, 44),
+        tabStopCount: readDword(data, 48),
+        rangeCount: readDword(data, 52),
+      };
     } else if (objectType === 0x0400) { // EmfPlusRegion —— 裁剪区域，暂不处理
       // Region 对象（U_OT_Region=4）暂不支持，忽略即可
     } else if (objectType === 0x0300) { // EmfPlusPath —— 解析后存为 { pointTypes, points, ... }

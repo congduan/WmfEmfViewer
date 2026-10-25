@@ -137,9 +137,14 @@ const EMF_RECORD_HANDLERS = {
   0x0000004E: null, // EMR_MASKBLT
   0x0000004F: null, // EMR_PLGBLT
   0x00000050: null, // EMR_SETDIBITSTODEVICE
+  // 以下为「已知但无需渲染」的记录：显式登记为 null 后不会再落入未知记录分支，
+  // 也就不会进入 unsupportedRecords（它们是正常且可安全忽略的元数据）。
+  0x00000062: null, // EMR_SETICMMODE（色彩管理开关，无语义影响）
+  0x00000064: null, // EMR_SETCOLORSPACE（色彩空间定义，参考实现亦未实现）
   0x0000006D: null, // EMR_FORCEUFIMAPPING（仅影响字体匹配）
   0x0000006E: null, // EMR_NAMEDESCAPE
-  0x00000076: null  // EMR_GRADIENTFILL
+  0x00000073: null, // EMR_SETLAYOUT（RTL 布局；文本方向支持见文档已知缺口）
+  0x00000076: 'processEmfGradientFill'  // EMR_GRADIENTFILL
 };
 
 // 会产生可见输出的 GDI 记录 handler（用于双模式判定：多边形/线条/路径/填充/文本/位图类）
@@ -168,6 +173,11 @@ class EmfDrawer {
     this.dcStateStack = []; // SaveDC/RestoreDC 状态栈
     this.currentPos = { x: 0, y: 0 }; // 当前位置（逻辑/窗口坐标），MoveToEx/LineTo/Poly*To 使用
     this._emfPlusDrawer = null; // 惰性创建的内嵌 EMF+ 播放器（与标准 EMF 记录共享 ctx）
+    // 分派表里没有的记录类型（按类型聚合）：只记录、不猜测绘制。
+    // 早先的 tryProcessAsCoordinates 会把记录体当坐标画折线，在损坏文件上产出
+    // 虚假图形（语料实测 656 次进入兜底、1 次真的画错），比静默跳过更糟——
+    // 它会让画面看起来「有内容」却无人知道画错了什么。
+    this.unsupportedRecords = [];
     // 描边线宽缩放：GDI 笔宽（逻辑单位）随当前变换换算为设备单位
     //（坐标与笔宽经同一 matrix 缩放）
     if (this.ctx && typeof this.ctx === 'object') {
@@ -277,6 +287,12 @@ class EmfDrawer {
     // 处理剩余的路径
     this.finishPath();
 
+    // 未登记记录集中上报（受 __WMF_DEBUG__ 控制的 console.log，不污染生产控制台；
+    // 调用方也可直接读 drawer.unsupportedRecords 做覆盖率统计）。
+    if (this.unsupportedRecords.length) {
+      console.log('EMF 未登记记录类型:', this.unsupportedRecords.join(', '));
+    }
+
     console.log('EMF drawing completed');
   }
 
@@ -289,8 +305,14 @@ class EmfDrawer {
       }
       return;
     }
+    // 未登记记录：只登记、不绘制。
+    // 旧实现会调用 tryProcessAsCoordinates 把记录体当坐标点画折线，这是纯粹的
+    // 猜测——对 EMR_SETCOLORSPACE（340 字节调色板数据）这类记录会画出完全虚构的
+    // 图形。改为可审计的上报（drawer.unsupportedRecords），由调用方/GDI 真值比对
+    // 决定是否需要补实现。
+    const key = 'EMR 0x' + recordType.toString(16).padStart(8, '0');
+    if (this.unsupportedRecords.indexOf(key) < 0) this.unsupportedRecords.push(key);
     console.log('Unknown EMF record type:', recordType, '(0x' + recordType.toString(16).padStart(8, '0') + ')');
-    this.tryProcessAsCoordinates(data);
   }
 
   // Byte readers and color conversion now live in utils/binaryReader and utils/colorUtils
@@ -2688,6 +2710,138 @@ class EmfDrawer {
       this.ctx.stroke();
       this.pathState = 'idle';
     }
+  }
+
+  // ---- 渐变填充 ----
+
+  // 建一条 SVG 线性渐变；退化（两点重合）或上下文不支持时返回 null，由调用方退回纯色。
+  _emfLinearGradient(a, b, c0, c1) {
+    const ctx = this.ctx;
+    if (typeof ctx.createLinearGradient !== 'function') return null;
+    if (Math.abs(b.x - a.x) < 1e-6 && Math.abs(b.y - a.y) < 1e-6) return null;
+    const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+    g.addColorStop(0, c0);
+    g.addColorStop(1, c1);
+    return g;
+  }
+
+  // EMR_GRADIENTFILL（MS-EMF 2.3.5.12）：
+  //   Bounds(16) + nVer(4) + nTri(4) + ulMode(4) + TriVertex[nVer](各 16 字节) + 索引(ULONG 数组)
+  // TriVertex（2.2.26）：x(int32) + y(int32) + Red/Green/Blue/Alpha(uint16 ×4)
+  // ulMode（2.1.15）：0 = RECT_H（左→右）1 = RECT_V（上→下）2 = TRIANGLE
+  //
+  // 两处与直觉相反、由语料实测确认的细节：
+  // 1) 顶点颜色用的是 **COLOR16**（0..65535），不是 0..255。是否按 16 位处理，
+  //    按整条记录统一判定（任一顶点分量 > 255 即视为 16 位），避免逐分量判断把
+  //    8 位深色（如 200,0,0）误除成近黑。
+  // 2) **Alpha 一律忽略**。所有语料样本的 Alpha 都是 0，若按 alpha=0 当透明处理，
+  //    整块渐变会消失；GDI 的 GradientFill 本身也不使用 Alpha 字段。
+  //
+  // 索引数组：矩形模式每矩形 2 个（左上、右下），三角形模式每片 3 个；
+  // 记录里的索引区按 nTri×3 分配，矩形模式用不满的部分是填充值。
+  processEmfGradientFill(data) {
+    if (data.length < 28) return;
+    const nVer = readDword(data, 16);
+    const nTri = readDword(data, 20);
+    const mode = readDword(data, 24);
+    if (nVer < 2 || nVer > 65535 || nTri < 1 || nTri > 65535) return;
+    const vertBase = 28;
+    if (vertBase + nVer * 16 > data.length) return;
+
+    let wide = false;
+    for (let i = 0; i < nVer && !wide; i++) {
+      const o = vertBase + i * 16 + 8;
+      for (let k = 0; k < 3; k++) {
+        if ((data[o + k * 2] | (data[o + k * 2 + 1] << 8)) > 255) { wide = true; break; }
+      }
+    }
+    const norm = wide ? 1 / 257 : 1;
+    const to255 = (v) => Math.max(0, Math.min(255, Math.round(v * norm)));
+
+    const verts = [];
+    for (let i = 0; i < nVer; i++) {
+      const o = vertBase + i * 16;
+      const r = data[o + 8] | (data[o + 9] << 8);
+      const g = data[o + 10] | (data[o + 11] << 8);
+      const b = data[o + 12] | (data[o + 13] << 8);
+      const rgb = [to255(r), to255(g), to255(b)];
+      verts.push({
+        x: readLong(data, o),
+        y: readLong(data, o + 4),
+        rgb,
+        color: 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')',
+      });
+    }
+
+    const idxBase = vertBase + nVer * 16;
+    const idx = (i) => {
+      const o = idxBase + i * 4;
+      return o + 4 <= data.length ? readDword(data, o) : -1;
+    };
+    const at = (i) => (i >= 0 && i < verts.length ? verts[i] : null);
+
+    if (mode === 0 || mode === 1) {
+      // 矩形模式：每矩形 2 个索引（左上顶点、右下顶点），颜色沿第一个顶点→第二个顶点插值
+      for (let i = 0; i < nTri; i++) {
+        const a = at(idx(i * 2));
+        const b = at(idx(i * 2 + 1));
+        if (!a || !b) continue;
+        const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x);
+        const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+        if (x1 <= x0 || y1 <= y0) continue;
+        const p0 = this.coordinateTransformer.transform(x0, y0);
+        const p1 = this.coordinateTransformer.transform(x1, y1);
+        // RECT_H 沿水平方向铺色，RECT_V 沿垂直方向
+        const gEnd = mode === 0 ? { x: p1.x, y: p0.y } : { x: p0.x, y: p1.y };
+        this.ctx.fillStyle = this._emfLinearGradient(p0, gEnd, a.color, b.color) || a.color;
+        this.ctx.fillRect(p0.x, p0.y, p1.x - p0.x, p1.y - p0.y);
+      }
+      return;
+    }
+
+    // 三角形模式：SVG 无 Gouraud 填充，用「色差最大的顶点 → 对边中点」的线性渐变近似。
+    // 常见场景（四边形拆两片、两极色）下观感与真值接近；三色互异时会有偏差。
+    for (let i = 0; i < nTri; i++) {
+      const a = at(idx(i * 3)), b = at(idx(i * 3 + 1)), c = at(idx(i * 3 + 2));
+      if (!a || !b || !c) continue;
+      const pa = this.coordinateTransformer.transform(a.x, a.y);
+      const pb = this.coordinateTransformer.transform(b.x, b.y);
+      const pc = this.coordinateTransformer.transform(c.x, c.y);
+      const fills = this._emfTriangleGradient(pa, a.rgb, pb, b.rgb, pc, c.rgb);
+      this.ctx.fillStyle = fills.paint;
+      this.ctx.beginPath();
+      this.ctx.moveTo(pa.x, pa.y);
+      this.ctx.lineTo(pb.x, pb.y);
+      this.ctx.lineTo(pc.x, pc.y);
+      this.ctx.closePath();
+      this.ctx.fill();
+    }
+  }
+
+  // 三角形三个顶点色 -> 线性渐变近似：
+  // 选与「另两点均值」色差最大的顶点作为渐变起点，对边中点作为终点，
+  // 终点色取另两点均值（Gouraud 在该边上是线性的，此为中点近似）。
+  _emfTriangleGradient(pa, ca, pb, cb, pc, cc) {
+    const mid = (c1, c2) => [(c1[0] + c2[0]) / 2, (c1[1] + c2[1]) / 2, (c1[2] + c2[2]) / 2];
+    const dist = (c1, c2) => Math.abs(c1[0] - c2[0]) + Math.abs(c1[1] - c2[1]) + Math.abs(c1[2] - c2[2]);
+    const cssOf = (c) => 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')';
+    const cand = [
+      { p: pa, c: ca, other: mid(cb, cc), q: { x: (pb.x + pc.x) / 2, y: (pb.y + pc.y) / 2 } },
+      { p: pb, c: cb, other: mid(ca, cc), q: { x: (pa.x + pc.x) / 2, y: (pa.y + pc.y) / 2 } },
+      { p: pc, c: cc, other: mid(ca, cb), q: { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 } },
+    ];
+    let best = cand[0];
+    let bestD = -1;
+    for (const k of cand) {
+      const d = dist(k.c, k.other);
+      if (d > bestD) { bestD = d; best = k; }
+    }
+    if (bestD < 1) {
+      // 三色几乎相同：纯色即可
+      return { paint: cssOf(best.c) };
+    }
+    const grad = this._emfLinearGradient(best.p, best.q, cssOf(best.c), cssOf(best.other));
+    return { paint: grad || cssOf(best.c) };
   }
 }
 
